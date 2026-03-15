@@ -1,0 +1,212 @@
+"""
+Migration 008: Restore data from backup and deduplicate by file hash
+
+This is a CLEAN restoration that:
+1. Reads backup database (rag_users.db)
+2. Restores ALL data (711 documents, 1226 news items, 1226 insights)
+3. Uses SHA256 hashing to identify duplicate FILES
+4. Keeps only 176 unique files, deletes 505 duplicates
+5. Links insights to the deduplicated documents
+"""
+
+import os
+import sqlite3
+import logging
+import hashlib
+from collections import defaultdict
+
+logger = logging.getLogger(__name__)
+
+def restore_and_deduplicate(conn):
+    """Complete restoration with deduplication"""
+    
+    logger.info("=" * 80)
+    logger.info("🔄 MIGRATION 008: Restore data + deduplicate files")
+    logger.info("=" * 80)
+    
+    # Container paths (not host paths)
+    backups_dir = "/app/backups"
+    uploads_dir = "/app/uploads"
+    
+    # Step 1: Restore from backup
+    logger.info("\n📦 Step 1: Restoring from backup database...")
+    
+    backup_db = os.path.join(backups_dir, "rag_users.db-20260304-144541.bak")
+    
+    if not os.path.exists(backup_db):
+        logger.error(f"  ❌ Backup not found: {backup_db}")
+        return
+    
+    backup_conn = sqlite3.connect(backup_db)
+    backup_cursor = backup_conn.cursor()
+    cursor = conn.cursor()
+    
+    tables_to_restore = [
+        ('document_status', 'document_id'),
+        ('news_items', 'id'),
+        ('news_item_insights', 'news_item_id'),
+    ]
+    
+    total_restored = 0
+    
+    for table, pk_col in tables_to_restore:
+        try:
+            # Get column names from backup
+            backup_cursor.execute(f"PRAGMA table_info({table})")
+            columns = [col[1] for col in backup_cursor.fetchall()]
+            col_str = ', '.join(columns)
+            placeholders = ', '.join(['?' for _ in columns])
+            
+            # Get all data from backup
+            backup_cursor.execute(f"SELECT {col_str} FROM {table}")
+            rows = backup_cursor.fetchall()
+            
+            # Insert into main DB
+            inserted = 0
+            for row in rows:
+                try:
+                    cursor.execute(f"INSERT OR IGNORE INTO {table} ({col_str}) VALUES ({placeholders})", row)
+                    inserted += cursor.rowcount
+                except Exception as e:
+                    logger.debug(f"  Could not insert into {table}: {e}")
+            
+            conn.commit()
+            
+            logger.info(f"  ✅ {table}: {inserted}/{len(rows)} rows restored")
+            total_restored += inserted
+            
+        except Exception as e:
+            logger.error(f"  ❌ Error restoring {table}: {e}")
+    
+    backup_conn.close()
+    
+    logger.info(f"\n  Total rows restored: {total_restored}")
+    
+    # Step 2: Deduplicate files using SHA256 hash
+    logger.info(f"\n🔐 Step 2: Deduplicating files by SHA256 hash...")
+    
+    if not os.path.exists(uploads_dir):
+        logger.warning(f"  ⚠️  Uploads directory not found: {uploads_dir}")
+    else:
+        # Calculate hashes for all files on disk
+        logger.info(f"  Calculating hashes for files in {uploads_dir}...")
+        
+        hash_to_files = defaultdict(list)
+        total_files = 0
+        
+        for filename in os.listdir(uploads_dir):
+            filepath = os.path.join(uploads_dir, filename)
+            if not os.path.isfile(filepath):
+                continue
+            
+            total_files += 1
+            
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(filepath, 'rb') as f:
+                    for chunk in iter(lambda: f.read(4096), b''):
+                        sha256_hash.update(chunk)
+                
+                file_hash = sha256_hash.hexdigest()
+                hash_to_files[file_hash].append((filename, filepath))
+            except Exception as e:
+                logger.warning(f"  Could not hash {filename}: {e}")
+        
+        logger.info(f"  Found {total_files} files, {len(hash_to_files)} unique hashes")
+        
+        # Find duplicates and link documents
+        logger.info(f"  Deduplicating...")
+        
+        kept_files = 0
+        deleted_duplicates = 0
+        
+        for file_hash, file_list in hash_to_files.items():
+            if len(file_list) > 1:
+                # Keep first file, delete the rest
+                kept_filename = file_list[0][0]
+                kept_files += 1
+                
+                # Find document_ids for this file
+                cursor.execute("SELECT DISTINCT document_id FROM document_status WHERE filename=?", (kept_filename,))
+                kept_doc_ids = [row[0] for row in cursor.fetchall()]
+                
+                # For duplicate files, merge their documents
+                for dup_filename, dup_filepath in file_list[1:]:
+                    # Find duplicate document_ids
+                    cursor.execute("SELECT document_id FROM document_status WHERE filename=?", (dup_filename,))
+                    dup_doc_ids = [row[0] for row in cursor.fetchall()]
+                    
+                    # Link duplicate insights to kept document
+                    if kept_doc_ids and dup_doc_ids:
+                        kept_doc_id = kept_doc_ids[0]
+                        
+                        for dup_doc_id in dup_doc_ids:
+                            # Update insights
+                            cursor.execute(
+                                "UPDATE news_item_insights SET document_id=? WHERE document_id=?",
+                                (kept_doc_id, dup_doc_id)
+                            )
+                            
+                            # Update news items
+                            cursor.execute(
+                                "UPDATE news_items SET document_id=? WHERE document_id=?",
+                                (kept_doc_id, dup_doc_id)
+                            )
+                            
+                            # Delete duplicate document
+                            cursor.execute("DELETE FROM document_status WHERE document_id=?", (dup_doc_id,))
+                    
+                    deleted_duplicates += 1
+                    
+                    # Delete duplicate file from disk
+                    try:
+                        os.remove(dup_filepath)
+                        logger.debug(f"  Deleted duplicate file: {dup_filename}")
+                    except Exception as e:
+                        logger.warning(f"  Could not delete {dup_filename}: {e}")
+            else:
+                kept_files += 1
+        
+        conn.commit()
+        
+        logger.info(f"  ✅ Kept {kept_files} unique files")
+        logger.info(f"  ✅ Deleted {deleted_duplicates} duplicate files from disk")
+    
+    # Step 3: Verify final state
+    logger.info(f"\n✅ Step 3: Final verification...")
+    
+    cursor.execute("SELECT COUNT(*) FROM document_status")
+    final_docs = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM news_items")
+    final_items = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM news_item_insights")
+    final_insights = cursor.fetchone()[0]
+    
+    # Verify no orphaned insights
+    cursor.execute("""
+        SELECT COUNT(*) FROM news_item_insights nii
+        WHERE NOT EXISTS (SELECT 1 FROM document_status ds WHERE ds.document_id = nii.document_id)
+    """)
+    orphaned = cursor.fetchone()[0]
+    
+    logger.info(f"\n📊 FINAL STATE:")
+    logger.info(f"   Documents: {final_docs} (deduplicated)")
+    logger.info(f"   News Items: {final_items}")
+    logger.info(f"   Insights: {final_insights}")
+    logger.info(f"   Orphaned insights: {orphaned}")
+    
+    logger.info("=" * 80)
+    logger.info("✅ MIGRATION 008 COMPLETE")
+    logger.info("=" * 80)
+
+# Yoyo steps
+from yoyo import step
+
+steps = [
+    step(
+        lambda conn: restore_and_deduplicate(conn),
+        lambda conn: None
+    ),
+]

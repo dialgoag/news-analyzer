@@ -14,7 +14,7 @@
 **Acción**: Restart backend para limpiar 151 documentos con "File not found"
 
 ```bash
-cd /Users/diego.a/Workspace/Experiments/NewsAnalyzer-RAG/rag-enterprise/rag-enterprise-structure
+cd app
 
 # Solo restart (no destructivo)
 docker compose restart backend

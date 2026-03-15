@@ -1,0 +1,157 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: rag-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-raguser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragpassword}
+      POSTGRES_DB: ${POSTGRES_DB:-rag_enterprise}
+    volumes:
+      - ./local-data/postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raguser} -d ${POSTGRES_DB:-rag_enterprise}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  ocr-service:
+    build:
+      context: ./ocr-service
+      dockerfile: Dockerfile
+    container_name: rag-ocr-service
+    volumes:
+      - ./temp:/tmp
+    ports:
+      - "127.0.0.1:9999:9999"
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'
+          memory: 6G
+        reservations:
+          memory: 3G
+    environment:
+      TESSERACT_LANG: spa+eng
+      OCR_THREADS: 3
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.2
+    container_name: rag-qdrant
+    volumes:
+      - ./local-data/qdrant:/qdrant/storage
+    ports:
+      - "6333:6333"
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    volumes:
+      - ./local-data/ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.cpu
+    container_name: rag-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      ollama:
+        condition: service_started
+      ocr-service:
+        condition: service_healthy
+    environment:
+      # --- Database (PostgreSQL) ---
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-raguser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragpassword}
+      POSTGRES_DB: ${POSTGRES_DB:-rag_enterprise}
+      # --- OCR ---
+      OCR_ENGINE: ${OCR_ENGINE:-ocrmypdf}
+      CUDA_VISIBLE_DEVICES: ""
+      OCR_SERVICE_HOST: ocr-service
+      OCR_SERVICE_PORT: 9999
+      # --- Vector DB ---
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      # --- LLM ---
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
+      OLLAMA_HOST: ${OLLAMA_HOST:-ollama}
+      OLLAMA_PORT: ${OLLAMA_PORT:-11434}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o}
+      # --- Embeddings ---
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
+      RELEVANCE_THRESHOLD: ${RELEVANCE_THRESHOLD:-0.35}
+      # --- Workers ---
+      PIPELINE_WORKERS_COUNT: ${PIPELINE_WORKERS_COUNT:-20}
+      OCR_PARALLEL_WORKERS: ${OCR_PARALLEL_WORKERS:-3}
+      INSIGHTS_PARALLEL_WORKERS: ${INSIGHTS_PARALLEL_WORKERS:-3}
+      CHUNKING_PARALLEL_WORKERS: ${CHUNKING_PARALLEL_WORKERS:-6}
+      INDEXING_PARALLEL_WORKERS: ${INDEXING_PARALLEL_WORKERS:-6}
+      # --- Security ---
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      ADMIN_DEFAULT_PASSWORD: ${ADMIN_DEFAULT_PASSWORD:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      # --- Paths ---
+      INBOX_DIR: /app/inbox
+      UPLOAD_DIR: /app/uploads
+      BACKUP_DIR: /app/backups
+      MIGRATIONS_DIR: /app/migrations
+    volumes:
+      - ./local-data/uploads:/app/uploads
+      - ./local-data/backups:/app/backups
+      - ./local-data/inbox:/app/inbox
+      - ./local-data/huggingface:/root/.cache/huggingface
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    container_name: rag-frontend
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+networks:
+  rag-network:
+    driver: bridge

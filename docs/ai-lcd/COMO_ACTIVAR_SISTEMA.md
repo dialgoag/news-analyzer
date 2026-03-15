@@ -63,7 +63,7 @@ Asegúrate que AGENTS.md mencione:
 
 **Comando para verificar**:
 ```bash
-cat /Users/diego.a/Workspace/Experiments/NewsAnalyzer-RAG/.cursor/AGENTS.md | grep -i "request-workflow\|requests_registry"
+cat <workspace-root>/.cursor/AGENTS.md | grep -i "request-workflow\|requests_registry"
 ```
 
 Si no existen → Agregar referencias
@@ -172,7 +172,7 @@ alwaysApply: true
 
 ### Opción 1: Lee la regla (5 seg)
 ```bash
-head -5 /Users/diego.a/Workspace/Experiments/NewsAnalyzer-RAG/.cursor/rules/request-workflow.mdc
+head -5 <workspace-root>/.cursor/rules/request-workflow.mdc
 # Debe ver: alwaysApply: true
 ```
 

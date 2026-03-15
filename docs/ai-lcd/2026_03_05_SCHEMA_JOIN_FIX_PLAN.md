@@ -98,7 +98,7 @@ steps = [
 ### Step 1: Backup Data (5 min)
 
 ```bash
-cd rag-enterprise/rag-enterprise-structure
+cd app
 sqlite3 ./local-data/database/rag_enterprise.db ".backup rag_enterprise_backup.db"
 ```
 

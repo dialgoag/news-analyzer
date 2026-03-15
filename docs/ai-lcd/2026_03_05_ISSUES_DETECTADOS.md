@@ -155,7 +155,7 @@ Estos items fueron revisados y están 100% correctos:
 ### Fase 1: Limpieza Inmediata (5 min)
 
 ```bash
-cd /Users/diego.a/Workspace/Experiments/NewsAnalyzer-RAG/rag-enterprise/rag-enterprise-structure
+cd app
 
 # 1. Restart backend (trigger cleanup)
 docker compose restart backend

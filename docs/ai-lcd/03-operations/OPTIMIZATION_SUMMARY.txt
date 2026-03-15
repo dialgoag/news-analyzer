@@ -173,7 +173,7 @@ FASE 1 (Quick Win - 5 minutos)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Cambios: .env solamente (sin código)
 
-1. Editar: rag-enterprise-structure/.env
+1. Editar: app/.env
    INGEST_PARALLEL_WORKERS=4          (de 2)
    INSIGHTS_THROTTLE_SECONDS=10       (de 60)
    INSIGHTS_MAX_RETRIES=5             (sin cambio, pero verificar)

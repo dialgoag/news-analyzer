@@ -1,0 +1,102 @@
+/* Recovered from production CSS bundle */
+
+.pipeline-analysis-panel {
+  background:#1e293b;
+  border:1px solid #334155;
+  border-radius:8px;
+  padding:16px;
+  margin-bottom:16px;
+}
+
+.blockers-badge {
+  background:#fee2e2;
+  color:#991b1b;
+  border:1px solid #fca5a5;
+  padding:6px 12px;
+  border-radius:12px;
+  font-size:.85rem;
+  font-weight:600;
+}
+
+.pipeline-stages {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+  gap:12px;
+}
+
+.stage-card {
+  background:#0f172a;
+  border:1px solid #334155;
+  border-radius:6px;
+  padding:16px;
+  transition:all .2s;
+}
+
+.stage-card:hover {
+  border-color:#475569;
+  box-shadow:0 2px 8px #0003;
+}
+
+.stage-card.blocked {
+  border-left:4px solid #ef4444;
+  background:#1a1a2e;
+}
+
+.stage-name {
+  font-weight:700;
+  color:#f1f5f9;
+  margin-bottom:8px;
+  font-size:1rem;
+}
+
+.stat-value.completed {
+  color:#10b981;
+}
+
+.blockers-section {
+  margin-top:12px;
+  padding-top:12px;
+  border-top:1px solid #334155;
+}
+
+.blockers-title {
+  font-weight:600;
+  color:#fca5a5;
+  margin-bottom:8px;
+  font-size:.9rem;
+}
+
+.blocker-item {
+  background:#1e293b;
+  padding:10px 12px;
+  border-radius:4px;
+  margin-bottom:8px;
+  border-left:3px solid #ef4444;
+}
+
+.blocker-reason {
+  color:#fca5a5;
+  font-size:.85rem;
+  margin-bottom:4px;
+}
+
+.blocker-reason strong {
+  color:#fee2e2;
+}
+
+.blocker-count {
+  color:#fbbf24;
+}
+
+.blocker-solution {
+  color:#bfdbfe;
+  font-size:.85rem;
+}
+
+.blocker-solution strong {
+  color:#93c5fd;
+}
+
+tr.completed {
+  opacity:.7;
+}

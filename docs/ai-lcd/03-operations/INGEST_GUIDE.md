@@ -33,7 +33,7 @@ Un script (p. ej. `scripts/bulk_upload.py`) que:
 
 ```bash
 # Desde el host (backend debe estar levantado)
-cd rag-enterprise/rag-enterprise-structure
+cd app
 
 # Opción A: variables de entorno
 export RAG_API_URL=http://localhost:8000
@@ -89,7 +89,7 @@ backend:
 
 ### 3.3 Uso
 
-1. Crear la carpeta local: `mkdir -p rag-enterprise/rag-enterprise-structure/local-data/inbox`
+1. Crear la carpeta local: `mkdir -p app/local-data/inbox`
 2. Copiar o mover archivos nuevos a `local-data/inbox`
 3. En unos minutos el backend los detectará, los procesará y los moverá a `local-data/inbox/processed/`
 
@@ -113,7 +113,7 @@ Seguir estos pasos **en orden** cuando quieras dejar datos limpios, archivos lis
 
 | Paso | Acción | Comando / Acción |
 |------|--------|-------------------|
-| 1 | Bajar el stack | `cd rag-enterprise/rag-enterprise-structure` y `COMPOSE_FILE=docker-compose.local.yml docker compose down` |
+| 1 | Bajar el stack | `cd app` y `COMPOSE_FILE=docker-compose.local.yml docker compose down` |
 | 2 | Limpiar datos (uploads, BD, Qdrant) | `rm -rf local-data/uploads/* local-data/database/* local-data/qdrant/*` |
 | 3 | Mover archivos de processed a inbox | `for f in local-data/inbox/processed/*; do [ -f "$f" ] && mv "$f" local-data/inbox/; done` |
 | 4 | Recrear imágenes backend y frontend | `COMPOSE_FILE=docker-compose.local.yml docker compose build --no-cache backend frontend` |
@@ -126,7 +126,7 @@ Seguir estos pasos **en orden** cuando quieras dejar datos limpios, archivos lis
 
 1. **Detener el backend** para que no tenga la BD abierta:
    ```bash
-   cd rag-enterprise-structure
+   cd app
    COMPOSE_FILE=docker-compose.local.yml docker compose stop backend
    ```
 
@@ -177,7 +177,7 @@ INGEST_DEFER_REPORT_GENERATION=true
 El script `suggest_parallel_workers.py` combina **heurística** (CPU y RAM) y, opcionalmente, un **benchmark real** con el mismo modelo de embeddings que usa el backend:
 
 ```bash
-cd rag-enterprise-structure
+cd app
 
 # Solo heurística (rápido; no carga el modelo)
 python scripts/suggest_parallel_workers.py

@@ -14,11 +14,13 @@
 
 | Variable | Default | Descripción |
 |----------|---------|-------------|
-| `GPU_TYPE` | `nvidia` | Tipo de GPU: `nvidia`, `amd`, `cpu` |
-| `COMPOSE_FILE` | `docker-compose.yml:docker-compose.nvidia.yml` | Archivos compose a usar |
+| `GPU_TYPE` | `cpu` | Para scripts (build.sh): `cpu`, `nvidia`, `amd` |
+| `COMPOSE_FILE` | (ninguno) | Override GPU: `docker-compose.yml:docker-compose.nvidia.yml` o `docker-compose.yml:docker-compose.amd.yml` |
 | `VITE_API_URL` | `http://localhost:8000` | URL del backend (vista desde el navegador del usuario) |
 | `BACKEND_PORT` | `8000` | Puerto del backend |
 | `FRONTEND_PORT` | `3000` | Puerto del frontend |
+
+**Nota**: Por defecto `docker compose up -d` usa CPU (Mac, Linux sin GPU). Ver [app/docs/DOCKER.md](../../app/docs/DOCKER.md).
 
 ### LLM Provider (MODIFICACIÓN NewsAnalyzer-RAG)
 
@@ -73,7 +75,7 @@ Cuando `INGEST_AUTO_TUNE_ON_START=true`, el backend escribe el valor recomendado
 
 ```env
 GPU_TYPE=cpu
-COMPOSE_FILE=docker-compose.yml
+# COMPOSE_FILE no necesario (CPU por defecto)
 VITE_API_URL=http://localhost:8000
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...tu-key...
@@ -84,7 +86,7 @@ OPENAI_MODEL=gpt-4o
 
 ```env
 GPU_TYPE=cpu
-COMPOSE_FILE=docker-compose.yml
+# COMPOSE_FILE=docker-compose.yml:docker-compose.nvidia.yml  # si hay GPU
 VITE_API_URL=https://api.tudominio.com
 JWT_SECRET_KEY=<openssl rand -hex 32>
 ALLOWED_ORIGINS=https://tudominio.com
@@ -99,3 +101,4 @@ ADMIN_DEFAULT_PASSWORD=password-seguro-admin
 | Fecha | Versión | Cambios | Autor |
 |-------|---------|---------|-------|
 | 2026-03-02 | 1.0 | Creación inicial | AI-DLC |
+| 2026-03-15 | 1.1 | GPU_TYPE/COMPOSE_FILE actualizados (CPU default) | AI-DLC |

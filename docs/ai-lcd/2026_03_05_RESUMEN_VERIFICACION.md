@@ -30,8 +30,8 @@
 
 ```
 NAME           IMAGE                               STATUS                 PORTS
-rag-backend    rag-enterprise-structure-backend    ✅ Up (healthy)        127.0.0.1:8000
-rag-frontend   rag-enterprise-structure-frontend   ✅ Up                  127.0.0.1:3000
+rag-backend    rag-backend    ✅ Up (healthy)        127.0.0.1:8000
+rag-frontend   rag-frontend   ✅ Up                  127.0.0.1:3000
 rag-qdrant     qdrant/qdrant:v1.15.2              ✅ Up                  127.0.0.1:6333
 ```
 

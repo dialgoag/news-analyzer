@@ -2,12 +2,12 @@
 
 > Plan detallado, timeline, checklist de verificación
 > 
-> **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo actualizado a 2026-03-14 con todos los fixes y optimizaciones.
+> **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo actualizado a 2026-03-15 con todos los fixes y optimizaciones.
 >
-> **📋 NUEVO**: Sankey Refactorizado + Datos Restaurados (Sesión 19-Tarde, 2026-03-14)
+> **📋 ÚLTIMO**: Frontend modular recuperado desde source map + CSS extraído del bundle de producción (Sesión 2026-03-15)
 
-**Última actualización**: 2026-03-14 10:50  
-**Versión**: 2.5 (Con Servicio de Datos + Insights Restaurados)
+**Última actualización**: 2026-03-15  
+**Versión**: 3.0 (Frontend modular recuperado + Docker unificado + Recovery automática)
 
 ---
 
@@ -206,7 +206,7 @@
   - ⚫ No Activos: 60 docs (completed: 4, error: 56)
 
 **Verificación manual requerida**:
-Ver: `frontend/test-semantic-zoom.md` para checklist completo de verificación manual
+Ver: `CONSOLIDATED_STATUS.md` § Fix #28b (Semantic Zoom) para detalles de verificación
 
 ---
 
@@ -473,77 +473,72 @@ docker-compose logs -f backend | grep -E "\[ocr_|insights_" | head -20
 
 ---
 
-### **v1.1 - Indexing Refactor + Deduplication** 🔄 (50%)
-**Fecha inicio**: 2026-03-05 15:00  
-**Status**: 🟡 EN CONSTRUCCIÓN (50% - análisis hecho, ejecución pendiente)
+### **v1.1 - Indexing Refactor + Deduplication** ✅
+**Fecha**: 2026-03-05 → 2026-03-15  
+**Status**: 🟢 COMPLETADA (dedup via PostgreSQL ON CONFLICT + SHA256)
 
 **Peticiones incluidas**:
 - [REQ-003](REQUESTS_REGISTRY.md#req-003-verificar-si-hay-duplicados-en-dedup-logic) - "Verificar si hay duplicados"
 
-**Cambios planeados** (2-3 total):
-- Fix #12: Refactor Indexing a event-driven pattern (PENDIENTE)
-- Fix #13: Limpiar duplicados existentes (PENDIENTE)
-- Fix #14 (Opcional): Añadir constraint UNIQUE a worker_tasks (PENDIENTE)
-
-**Estado actual**:
-- [x] Análisis completado
-- [x] Script de verificación creado
-- [ ] Limpieza ejecutada
-- [ ] Verificación post-cleanup
-- [ ] Refactor indexing implementado
-
-**Cuidados especiales**:
-- ⚠️ **NO TOCAR**: v1.0 (Event-driven OCR/Insights, está congelada)
-- ⚠️ **Depende de**: v1.0 (usa mismo worker_tasks schema)
-- ⚠️ **Afecta a**: OCR pipeline si hay errores en cleanup
-
-**Verificaciones requeridas ANTES de marcar ESTABLE**:
-- [ ] worker_tasks sin duplicados
-- [ ] Indexing workers ejecutándose (<= 2)
-- [ ] OCR/Insights SIGUEN funcionando (no rompió v1.0)
-- [ ] Logs sin errors de FK (foreign key)
-
-**Timeline estimado**: 2-3 horas (Hoy si todo va bien)
+**Cambios aplicados**:
+- Fix #4: assign_worker() verifica antes de asignar
+- Fix #46: Dedup SHA256 en Insights Workers (3 handlers)
+- Fix #51: Indexing worker real con index_chunk_records()
+- Migración PostgreSQL (REQ-008) con ON CONFLICT DO NOTHING
 
 **Link a REQUESTS_REGISTRY**: 
 - [REQ-003 detallada](REQUESTS_REGISTRY.md#req-003-verificar-si-hay-duplicados-en-dedup-logic)
 
 ---
 
-### **Futuras Versiones** (Placeholder)
+### **Futuras Versiones**
 
-#### v1.2 - Reporting Consolidado (Próxima)
-**Estimado**: 2026-03-06+  
-**Scope**: Unificar dashboard + reportes diarios + reportes semanales en 1 vista (BR-11)
+#### v1.2 - Master Pipeline Scheduler ✅ COMPLETADA
+**Fecha**: 2026-03-05 → 2026-03-13  
+**Scope**: REQ-004 — Scheduler único que orquesta Inbox → OCR → Chunking → Indexing → Insights
+
+#### v1.3 - Dashboard D3.js Interactivo ✅ COMPLETADA
+**Fecha**: 2026-03-13  
+**Scope**: REQ-007 — Sankey + Timeline + Tablas con Brushing & Linking
 
 #### v2.0 - PostgreSQL + Frontend Resiliente ✅ COMPLETADA
 **Fecha**: 2026-03-13  
-**Scope**: Migración SQLite → PostgreSQL completada, frontend resiliente implementado
+**Scope**: REQ-008 + REQ-009 — Migración SQLite → PostgreSQL, frontend con degradación graciosa
+
+#### v2.5 - Semantic Zoom + Data Service ✅ COMPLETADA
+**Fecha**: 2026-03-14  
+**Scope**: REQ-013 — Sankey con zoom semántico, servicio de transformación de datos
+
+#### v3.0 - OCRmyPDF + Docker Unificado + Recovery ✅ COMPLETADA
+**Fecha**: 2026-03-14 → 2026-03-15  
+**Scope**: REQ-012 — Migración Tika → OCRmyPDF, compose unificado, startup recovery
+
+#### v3.0.1 - Dashboard Performance (PENDIENTE)
+**Scope**: REQ-015 — Fix timeouts, CORS, Qdrant saturation
+
+#### v3.1 - Dashboard UX Improvements (PENDIENTE)
+**Scope**: REQ-014 — Upload stage, secciones colapsables, zoom multinivel
 
 ---
 
-## 7b. Siguiente Paso (Después de Verificar)
+## 7b. Siguiente Paso
 
-### ⏳ EN PROGRESO AHORA
-**Dashboard Refactor con D3.js (REQ-007)** - 4-6 horas (será v1.3)
-- Scope ajustado: solo dashboards, backend SOLID pospuesto
-- FASE 1: Reglas y documentación
-- FASE 3: Dashboard Pipeline interconectado
-- FASE 4: Dashboard Insights separado
-- Ver: `DASHBOARD_REFACTOR_PLAN.md`
+### ⏳ PENDIENTE AHORA
+**REQ-015: Fix Dashboard Performance** (v3.0.1 hotfix)
+- PRIORIDAD 1: Caché + connection pooling + eliminar Qdrant scroll
+- PRIORIDAD 2: CORS headers en respuestas 500
+- PRIORIDAD 3: Rate limiting en workers insights
+- Ver: `REQUESTS_REGISTRY.md` § REQ-015
 
-### Si Todo ✅ OK (después de dashboards)
-**Dashboard Unificado (BR-11)** - 2-3 horas (será v1.4)
-- Combinar: tabla documentos + reportes diarios + reportes semanales
-- En una sola vista sin tabs
-- Incluir filtros por estado, fecha, fuente
+### Después de REQ-015
+**REQ-014: Mejoras UX Dashboard** (v3.1)
+- Secciones colapsables, header compacto, zoom multinivel
+- Ver: `REQUESTS_REGISTRY.md` § REQ-014
 
 ### Si Hay ❌ Problemas
-1. Revisar los logs
-2. Ejecutar verificación manual (§4)
-3. Reconstruir backend si necesario: `docker-compose build --no-cache backend frontend`
-4. Consultar §4 "Problemas Comunes"
-5. Registrar en [REQUESTS_REGISTRY.md](REQUESTS_REGISTRY.md) si es petición nueva
+1. Revisar los logs: `docker compose logs backend --tail 100`
+2. Ejecutar PROTOCOLO DE RECOVERY POST-RESTART (§ más abajo)
+3. Consultar `REQUESTS_REGISTRY.md` para peticiones relacionadas
 
 ---
 
@@ -600,14 +595,15 @@ const interval = setInterval(fetchSummary, 5000);  // 5000ms = 5s
 
 ---
 
-**Status**: 🟢 **LISTO - RECONCILIACIÓN INSIGHTS + INVENTARIO BD COMPLETADO**
+**Status**: 🟡 **FRONTEND RECUPERADO — PENDIENTE: REQ-015 (Dashboard Performance)**
 
-**Última actualización**: 2026-03-14 (sesión tarde)
+**Última actualización**: 2026-03-15
+**Frontend modular**: 17 archivos JS/JSX + 11 archivos CSS recuperados desde source map
+**Backend**: Idéntico entre imagen Docker y app/ (verificado)
 **Dashboard desplegado**: http://localhost:3000
 **Pipeline verificada**: 14/14 documentos completados con nuevos status
 **221 documentos pausados**: Listos para despausar en lotes controlados
-**461 insights faltantes**: Se generarán automáticamente al rebuild (PASO 3.5 scheduler)
-**1,264 news items huérfanos**: Se linkearán via SHA256 al procesar docs pausados (NO borrar)
+**Bloqueante**: REQ-015 (Dashboard inutilizable por timeouts 15-54s)
 
 ---
 
@@ -700,7 +696,44 @@ SELECT document_id, filename, status FROM document_status WHERE status LIKE '%_p
 
 ---
 
-### 🟡 PRIORIDAD 3: BUG — Workers saturan Qdrant en loop de fallos (REQ-015.3)
+### 🔴 PRIORIDAD 3: BUG — Remanentes SQLite en database.py (migración incompleta)
+**Severidad**: ALTA — Métodos explotan en runtime con `'NoneType' object has no attribute 'fetchone'`  
+**Afecta**: `list_users`, `get_by_document_id`, `DocumentInsightsStore.get_by_document_id`, `get_done_by_content_hash`, `NewsItemInsightsStore.get_by_news_item_id`  
+**Error**: `cursor.execute(...).fetchone()` retorna `None` en psycopg2 (patrón SQLite, no PostgreSQL)
+
+**Causa raíz**: La migración SQLite → PostgreSQL cambió el driver a `psycopg2` y los placeholders (`?` → `%s`), pero no corrigió patrones de API incompatibles:
+1. **`cursor.execute().fetchone()`** (5 instancias) — En SQLite `execute()` retorna el cursor; en psycopg2 retorna `None`
+2. **`cursor.lastrowid`** (2 instancias, líneas 157, 865) — No funciona en psycopg2; requiere `RETURNING id`
+3. **`is_active = 1` / `= 0`** (menor) — Funciona pero debería ser `BOOLEAN` en PostgreSQL
+
+**Instancias a corregir**:
+| Línea | Método | Patrón roto |
+|---|---|---|
+| 232 | `UserDatabase.list_users()` | `.execute(...).fetchall()` |
+| 463 | `DocumentStatusStore.get_by_document_id()` | `.execute(...).fetchone()` |
+| 1044 | `DocumentInsightsStore.get_by_document_id()` | `.execute(...).fetchone()` |
+| 1084 | `DocumentInsightsStore.get_done_by_content_hash()` | `.execute(...).fetchone()` |
+| 1307 | `NewsItemInsightsStore.get_by_news_item_id()` | `.execute(...).fetchone()` |
+| 157 | `UserDatabase.create_user()` | `cursor.lastrowid` |
+| 865 | `NotificationStore.insert()` | `cursor.lastrowid` |
+
+**Fix**: Separar `execute()` de `fetchone()`/`fetchall()`, reemplazar `lastrowid` por `RETURNING id`.
+
+**Archivos**: `backend/database.py`
+
+**🔄 Requiere rebuild backend**: Sí
+
+---
+
+### ✅ PRIORIDAD 0: BUG — Inbox "File not found" + Centralizar ingesta (REQ-016, Fix #56, #57) — COMPLETADO
+**Fecha completado**: 2026-03-15
+**Solución implementada**: `file_ingestion_service.py` creado + 3 paths refactorizados + `_handle_ocr_task` fix
+**Resultado**: 4/4 docs procesados end-to-end (OCR→chunking→indexing→Qdrant)
+**Estado**: ESTABLE, no modificar
+
+---
+
+### 🟡 PRIORIDAD 4: BUG — Workers saturan Qdrant en loop de fallos (REQ-015.3)
 **Severidad**: MEDIA — Degrada performance de todo el backend  
 **Afecta**: Workers de insights + Qdrant  
 **Error**: Cientos de `scroll` requests/segundo, workers fallan con "No chunks found" y reintentan
@@ -715,7 +748,7 @@ SELECT document_id, filename, status FROM document_status WHERE status LIKE '%_p
 
 ---
 
-### ~~🔴 PRIORIDAD 4 (antes 1): BUG — `LIMIT ?` (SQLite residual en PostgreSQL)~~ ✅ COMPLETADO (2026-03-15)
+### ~~🔴 PRIORIDAD 5 (antes 4/1): BUG — `LIMIT ?` (SQLite residual en PostgreSQL)~~ ✅ COMPLETADO (2026-03-15)
 **Severidad**: ALTA — Bloquea indexing y insights de documentos  
 **Afecta**: 2 docs en `error` + cualquier doc que pase por `list_by_document_id`  
 **Error**: `not all arguments converted during string formatting`
@@ -731,7 +764,7 @@ SELECT document_id, filename, status FROM document_status WHERE status LIKE '%_p
 
 ---
 
-### ~~🔴 PRIORIDAD 5 (antes 2): BUG — Indexing worker NO indexa chunks en Qdrant~~ ✅ COMPLETADO (2026-03-15)
+### ~~🔴 PRIORIDAD 6 (antes 5/2): BUG — Indexing worker NO indexa chunks en Qdrant~~ ✅ COMPLETADO (2026-03-15)
 **Severidad**: ALTA — Causa 557 insights "No chunks found" en 13 docs  
 **Afecta**: Todos los docs procesados por pipeline async (no sync)  
 **Error**: `No chunks found` en insights worker
@@ -774,7 +807,7 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 
 ---
 
-### 🟡 PRIORIDAD 6 (antes 3): Reprocesar 2 docs en `error` (post-fix LIMIT)
+### 🟡 PRIORIDAD 7 (antes 6/3): Reprocesar 2 docs en `error` (post-fix LIMIT)
 **Severidad**: MEDIA — Datos perdidos recuperables  
 **Afecta**: 2 docs (06-02-26-El Pais, 03-03-26-El Pais) con 86 noticias
 
@@ -783,11 +816,11 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 2. Re-encolar tareas de indexing en `processing_queue`
 3. Verificar que completan sin error
 
-**🔄 Requiere rebuild**: No (solo SQL), pero requiere que PRIORIDAD 4 esté aplicada y backend corriendo
+**🔄 Requiere rebuild**: No (solo SQL), pero requiere que PRIORIDAD 5 esté aplicada y backend corriendo
 
 ---
 
-### 🟡 PRIORIDAD 7 (antes 4): Reprocesar 557 insights con error (post-fix indexing)
+### 🟡 PRIORIDAD 8 (antes 7/4): Reprocesar 557 insights con error (post-fix indexing)
 **Severidad**: MEDIA — Insights generables una vez chunks existan en Qdrant  
 **Afecta**: 13 docs en `indexing_done` con 557 insights "No chunks found"
 
@@ -797,12 +830,12 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 3. Scheduler reconcilia automáticamente (PASO 3.5)
 4. Verificar que insights se generan correctamente
 
-**🔄 Requiere rebuild**: No (solo SQL + re-enqueue), pero requiere que PRIORIDAD 5 esté aplicada y backend corriendo
+**🔄 Requiere rebuild**: No (solo SQL + re-enqueue), pero requiere que PRIORIDAD 6 esté aplicada y backend corriendo
 **⚠️ Post-restart**: Si el backend se reinicia mientras insights están `generating`, ejecutar: `UPDATE news_item_insights SET status='pending' WHERE status='generating'`
 
 ---
 
-### 🟢 PRIORIDAD 8 (antes 5): Despausar documentos en lotes controlados
+### 🟢 PRIORIDAD 9 (antes 8/5): Despausar documentos en lotes controlados
 **Severidad**: BAJA — Feature, no bug  
 **Afecta**: 186 docs pausados
 
@@ -814,14 +847,14 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 5. Repetir hasta completar los 186
 **Estimación**: ~7-8 lotes, ~2-3 horas total (depende de OCR)
 
-**IMPORTANTE**: Solo ejecutar DESPUÉS de fixes PRIORIDAD 1-5, para que los docs nuevos no caigan en los mismos bugs.
+**IMPORTANTE**: Solo ejecutar DESPUÉS de fixes PRIORIDAD 1-6, para que los docs nuevos no caigan en los mismos bugs.
 
-**🔄 Requiere rebuild**: No (solo SQL), pero requiere PRIORIDAD 1-5 aplicadas
+**🔄 Requiere rebuild**: No (solo SQL), pero requiere PRIORIDAD 1-6 aplicadas
 **⚠️ Post-restart entre lotes**: Si el backend se reinicia mientras un lote está procesándose, ejecutar PROTOCOLO DE RECOVERY antes de despausar el siguiente lote
 
 ---
 
-### 🟢 PRIORIDAD 9 (antes 6): Documentar resultados finales
+### 🟢 PRIORIDAD 10 (antes 9/6): Documentar resultados finales
 **Objetivo**: Actualizar docs con métricas finales post-procesamiento
 - Total noticias extraídas
 - Total insights generados vs reutilizados (ahorro de costes)
@@ -830,7 +863,7 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 
 ---
 
-### 🔵 PRIORIDAD 10 (antes 7): Features pendientes (post-estabilización)
+### 🔵 PRIORIDAD 11 (antes 10/7): Features pendientes (post-estabilización)
 
 #### 7a. REQ-014: Mejoras UX Dashboard (v3.1) — 4 sub-peticiones
 1. **REQ-014.1**: Agregar stage "Upload" al PipelineAnalysisPanel + estado "paused" visible
@@ -871,6 +904,11 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 ---
 
 ## ✅ Completado (2026-03-14/15)
+- [x] Frontend modular recuperado: 17 JS/JSX desde source map + 11 CSS desde bundle (2026-03-15) - ESTABLE
+- [x] Docker Compose unificado: CPU por defecto, GPU opt-in (Fix #56, 2026-03-15) - ESTABLE
+- [x] Refactor submodule → app/ (Fix #55, 2026-03-15) - ESTABLE
+- [x] Startup Recovery + Crash Recovery (Fix #52, 2026-03-15) - ESTABLE
+- [x] Protocolo de Despliegue Seguro (Fix #53, 2026-03-15) - ESTABLE
 - [x] Fix LIMIT ? → LIMIT %s (PRIORIDAD 4, Fix #50) - ESTABLE
 - [x] Fix Indexing worker real: index_chunk_records() (PRIORIDAD 5, Fix #51) - ESTABLE
 - [x] Startup Recovery + Runtime Crash Recovery (Fix #52) - ESTABLE

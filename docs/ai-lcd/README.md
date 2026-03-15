@@ -185,7 +185,7 @@ cat docs/ai-lcd/PLAN_AND_NEXT_STEP.md
 
 ### 3. Desplegar
 ```bash
-cd RAG-Enterprise/rag-enterprise-structure/
+cd app/
 docker compose up -d
 ```
 

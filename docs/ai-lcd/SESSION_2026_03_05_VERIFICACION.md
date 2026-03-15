@@ -213,7 +213,7 @@ GPU_TYPE:                  nvidia ✅
 
 ## 📚 DOCUMENTOS GENERADOS EN ESTA SESIÓN
 
-**Ubicación**: `/Users/diego.a/Workspace/Experiments/NewsAnalyzer-RAG/`
+**Ubicación**: `<workspace-root>/`
 
 ```
 1. INDICE_VERIFICACION_PROD_LOCAL.md

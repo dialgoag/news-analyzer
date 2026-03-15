@@ -1,0 +1,98 @@
+/* Recovered from production CSS bundle */
+
+.dashboard-filters {
+  background:#1e1e2e;
+  border-radius:8px;
+  padding:16px;
+  margin-bottom:20px;
+  border:1px solid #334155;
+}
+
+.filters-header {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:12px;
+}
+
+.filters-header h3 {
+  margin:0;
+  font-size:1rem;
+  color:#f1f5f9;
+  font-weight:600;
+}
+
+.clear-all-btn {
+  background:#ef4444;
+  color:#fff;
+  border:none;
+  padding:6px 12px;
+  border-radius:4px;
+  cursor:pointer;
+  font-size:.875rem;
+  font-weight:500;
+  transition:all .2s;
+}
+
+.clear-all-btn:hover {
+  background:#dc2626;
+  transform:scale(1.02);
+}
+
+.filters-content {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  min-height:40px;
+  align-items:center;
+}
+
+.filter-chip {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  background:rgba(77,208,225,.15);
+  border:1px solid #4dd0e1;
+  border-radius:16px;
+  padding:4px 10px;
+  font-size:.875rem;
+  transition:all .2s;
+}
+
+.filter-chip:hover {
+  background:rgba(77,208,225,.25);
+  border-color:#26c6da;
+}
+
+.filter-label {
+  color:#94a3b8;
+  font-weight:500;
+}
+
+.filter-value {
+  color:#f1f5f9;
+  font-weight:600;
+}
+
+.filter-clear {
+  background:none;
+  border:none;
+  color:#f1f5f9;
+  cursor:pointer;
+  font-size:.75rem;
+  padding:2px 4px;
+  margin-left:2px;
+  border-radius:50%;
+  transition:all .2s;
+  line-height:1;
+}
+
+.filter-clear:hover {
+  background:rgba(255,255,255,.2);
+  transform:scale(1.1);
+}
+
+.filter-clear:focus {
+  outline:2px solid #4dd0e1;
+  outline-offset:2px;
+}

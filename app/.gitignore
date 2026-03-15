@@ -1,0 +1,43 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data
+backend/documenti_caricati.json
+
+# Logs
+*.log
+
+# Docker volumes data (if any)
+data/
+volumes/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Local utility scripts and configuration
+auto-commit.sh
+CLAUDE.md
+
+# Internal documents (not for public repo)
+MARKETING_STRATEGY.md
+docs/MARKETING_STRATEGY.md

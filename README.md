@@ -2,7 +2,7 @@
 
 > Plataforma web para análisis profundo de noticias en PDF con IA
 
-Basado en [RAG Enterprise](https://github.com/I3K-IT/RAG-Enterprise) con soporte para OpenAI API.
+Inspirado en [RAG Enterprise](https://github.com/I3K-IT/RAG-Enterprise). Ver [docs/CREDITS.md](docs/CREDITS.md) para atribución.
 
 ---
 
@@ -29,13 +29,13 @@ Basado en [RAG Enterprise](https://github.com/I3K-IT/RAG-Enterprise) con soporte
 ## Quick Start
 
 ```bash
-cd RAG-Enterprise/rag-enterprise-structure
+cd app
 
-# 1. Configurar
+# 1. Configurar (macOS usa CPU por defecto)
 cp .env.example .env
-# Editar .env: configurar LLM_PROVIDER, OPENAI_API_KEY, etc.
+# Editar .env si necesitas: JWT_SECRET_KEY, OCR_ENGINE, etc.
 
-# 2. Levantar
+# 2. Levantar (Mac: Dockerfile.cpu, ~5-8 min build)
 docker compose up -d
 
 # 3. Ver logs (esperar "Application startup complete")
@@ -59,11 +59,13 @@ docker compose logs backend | grep "Password:"
 
 Ver `docs/ai-lcd/` para documentación completa:
 
+- **[CREDITS](docs/CREDITS.md)** -- Atribución al proyecto original
 - **[CONSOLIDATED_STATUS](docs/ai-lcd/CONSOLIDATED_STATUS.md)** -- Estado actual del proyecto
 - **[SESSION_LOG](docs/ai-lcd/SESSION_LOG.md)** -- Decisiones entre sesiones
 - **[Business Requirements](docs/ai-lcd/01-inception/BUSINESS_REQUIREMENTS.md)**
 - **[Architecture](docs/ai-lcd/02-construction/ARCHITECTURE_DETAILED.md)**
 - **[OpenAI Integration](docs/ai-lcd/02-construction/OPENAI_INTEGRATION.md)**
 - **[Deployment Guide](docs/ai-lcd/03-operations/DEPLOYMENT_GUIDE.md)**
+- **[Docker (CPU/GPU)](app/docs/DOCKER.md)** -- Compose unificado, build, plataformas
 - **[Environment Config](docs/ai-lcd/03-operations/ENVIRONMENT_CONFIGURATION.md)**
 - **[Troubleshooting](docs/ai-lcd/03-operations/TROUBLESHOOTING_GUIDE.md)**

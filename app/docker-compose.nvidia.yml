@@ -1,0 +1,28 @@
+# Override NVIDIA GPU - Usar con: COMPOSE_FILE=docker-compose.yml:docker-compose.nvidia.yml
+# Cambia a Dockerfile con CUDA y asigna GPU a backend y ollama
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      OCR_ENGINE: ${OCR_ENGINE:-tika}
+      CUDA_VISIBLE_DEVICES: "0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  ollama:
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

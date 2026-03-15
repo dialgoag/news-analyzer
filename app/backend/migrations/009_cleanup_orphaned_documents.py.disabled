@@ -1,0 +1,32 @@
+"""
+Migration 009: Cleanup orphaned documents with "File not found" errors.
+
+This migration cleans up legacy documents that were processed but whose files
+no longer exist on disk. These are typically from previous import attempts
+or failed inbox scans.
+
+Generated: 2026-03-05
+"""
+
+from yoyo import step
+
+steps = [
+    step(
+        # Delete documents with "File not found" error
+        "DELETE FROM document_status WHERE error_message LIKE '%File not found%' AND status = 'error'",
+        # Rollback: nothing to rollback, just mark this step as complete
+        "-- Cleanup completed for 'File not found' errors"
+    ),
+    step(
+        # Delete orphaned news_items (documents that no longer exist)
+        """DELETE FROM news_items 
+           WHERE document_id NOT IN (SELECT document_id FROM document_status)""",
+        "-- Rollback: nothing to rollback"
+    ),
+    step(
+        # Delete orphaned worker_tasks
+        """DELETE FROM worker_tasks 
+           WHERE document_id IN (SELECT document_id FROM document_status WHERE status = 'error')""",
+        "-- Rollback: nothing to rollback"
+    ),
+]

@@ -62,6 +62,7 @@
 | **DEPLOYMENT_GUIDE.md** | Despliegue paso a paso | `03-operations/` |
 | **ENVIRONMENT_CONFIGURATION.md** | Variables de entorno | `03-operations/` |
 | **TROUBLESHOOTING_GUIDE.md** | Problemas y soluciones | `03-operations/` |
+| **DOCKER.md** | Docker Compose unificado (CPU/GPU) | `app/docs/` |
 | **PERFORMANCE_OPTIMIZATION.md** | Optimizaciones | `03-operations/` |
 
 ---
@@ -78,6 +79,9 @@
 
 **...cómo hacer deploy?**
 → `03-operations/DEPLOYMENT_GUIDE.md`
+
+**...Docker CPU vs GPU?**
+→ `app/docs/DOCKER.md`
 
 **...los bugs arreglados hoy?**
 → `CONSOLIDATED_STATUS.md § 🔧 FIXES APLICADOS HOY`
@@ -128,7 +132,7 @@ cat docs/ai-lcd/CONSOLIDATED_STATUS.md
 cat docs/ai-lcd/PLAN_AND_NEXT_STEP.md
 
 # Hacer deploy
-cd RAG-Enterprise/rag-enterprise-structure/
+cd app/
 docker compose up -d
 ```
 
@@ -214,6 +218,9 @@ docker-compose exec backend python3 /app/verify_deduplication.py
 | Frontend Resiliente | ✅ Completo | `CONSOLIDATED_STATUS.md § Fix #23` |
 | Pipeline States | ✅ Completo | `CONSOLIDATED_STATUS.md § Fix #43` |
 | Dashboard Paneles | ✅ Completo | `CONSOLIDATED_STATUS.md § Fixes #36-40` |
+| Frontend Modular | ✅ Recuperado | 17 JS/JSX + 11 CSS desde source map |
+| Docker Unificado | ✅ Completo | `CONSOLIDATED_STATUS.md § Fix #56` |
+| Startup Recovery | ✅ Completo | `CONSOLIDATED_STATUS.md § Fix #52` |
 
 ---
 

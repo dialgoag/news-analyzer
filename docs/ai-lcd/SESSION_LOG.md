@@ -3,7 +3,93 @@
 > Decisiones, cambios importantes, y contexto entre sesiones
 
 **Última actualización**: 2026-03-15  
-**Sesión**: 19+ (Documentación Unificada)
+**Sesión**: 21+ (Infraestructura Docker para producción local)
+
+---
+
+## Sesión: Infraestructura Docker para producción local (2026-03-15)
+
+### Decisión
+Corregir docker-compose, Dockerfile y .env.example para que la app pueda levantarse desde cero en producción local con persistencia real.
+
+### Problemas encontrados
+- docker-compose.yml no tenía servicio PostgreSQL (migrado en REQ-008 pero no reflejado en compose)
+- Dockerfile.cpu faltaban 3 archivos Python críticos + directorio de migraciones
+- Volúmenes Docker named (se pierden con `docker compose down -v`)
+- .env.example no tenía variables de PostgreSQL, OpenAI, ni workers
+- Frontend faltaba dependencia d3 en package.json
+
+### Alternativas consideradas
+- Usar Docker named volumes + backup manual → rechazado: riesgo de pérdida de datos
+- Mantener mount de desarrollo `./backend:/app` → rechazado: sobreescribe Dockerfile, no es producción
+
+### Implementación
+- PostgreSQL 17-alpine con healthcheck y bind mount a `./local-data/postgres`
+- Todos los volúmenes → bind mounts en `./local-data/`
+- Dockerfile.cpu: +3 COPY (pipeline_states, worker_pool, migration_runner) + migrations/
+- .env.example reescrito completo (9 secciones)
+- d3 ^7.9.0 agregado a package.json
+- Dockerfile CUDA → `deprecated/Dockerfile.cuda`
+
+### Riesgo
+- BAJO: Cambios son de infraestructura, no de lógica de negocio
+- PostgreSQL healthcheck asegura que backend no arranca antes de que BD esté lista
+
+### Impacto en roadmap
+- App lista para levantar con `cp .env.example .env && docker compose up -d`
+- Persistencia real en disco para producción local
+
+---
+
+## Sesión: Recuperación Frontend + Alineación Documentación (2026-03-15)
+
+### Decisión
+Recuperar el frontend modular perdido desde el source map del build de producción, y alinear toda la documentación con el estado real del código.
+
+### Contexto
+- Al migrar de submódulo RAG-Enterprise a app/, se perdió el código fuente modular del frontend
+- Solo quedaba App.jsx monolítico (1340 líneas) pero la documentación describía arquitectura modular
+- La imagen Docker de producción contenía el build compilado con source map incluido
+- Los archivos backend eran idénticos entre la imagen recuperada y app/ (verificado diff)
+
+### Alternativas consideradas
+- Reescribir frontend desde cero → rechazado: innecesario, el código existe en el source map
+- Usar solo el monolito → rechazado: contradice la arquitectura documentada y aprobada
+- Recuperar desde git history → rechazado: no hay commits del frontend modular en el repo
+
+### Implementación
+1. **Frontend JS/JSX**: Parseado `index-b861ec5e.js.map` con Python, extraídos 17 archivos con sourcesContent
+2. **Frontend CSS**: Parseado `index-bf878f9f.css` bundle, extraídas 199 CSS rules distribuidas en 11 archivos por componente
+3. **Documentación**: Alineados estados en REQUESTS_REGISTRY, renumerados duplicados en CONSOLIDATED_STATUS, actualizado PLAN_AND_NEXT_STEP
+
+### Riesgo
+- BAJO: Los archivos recuperados son exactamente los que generaron el build de producción
+- CSS extraído del bundle puede tener reglas compartidas entre componentes (no es problema funcional)
+
+### Impacto en roadmap
+- Frontend modular restaurado, permite continuar con REQ-014 (mejoras UX)
+- Documentación consistente, facilita onboarding y auditoría
+
+---
+
+## Sesión: Docker Compose unificado (2026-03-15)
+
+### Decisión
+Unificar el flujo Docker: un solo compose principal que usa CPU por defecto. GPU es opt-in vía override.
+
+### Alternativas consideradas
+- Mantener docker-compose.cpu.yml como override → rechazado: redundante si el principal ya es CPU
+- Compose principal con CUDA → rechazado: no funciona en Mac
+
+### Implementación
+- `docker-compose.yml`: backend con Dockerfile.cpu, OCR_ENGINE=ocrmypdf
+- `docker-compose.nvidia.yml`: override con Dockerfile CUDA, OCR_ENGINE=tika, GPU
+- `docker-compose.cpu.yml`: eliminado
+- `app/docs/DOCKER.md`: guía completa creada
+
+### Impacto en roadmap
+- Simplifica onboarding (un comando para Mac/Linux sin GPU)
+- Documentación centralizada en DOCKER.md
 
 ---
 
@@ -1929,7 +2015,7 @@ Levantar sistema, verificar estado, diagnosticar bugs, documentar plan priorizad
 - **Causa**: Contenedores montaban `/Users/diego.a/.../NewsAnalyzer-RAG/...` (ruta fantasma) en vez de `/Users/diego.a/.../news-analyzer/...` (ruta real)
 - **Solución**: `docker compose down` + eliminar carpeta fantasma + `docker compose up -d` desde ruta correcta
 - **Resultado**: 231 docs, 2100 news, 2100 insights, 1 admin user recuperados
-- **Prevención**: Siempre ejecutar `docker compose` desde `news-analyzer/RAG-Enterprise/rag-enterprise-structure/`
+- **Prevención**: Siempre ejecutar `docker compose` desde `news-analyzer/app/`
 
 ### Problema 2: Bug `LIMIT ?` en database.py (SQLite residual)
 - **Descubierto**: 2 docs en `error` con "not all arguments converted during string formatting"
@@ -2029,6 +2115,46 @@ Dashboard completamente roto: todos los paneles muestran errores de timeout, 500
 ### Riesgo
 - MEDIO: Connection pooling toca 9 stores en database.py
 - BAJO: Caché puede mostrar datos stale (TTL 15-30s aceptable)
+
+---
+
+## Sesión 24: BUG Inbox Scanner + file_ingestion_service + OCR text fix (2026-03-15)
+
+### Contexto
+Usuario subió 4 PDFs via inbox para probar pipeline completa. Los 4 fallaron con "File not found" en OCR.
+
+### Investigación
+1. **Logs backend**: OCR workers fallan con `File not found: /app/uploads/{uuid}`
+2. **Disco**: Archivos existen como `uploads/{filename}`, no como `uploads/{uuid}`
+3. **Código**: PASO 1 del scheduler genera `uuid4()` como `document_id` pero guarda archivo con nombre original
+4. **Duplicación**: 3 paths de ingesta con lógica inconsistente
+
+### Decisión: Centralizar en file_ingestion_service.py
+- **Por qué servicio separado**: 3 paths duplican lógica de hash, copia, registro en BD, enqueue OCR
+- **Por qué symlinks**: PDFs de 20-60MB, copiar duplica espacio innecesariamente
+- **Alternativa rechazada**: Fix inline en PASO 1 (solo parcharía un path, no resuelve duplicación)
+
+### Implementación completada
+1. **`file_ingestion_service.py`** creado con: `ingest_from_upload()`, `ingest_from_inbox()`, `compute_sha256()`, `check_duplicate()`, `resolve_file_path()`
+2. **Upload API** refactorizada para usar `ingest_from_upload()`
+3. **PASO 1 scheduler** refactorizado para usar `ingest_from_inbox()`
+4. **`run_inbox_scan()`** refactorizada para usar `ingest_from_inbox()`
+5. **Dockerfile.cpu** actualizado con COPY del nuevo archivo
+6. **Recovery**: BD limpiada, archivos movidos de vuelta a inbox, re-ingesta exitosa
+
+### Bug adicional descubierto: _handle_ocr_task no guardaba ocr_text (Fix #57)
+- `Expansion.pdf` completó OCR pero quedó atascado en `ocr_done` sin `ocr_text`
+- Causa: handler actualizaba status pero no llamaba `store_ocr_text()`
+- Fix: Agregado `document_status_store.store_ocr_text(document_id, text)` + `doc_type` al UPDATE
+- Resultado: Expansion avanzó correctamente a chunking → indexing
+
+### Resultado final
+- 4/4 docs procesados: ABC, El Pais, El Mundo → `indexing_done` en Qdrant; Expansion → indexing en curso
+- Pipeline end-to-end verificada
+- PASO 0 del scheduler (crash recovery) no cubre este caso — solo detecta workers >5min en `started`
+
+### Riesgo
+- BAJO: Symlinks pueden romperse si se borra `inbox/processed/` (documentar como restricción)
 
 ---
 

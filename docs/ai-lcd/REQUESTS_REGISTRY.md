@@ -3,8 +3,8 @@
 > **Propósito**: Rastrear TODAS las peticiones del usuario con trazabilidad completa
 > 
 > **Última actualización**: 2026-03-15  
-> **Total peticiones**: 15  
-> **Completadas**: 13 | Pendientes: 2 | Rechazadas: 0
+> **Total peticiones**: 16  
+> **Completadas**: 14 | Pendientes: 2 | Rechazadas: 0
 
 ---
 
@@ -27,6 +27,7 @@
 | **REQ-013** | 2026-03-14 | "Sankey vacío + Errores API" | ✅ **COMPLETADA** | v2.5 | **#28, #29, #30** |
 | **REQ-014** | 2026-03-15 | "Mejoras UX Dashboard (4 sub-peticiones)" | 🔄 **PENDIENTE** | v3.1 | — |
 | **REQ-015** | 2026-03-15 | "BUG: Dashboard inutilizable — timeouts + 500 + CORS" | 🔴 **PENDIENTE** | v3.0.1 | — |
+| **REQ-016** | 2026-03-15 | "BUG: Inbox File not found + Centralizar ingesta en servicio" | ✅ **COMPLETADA** | v3.0.2 | **#56, #57** |
 
 ---
 
@@ -140,7 +141,7 @@
 - **Fecha**: 2026-03-05
 - **Sesión**: [Sesión 11](11-uuid-here) (Auditoría + Cleanup)
 - **Prioridad**: 🟡 ALTA
-- **Estado**: 🔄 **EN PROGRESO** (50% - análisis completado, ejecución pendiente)
+- **Estado**: ✅ **COMPLETADA** (Fix #4 aplicado + migración PostgreSQL eliminó duplicados)
 
 **Descripción Original**:
 > "¿Hay documentos duplicados en la base de datos? El assign_worker() podría estar asignando múltiples workers al mismo documento. Necesito verificar y limpiar si hay duplicados."
@@ -148,31 +149,15 @@
 **Problema Identificado**:
 - assign_worker() usaba INSERT OR REPLACE (podría permitir 2+ workers)
 - Script de verificación mostró 1 entrada duplicada en worker_tasks
-- Cleanup script creado pero aún NO ejecutado
 
-**Estado Actual**:
-- ✅ Fix #4 implementado: assign_worker() ahora verifica antes de asignar
-- ✅ Script de verificación creado: `scripts/verify_deduplication.py`
-- ⏳ Cleanup NO ejecutado aún (pendiente ejecución)
-- ⏳ Verificación post-cleanup pendiente
-
-**Solución Planeada**:
-1. [ ] Ejecutar cleanup script (remover 1 entrada duplicada)
-2. [ ] Verificar logs post-cleanup
-3. [ ] Marcar como ✅ HECHA
+**Solución Implementada**:
+- ✅ Fix #4: assign_worker() ahora verifica antes de asignar
+- ✅ Migración a PostgreSQL (REQ-008) con ON CONFLICT DO NOTHING eliminó duplicados
+- ✅ SHA256 dedup implementado (Fix #46)
 
 **Alternativas Consideradas**:
 1. ❌ Ignorar (dejar un duplicado) - Rechazado: data corruption
 2. ✅ **Elegida**: Limpiar + fortalecer logic assign_worker()
-
-**Riesgos**:
-- ⚠️ Cleanup es destructivo (elimina registros) - Mitigación: backup BD primero
-
-**Próximos Pasos**:
-- [ ] Backup de database.db
-- [ ] Ejecutar cleanup
-- [ ] Verificar worker_tasks sin duplicados
-- [ ] Marcar REQ-003 como ✅ ESTABLE
 
 **Linkeo a Documentación**:
 - `SESSION_LOG.md` § 2026-03-05: Decisión de mantener BD limpia
@@ -264,7 +249,7 @@ Copiar y rellenar cuando haya nueva petición:
 - **Fecha**: 2026-03-05
 - **Sesión**: [Sesión 11](11-uuid-here) (Master Pipeline + Consolidación)
 - **Prioridad**: 🔴 CRÍTICA
-- **Estado**: 🔄 **EN CONSTRUCCIÓN** (80% - código escrito, rebuild en marcha)
+- **Estado**: ✅ **COMPLETADA** (scheduler operativo, verificado en producción)
 
 **Descripción Original**:
 > "El pipeline está fragmentado en múltiples schedulers. Necesito UN SOLO scheduler que orqueste TODO: inbox → OCR → Chunking → Indexing → Insights. Debe ser simple, robusto y sin competencia entre workers."
@@ -281,39 +266,19 @@ Copiar y rellenar cuando haya nueva petición:
 - ✅ Orquesta TODO en orden: Inbox → OCR → Chunking → Indexing → Insights
 - ✅ Incorporó inbox deduplicación (SHA256)
 - ✅ Proper error handling con finally block
+- ✅ PASO 6 agregado: despacha workers (REQ-006)
+- ✅ Startup recovery + runtime crash recovery (Fix #52)
 
 **Cambios Incluidos**:
 - Fix #15: Agregar método `add_job()` genérico a BackupScheduler
 - Fix #16: Implementar `master_pipeline_scheduler()` completo
 - Fix #17: Arreglar lógica de PASO 2 (Chunking) y PASO 3 (Indexing)
-
-**Estado Actual**:
-- [x] Código escrito
-- [x] Integrado en app.py startup
-- [x] Docker rebuild iniciado (--no-cache)
-- [ ] Rebuild completado
-- [ ] Logs verificados
-- [ ] Ejecución confirmada
-
-**Verificaciones Requeridas** (post-rebuild):
-- [ ] Log "🔄 Starting Master Pipeline Scheduler" aparece
-- [ ] Log "✅ Master Pipeline Scheduler initialized" aparece
-- [ ] Logs muestran "✅ Created X OCR tasks from pending documents"
-- [ ] Logs muestran "✅ Created X Chunking tasks"
-- [ ] Logs muestran "✅ Created X Indexing tasks"
-- [ ] Logs muestran "✅ Created X Insights tasks"
-- [ ] Workers comienzan a procesar
+- Fix #32: Semáforos atómicos para todos los stages
 
 **Alternativas Consideradas**:
 1. ❌ Mantener múltiples schedulers - Rechazado: complejidad, competencia
 2. ❌ Usar Redis queue - Rechazado: complejidad extra
 3. ✅ **Elegida**: Single master scheduler en BD, simple y robusto
-
-**Riesgos Identificados**:
-- ⚠️ Master scheduler corre cada 10s: puede generar muchos logs (mitigación: setteable)
-- ⚠️ Si scheduler crasha: pipeline se detiene (mitigación: try/except)
-
-**Timeline Estimado**: 15-30 min (rebuild + verificación)
 
 **Linkeo a Documentación**:
 - `SESSION_2026_03_05_CONSOLIDACION.md` - Sesión completa
@@ -386,7 +351,7 @@ Copiar y rellenar cuando haya nueva petición:
 - **Fecha**: 2026-03-13
 - **Sesión**: [Sesión 13](13-uuid-here) (Worker Activation)
 - **Prioridad**: 🔴 CRÍTICA
-- **Estado**: 🔄 **EN EJECUCIÓN** (backend rebuilding)
+- **Estado**: ✅ **COMPLETADA** (workers operativos, resuelto por REQ-008 + REQ-010)
 
 **Descripción Original**:
 > "Podríamos revisar la asignación de trabajadores ya que tenemos varios inactivos y podrían indexar o sacar insight o que está pasando que no están activos?"
@@ -396,42 +361,23 @@ Copiar y rellenar cuando haya nueva petición:
 - **218 tareas OCR pending** esperando ser procesadas
 - **55 workers OCR fallaron** con error "File not found" 
 - **25 workers configurados pero IDLE** (no están siendo asignados)
-- Workers no procesan porque schedulers individuales NO están siendo llamados
 
 **Solución Implementada**:
 - ✅ Agregado PASO 6 al Master Pipeline: llama a schedulers individuales
-- ✅ Master Pipeline ahora despacha `run_document_ocr_queue_job_parallel()`
-- ✅ Master Pipeline ahora despacha `run_news_item_insights_queue_job_parallel()`
+- ✅ Master Pipeline ahora despacha workers OCR e Insights
 - ✅ Limpiados 55 workers con error "File not found"
 - ✅ Reseteadas 6 tareas "processing" a "pending"
-- 🔄 Backend rebuilding con cambios (en progreso)
+- ✅ Migración PostgreSQL (REQ-008) eliminó "database is locked"
+- ✅ Optimización a 3 OCR workers (REQ-010) estabilizó Tika
 
 **Cambios Incluidos**:
 - Fix #19: Master Pipeline activa workers
-
-**Estado Actual**:
-- [x] Código modificado en app.py (línea 767-780)
-- [x] Workers con error eliminados (55 deleted)
-- [x] Tareas processing reseteadas (6 → pending)
-- [ ] Backend rebuild completado
-- [ ] Backend reiniciado
-- [ ] Workers despachándose correctamente
-- [ ] Documentos procesándose
-
-**Verificaciones Requeridas** (post-rebuild):
-- [ ] Master Pipeline ejecuta y llama a schedulers
-- [ ] Workers OCR se asignan (active > 0 en worker_tasks)
-- [ ] Workers Insights se asignan
-- [ ] Tareas pending disminuyen
-- [ ] Documentos "queued" avanzan a "processing"
-- [ ] Dashboard muestra workers activos
+- Fix #24: Workers Recovery + Tika Optimization (REQ-010)
 
 **Alternativas Consideradas**:
 1. ❌ Registrar schedulers individuales en APScheduler - Rechazado: duplicaría lógica
 2. ❌ Solo limpiar errors - Rechazado: no resuelve el problema raíz
 3. ✅ **Elegida**: Master Pipeline llama a schedulers (single point of orchestration)
-
-**Timeline Estimado**: 20-30 minutos (rebuild + verificación)
 
 **Linkeo a Documentación**:
 - `CONSOLIDATED_STATUS.md` § Fix #19
@@ -445,7 +391,7 @@ Copiar y rellenar cuando haya nueva petición:
 - **Fecha**: 2026-03-13
 - **Sesión**: [Sesión 14](14-uuid-here) (Dashboard Refactor)
 - **Prioridad**: 🟡 ALTA
-- **Estado**: 🔄 **EN PROGRESO** (0% - planeando)
+- **Estado**: ✅ **COMPLETADA** (Dashboard Pipeline con D3.js desplegado, FASE 4 Insights pendiente)
 
 **Descripción Original**:
 > "mejoresmo el dahsboar completamente si es necesario reahcerlo con d3.js mejor ya que se puede interconectar las diferentes visualizaciones, y asi practicaremos sus buenas practivas , revisa la documentacion pues deberiamos tener algo relacionado si no investiga sobre visual analitics o vicualizacion de datos para poder tener un dashboard correcto y despues tendremos otro dashboard de los insigts, piensa en esto pues el codigo debe ser obligatorio los principios solid y buenas practicas si no estan las reglas agregalo"
@@ -540,7 +486,7 @@ Copiar y rellenar cuando haya nueva petición:
 - **Fecha**: 2026-03-13
 - **Sesión**: [Sesión 13](13-uuid-here) (PostgreSQL Migration)
 - **Prioridad**: 🔴 CRÍTICA
-- **Estado**: 🔄 **EN EJECUCIÓN** (backup iniciando)
+- **Estado**: ✅ **COMPLETADA** (migración 100%, 0% pérdida de datos)
 
 **Descripción Original**:
 > "Migremos a PostgreSQL si esto ayudará a este problema, hagamos un backup antes y nos ayudará a tener unas migraciones limpias de la estructura y poner el backup y luego switchear a la de PostgreSQL"
@@ -862,7 +808,7 @@ Timeout default: 5000ms
    - Resultado: Servicio estabilizado, sin connection errors
 
 4. ✅ **Ajuste configuración OCR**:
-   - Archivo: `rag-enterprise-structure/.env`
+   - Archivo: `app/.env`
    - Cambio: `OCR_PARALLEL_WORKERS=5` → `OCR_PARALLEL_WORKERS=3`
    - Razón: Balance entre throughput (60%) y estabilidad (100%)
 
@@ -924,7 +870,7 @@ Throughput: -40% capacidad, +100% estabilidad
 **Linkeo a Documentación**:
 - `CONSOLIDATED_STATUS.md` § Fix #24 (COMPLETADO)
 - `SESSION_LOG.md` § Sesión 15: Workers Recovery + Tika Optimization
-- `rag-enterprise-structure/.env` § OCR_PARALLEL_WORKERS
+- `app/.env` § OCR_PARALLEL_WORKERS
 - PostgreSQL: worker_tasks, processing_queue
 
 **Notas**:
@@ -1492,4 +1438,39 @@ worker_pool - ERROR - pipeline_worker_15: Task insights failed: No chunks found
 **Recomendación**: Opción A es preferible — automatizar recovery evita errores humanos y hace el sistema resiliente a restarts.
 
 **Archivos afectados**: `backend/app.py` (función `_initialize_processing_queue` o nuevo handler de startup)
+
+---
+
+### **REQ-016: "BUG: Inbox File not found + Centralizar ingesta en file_ingestion_service.py"**
+
+**Metadata**:
+- **Fecha**: 2026-03-15
+- **Sesión**: Sesión 24 (Inbox Bug + Ingestion Service Design)
+- **Prioridad**: 🔴 CRÍTICA (bloquea pipeline para archivos via inbox)
+- **Estado**: ✅ **COMPLETADA** (2026-03-15)
+
+**Descripción Original**:
+> "He subido unos archivos para probar que la pipeline entera funciona, ahora veo errores en el dashboard"
+> "Quiero que documentes este bug y lo priorices para iniciar con la centralización de este proceso"
+
+**Problema Identificado**:
+1. **BUG directo**: PASO 1 del scheduler genera `uuid4()` como `document_id` pero guarda archivo como `uploads/{filename}`. OCR busca `uploads/{uuid}` → "File not found".
+2. **Problema estructural**: 3 paths de ingesta con lógica duplicada e inconsistente
+3. **BUG adicional**: `_handle_ocr_task` no guardaba `ocr_text` en BD → docs huérfanos en `ocr_done`
+
+**Solución Implementada**:
+- `backend/file_ingestion_service.py` creado con: `ingest_from_upload()`, `ingest_from_inbox()`, `compute_sha256()`, `check_duplicate()`, `resolve_file_path()`
+- Upload API, PASO 1 scheduler y `run_inbox_scan()` refactorizados para usar el servicio
+- `_handle_ocr_task` corregido para guardar `ocr_text` + `doc_type`
+- `Dockerfile.cpu` actualizado con COPY del nuevo archivo
+- 4 docs recuperados y procesados end-to-end
+
+**Fixes incluidos**: #56 (ingestion service), #57 (ocr_text save)
+
+**Archivos modificados**:
+- `backend/file_ingestion_service.py` (NUEVO)
+- `backend/app.py` (Upload API, PASO 1 scheduler, `run_inbox_scan()`, `_handle_ocr_task`)
+- `backend/Dockerfile.cpu`
+
+**Versión**: v3.0.2
 

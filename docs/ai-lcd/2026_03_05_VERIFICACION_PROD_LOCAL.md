@@ -103,7 +103,7 @@
 ### FASE 1: Preparación (10 min)
 
 ```bash
-cd /Users/diego.a/Workspace/Experiments/NewsAnalyzer-RAG/rag-enterprise/rag-enterprise-structure
+cd app
 
 # 1.1 Verificar .env
 echo "=== CONFIG ENV ===" && head -50 .env

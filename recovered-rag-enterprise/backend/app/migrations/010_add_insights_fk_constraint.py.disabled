@@ -1,0 +1,20 @@
+"""
+Migration 010: Add FK constraint to news_item_insights.document_id
+Ensures all insights reference valid documents in document_status
+
+Generated: 2026-03-05
+Issue: news_item_insights.document_id was orphaned (no FK constraint)
+"""
+
+from yoyo import step
+
+steps = [
+    step(
+        """-- Delete orphaned insights (those with no matching document)
+           DELETE FROM news_item_insights 
+           WHERE document_id NOT IN (SELECT document_id FROM document_status)""",
+        "-- Rollback: restore orphaned insights"
+    ),
+    # Note: SQLite doesn't support ADD CONSTRAINT on existing tables
+    # FK constraint would need to be defined at table creation time
+]

@@ -3,7 +3,7 @@
 ## Compilación (Con Base Image Rápido)
 
 ```bash
-cd rag-enterprise/rag-enterprise-structure/
+cd app/
 
 # 1. Build backend (usa Dockerfile.cpu que hereda de base)
 docker-compose -f docker-compose.local.yml build backend

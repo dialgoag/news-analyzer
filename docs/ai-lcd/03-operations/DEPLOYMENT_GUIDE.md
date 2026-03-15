@@ -2,9 +2,25 @@
 
 > Guía paso a paso para desplegar el sistema
 
-**Última actualización**: 2026-03-02
+**Última actualización**: 2026-03-15
 **Fase AI-DLC**: 03-operations
 **Audiencia**: DevOps, Admin
+
+---
+
+## 0. Docker Compose unificado
+
+**Por defecto**:
+```bash
+docker compose up -d   # CPU (Mac, Linux sin GPU)
+```
+
+**Con GPU NVIDIA**:
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.nvidia.yml docker compose up -d
+```
+
+Ver [app/docs/DOCKER.md](../../app/docs/DOCKER.md) para guía completa.
 
 ---
 
@@ -28,7 +44,7 @@
 # 1. Clonar el proyecto
 cd /path/to/workspace
 git clone <repo-url> NewsAnalyzer-RAG
-cd NewsAnalyzer-RAG/rag-enterprise/rag-enterprise-structure
+cd app
 
 # 2. Crear .env desde template
 cp .env.example .env
@@ -36,7 +52,7 @@ cp .env.example .env
 # 3. Editar .env con tu configuración
 # Ver ENVIRONMENT_CONFIGURATION.md para detalle de cada variable
 
-# 4. Levantar servicios
+# 4. Levantar servicios (CPU por defecto; ver §0 para GPU)
 docker compose up -d
 
 # 5. Ver logs (esperar "Application startup complete")
@@ -57,7 +73,7 @@ docker compose logs backend | grep "Password:"
 ```bash
 # En .env:
 GPU_TYPE=cpu
-COMPOSE_FILE=docker-compose.yml
+# COMPOSE_FILE=docker-compose.yml:docker-compose.nvidia.yml  # si hay GPU
 VITE_API_URL=https://api.tudominio.com
 BACKEND_PORT=8000
 FRONTEND_PORT=3000
@@ -165,7 +181,7 @@ Transiciones (ejemplo: stage=indexing, prev=chunking):
 ### Paso 1: Parar backend
 
 ```bash
-cd RAG-Enterprise/rag-enterprise-structure
+cd app
 docker compose stop backend
 ```
 
@@ -245,3 +261,4 @@ El log debe mostrar `Startup recovery: no orphaned tasks found` (porque ya limpi
 |-------|---------|---------|-------|
 | 2026-03-02 | 1.0 | Creación inicial | AI-DLC |
 | 2026-03-15 | 1.1 | Protocolo de despliegue seguro (rebuild) | AI-DLC |
+| 2026-03-15 | 1.2 | Docker Compose unificado (CPU default, GPU override) | AI-DLC |

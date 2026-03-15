@@ -1,0 +1,131 @@
+/* Recovered from production CSS bundle */
+
+.error-card.severity-high {
+  border-left:4px solid #ef4444;
+}
+
+.error-card.severity-medium {
+  border-left:4px solid #f59e0b;
+}
+
+.error-card.severity-low {
+  border-left:4px solid #3b82f6;
+}
+
+.database-status-panel {
+  background:#1e293b;
+  border:1px solid #334155;
+  border-radius:8px;
+  padding:16px;
+  margin-bottom:16px;
+}
+
+.panel-header.collapsible {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  cursor:pointer;
+  -webkit-user-select:none;
+  -moz-user-select:none;
+  user-select:none;
+  padding:8px;
+  border-radius:4px;
+  transition:background .2s;
+}
+
+.panel-header.collapsible:hover {
+  background:#0f172a;
+}
+
+.header-content {
+  display:flex;
+  align-items:center;
+  gap:12px;
+  flex-wrap:wrap;
+  flex:1;
+}
+
+.collapse-button {
+  background:transparent;
+  border:none;
+  color:#94a3b8;
+  font-size:1.2rem;
+  cursor:pointer;
+  padding:4px 8px;
+  transition:color .2s;
+}
+
+.collapse-button:hover {
+  color:#f1f5f9;
+}
+
+.status-label {
+  color:#94a3b8;
+  font-size:.85rem;
+  text-transform:capitalize;
+}
+
+.inconsistencies-list {
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+
+.inconsistency-item {
+  background:#0f172a;
+  border:1px solid #334155;
+  border-radius:4px;
+  padding:12px;
+}
+
+.inconsistency-item.severity-high {
+  border-left:4px solid #ef4444;
+}
+
+.inconsistency-item.severity-medium {
+  border-left:4px solid #f59e0b;
+}
+
+.inconsistency-item.severity-low {
+  border-left:4px solid #3b82f6;
+}
+
+.inc-type {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-bottom:6px;
+}
+
+.inc-type strong {
+  color:#f1f5f9;
+  font-size:.9rem;
+}
+
+.inc-count {
+  color:#f59e0b;
+  font-weight:700;
+}
+
+.inc-description {
+  color:#cbd5e1;
+  font-size:.85rem;
+  margin-bottom:4px;
+}
+
+.inc-note {
+  color:#94a3b8;
+  font-size:.8rem;
+  font-style:italic;
+}
+
+.all-clear {
+  background:#d1fae5;
+  border:1px solid #6ee7b7;
+  color:#065f46;
+  padding:12px;
+  border-radius:4px;
+  text-align:center;
+  font-weight:600;
+  font-size:.9rem;
+}

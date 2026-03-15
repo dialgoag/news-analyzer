@@ -1,0 +1,20 @@
+"""
+Migration 013: Add ocr_text column to document_status
+
+Domain: Document Processing
+Description: Add column to store full OCR text for diagnostic purposes
+Depends on: 002_document_status_schema
+"""
+
+from yoyo import step
+
+steps = [
+    step(
+        """
+        ALTER TABLE document_status ADD COLUMN ocr_text TEXT
+        """,
+        """
+        ALTER TABLE document_status DROP COLUMN ocr_text
+        """
+    ),
+]

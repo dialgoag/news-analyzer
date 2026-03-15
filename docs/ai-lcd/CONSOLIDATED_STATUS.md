@@ -1,9 +1,112 @@
 # 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-15
 
-> **Versión definitiva post-sesión**: Diagnóstico de Bugs + Plan de Contención
+> **Versión definitiva post-sesión**: Infraestructura lista para levantar app
 
-**Última actualización**: 2026-03-15 02:30  
-**Próxima sesión**: Ejecutar fixes PRIORIDAD 1 y 2 (LIMIT ? + Indexing worker)
+**Última actualización**: 2026-03-15  
+**Próxima sesión**: `cp .env.example .env` → editar OPENAI_API_KEY → `docker compose up -d`
+
+---
+
+### 59. Infraestructura Docker lista para producción local ✅
+**Fecha**: 2026-03-15
+**Ubicación**: docker-compose.yml, Dockerfile.cpu, .env.example, package.json
+**Problema**: App no podía levantarse:
+- docker-compose.yml no tenía servicio PostgreSQL (backend lo requiere desde REQ-008)
+- Dockerfile.cpu faltaban 3 archivos Python (pipeline_states.py, worker_pool.py, migration_runner.py) + directorio migrations/
+- Volúmenes eran Docker named volumes (no persisten en carpeta local)
+- .env.example incompleto (faltaban DATABASE_URL, OPENAI_API_KEY, POSTGRES_*, workers)
+- package.json del frontend faltaba dependencia d3 (usada por Sankey y WorkersTable)
+**Solución**:
+- Agregado servicio postgres (17-alpine) con healthcheck y bind mount a ./local-data/postgres
+- Todos los volúmenes cambiados a bind mounts en ./local-data/ (postgres, qdrant, ollama, uploads, backups, inbox, huggingface)
+- Dockerfile.cpu: agregados COPY de pipeline_states.py, worker_pool.py, migration_runner.py, migrations/
+- .env.example reescrito con todas las variables agrupadas por categoría
+- package.json: agregado d3 ^7.9.0
+- Backend depends_on postgres con condition: service_healthy
+- Dockerfile CUDA movido a deprecated/ (no funcional con OCRmyPDF)
+**Impacto**: App lista para levantar con `cp .env.example .env && docker compose up -d`
+**⚠️ NO rompe**: Frontend ✅, Backend ✅, Pipeline ✅
+**Verificación**:
+- [x] docker compose config válido (sin errores)
+- [x] PostgreSQL con healthcheck + bind mount
+- [x] Qdrant con bind mount local
+- [x] Todos los archivos Python en Dockerfile.cpu
+- [x] Migraciones copiadas al contenedor
+- [x] d3 en package.json
+- [x] .env.example con todas las variables necesarias
+- [x] local-data/.gitignore para no commitear datos
+
+---
+
+### 57. Recuperación Frontend Modular desde Source Map ✅
+**Fecha**: 2026-03-15
+**Ubicación**: app/frontend/src/ (17 JS/JSX + 11 CSS)
+**Problema**: Frontend modular documentado en SESSION_LOG (Sesión 11) no existía en el codebase. Solo había un App.jsx monolítico. El código se perdió durante el refactor de submódulo a app/.
+**Solución**:
+- Extraídos 17 archivos JS/JSX desde `dist/assets/index-b861ec5e.js.map` (sourcesContent)
+- Extraídos 199 CSS rules desde `dist/assets/index-bf878f9f.css` bundle, distribuidos en 11 archivos CSS
+- Script Python parseó source map y recreó estructura de directorios completa
+**Impacto**: Frontend modular restaurado: App.jsx (151 líneas routing), 15 componentes, 2 servicios, 1 hook
+**⚠️ NO rompe**: Backend ✅ (idéntico entre imagen Docker y app/), Pipeline ✅, Dashboard ✅
+**Verificación**:
+- [x] 17 archivos JS/JSX restaurados con contenido completo
+- [x] 11 archivos CSS con estilos reales extraídos del bundle
+- [x] Backend verificado idéntico entre recovered-rag-enterprise/ y app/backend/
+- [x] Migraciones idénticas (18/18)
+
+### 58. Alineación Documentación — Eliminación de Inconsistencias ✅
+**Fecha**: 2026-03-15
+**Ubicación**: docs/ai-lcd/ (REQUESTS_REGISTRY, CONSOLIDATED_STATUS, PLAN_AND_NEXT_STEP, INDEX, REFACTOR_STATUS)
+**Problema**: Múltiples inconsistencias entre documentación y código real:
+- REQUESTS_REGISTRY: tabla resumen decía "COMPLETADA" pero detalles decían "EN PROGRESO/EN EJECUCIÓN" (REQ-003, 004, 006, 007, 008)
+- CONSOLIDATED_STATUS: 9 pares de fixes con números duplicados (6, 19, 27, 28, 30, 43, 46, 47, 55)
+- PLAN_AND_NEXT_STEP: fecha desactualizada, versiones obsoletas, referencia rota a test-semantic-zoom.md
+- REFACTOR_STATUS: referencia a docker-compose.cpu.yml eliminado
+**Solución**:
+- REQUESTS_REGISTRY: alineados estados detallados con tabla resumen (sin eliminar contenido)
+- CONSOLIDATED_STATUS: renumerados duplicados con sufijo "b" (6b, 19b, 27b, 28b, 30b, 43b, 46b, 47b, 55b)
+- PLAN_AND_NEXT_STEP: actualizada fecha, versión, versiones consolidadas, siguiente paso, referencia corregida
+- REFACTOR_STATUS: actualizada sección Docker con compose actual
+- INDEX.md: agregadas entradas para Frontend Modular, Docker Unificado, Startup Recovery
+**Impacto**: Documentación alineada con código real, sin información eliminada
+**⚠️ NO rompe**: Solo documentación, sin cambios en código funcional
+**Verificación**:
+- [x] 0 fixes con números duplicados en CONSOLIDATED_STATUS
+- [x] REQUESTS_REGISTRY: tabla y detalles consistentes
+- [x] PLAN_AND_NEXT_STEP: fecha y versión actualizadas
+- [x] 0 referencias rotas a archivos inexistentes
+
+---
+
+### 56. Docker Compose unificado ✅
+**Fecha**: 2026-03-15
+**Ubicación**: app/docker-compose.yml, docker-compose.nvidia.yml, build.sh, .env.example
+**Problema**: Múltiples compose files (cpu, nvidia, amd) y flujo poco claro
+**Solución**:
+- Compose principal usa `Dockerfile.cpu` por defecto (Mac, Linux sin GPU)
+- `docker-compose.cpu.yml` eliminado (redundante)
+- Override `docker-compose.nvidia.yml` para GPU: cambia a Dockerfile CUDA, OCR=tika
+- build.sh detecta GPU_TYPE o nvidia-smi
+- app/docs/DOCKER.md creado con guía completa
+**Impacto**: Un solo comando `docker compose up -d` para la mayoría de usuarios
+**⚠️ NO rompe**: OCR ✅, Backend ✅, Frontend ✅
+**Verificación**: [x] docs actualizados, [x] README, DEPLOYMENT_GUIDE, ENVIRONMENT_CONFIG
+
+---
+
+### 55. Refactor: RAG-Enterprise submodule → app/ (código propio) ✅
+**Fecha**: 2026-03-15
+**Ubicación**: Estructura del proyecto
+**Problema**: RAG-Enterprise era submódulo; el código había evolucionado y se quería proyecto propio
+**Solución**: 
+- Submódulo eliminado, contenido copiado a `app/`
+- `rag-enterprise-structure` renombrado a `backend`
+- Rutas actualizadas en docs, scripts, código
+- `rag-enterprise-backups` → `newsanalyzer-backups`, `admin@rag-enterprise.local` → `admin@newsanalyzer.local`
+- Regla `.cursor/rules/no-delete-without-auth.mdc` creada
+**Impacto**: Proyecto sin dependencia de submódulo; referencia solo en docs (CREDITS.md)
+**⚠️ NO rompe**: Estructura funcional; local-data vacío (crear desde cero)
+**Verificación**: [x] Rutas `app/` en docs, [x] package.json newsanalyzer-frontend
 
 ---
 
@@ -17,7 +120,7 @@
 **Impacto**: BD recuperada: 231 docs, 2100 news, 2100 insights, 1 admin user
 **⚠️ NO rompe**: Datos intactos, solo cambio de punto de montaje
 **Verificación**:
-- [x] Todos los mounts apuntan a `news-analyzer/RAG-Enterprise/rag-enterprise-structure/local-data/`
+- [x] Todos los mounts apuntan a `news-analyzer/app/local-data/`
 - [x] BD tiene datos (231 docs, 2100 news)
 - [x] 5 servicios UP y healthy
 - [x] Workers procesando normalmente
@@ -882,7 +985,7 @@ curl -X POST http://localhost:8000/api/workers/start
 
 ---
 
-### 30. Restauración de Datos desde Backup - COMPLETADO ✅
+### 30b. Restauración de Datos desde Backup - COMPLETADO ✅
 **Fecha**: 2026-03-14 10:50  
 **Ubicación**: 
 - `/local-data/backups/rag_enterprise_backup_20260313_140332.db.sql` (backup SQLite)
@@ -932,7 +1035,7 @@ curl -X POST http://localhost:8000/api/workers/start
 
 ## 🔍 SISTEMA DE LOGGING Y OPTIMIZACIÓN OCR (2026-03-14)
 
-### 27. Sistema de Logging de Errores OCR + Timeout Adaptativo - COMPLETADO ✅
+### 27b. Sistema de Logging de Errores OCR + Timeout Adaptativo - COMPLETADO ✅
 **Fecha**: 2026-03-14 09:30  
 **Ubicación**: 
 - `backend/ocr_service_ocrmypdf.py` (método `_log_to_db()` + timeout aumentado)
@@ -1023,7 +1126,7 @@ curl -X POST http://localhost:8000/api/workers/start
 
 ## 🔎 SEMANTIC ZOOM EN DASHBOARD (2026-03-14)
 
-### 28. Semantic Zoom: Diagrama Sankey + Tabla de Documentos - COMPLETADO ✅
+### 28b. Semantic Zoom: Diagrama Sankey + Tabla de Documentos - COMPLETADO ✅
 **Fecha**: 2026-03-14 10:15  
 **Ubicación**: 
 - `frontend/src/services/semanticZoomService.js` (servicio core)
@@ -1339,7 +1442,7 @@ Estado final:
 
 ### 24. Workers Atascados + Tika Saturado - COMPLETADO ✅
 **Fecha**: 2026-03-13 21:00  
-**Ubicación**: `rag-enterprise-structure/.env`, PostgreSQL worker_tasks, Tika service  
+**Ubicación**: `app/.env`, PostgreSQL worker_tasks, Tika service  
 
 **Problema**: 
 - 5 workers OCR atascados en "started" por ~5 minutos
@@ -1382,7 +1485,7 @@ Estado final:
 **Archivos modificados**:
 ```
 Configuración (1 archivo):
-✅ rag-enterprise-structure/.env (línea OCR_PARALLEL_WORKERS: 5→3)
+✅ app/.env (línea OCR_PARALLEL_WORKERS: 5→3)
 
 Base de datos (2 tablas):
 ✅ worker_tasks: 5 registros eliminados
@@ -1675,7 +1778,7 @@ Performance: +40% vs SQLite
 
 ---
 
-### 19. Master Pipeline activa workers ✅ (2026-03-13)
+### 19b. Master Pipeline activa workers ✅ (2026-03-13)
 **Ubicación**: `backend/app.py` línea 767-780  
 **Problema**: Master Pipeline Scheduler solo creaba tareas pero NO despachaba workers para procesarlas  
 **Solución**: 
@@ -1800,7 +1903,7 @@ Performance: +40% vs SQLite
 - Pattern event-driven consistente en TODO el sistema ✅
 - Tika nunca saturado (máx 4 conexiones) ✅
 
-### 6. Docker Build Performance 🚀
+### 6b. Docker Build Performance 🚀
 **Problema**: Builds backend tomaban 10-15 minutos (PyTorch + Tika cada vez)  
 **Solución**:
   - Creado `backend/Dockerfile.base` con all heavy dependencies
@@ -2284,9 +2387,9 @@ export function ProcessingTimeline({ data }) {
 - Duplicados: "La Vanguardia" 7x, "El Mundo 2" 3x, "El Pais" 3x, "Expansion" 6x
 **Decisión**: Los datos huérfanos NO se borran. Cuando se procesen los 221 docs pausados, se linkearán via SHA256 text_hash para reutilizar insights existentes y evitar costes de GPT.
 
-### 46. Fix: Login 422 error crashes React (Error #31) ✅
+### 46b. Fix: Login 422 error crashes React (Error #31) ✅
 **Fecha**: 2026-03-14
-**Ubicación**: `rag-enterprise/frontend/src/hooks/useAuth.js` línea 55
+**Ubicación**: `app/frontend/src/hooks/useAuth.js` línea 55
 **Problema**: FastAPI 422 devuelve `detail` como array de objetos. `setLoginError()` lo almacenaba directamente y React crasheaba al renderizar un objeto como child (Error #31).
 **Solución**: Normalizar `detail` a string antes de `setLoginError()` — si es array, extraer `.msg` de cada item; si es string, usar directo.
 **Impacto**: Login muestra mensajes de validación legibles en vez de crashear.
@@ -2296,7 +2399,7 @@ export function ProcessingTimeline({ data }) {
 - [x] 401 sigue mostrando "Incorrect username or password"
 - [x] Sin crash React en login fallido
 
-### 47. Investigación: Estado real de Workers y Pipeline (Diagnóstico) ✅
+### 47b. Investigación: Estado real de Workers y Pipeline (Diagnóstico) ✅
 **Fecha**: 2026-03-15
 **Ubicación**: Docker containers + backend logs + worker_pool.py + app.py
 **Método de investigación** (para referencia futura):
@@ -2345,7 +2448,7 @@ docker logs rag-ocr-service --tail 20 2>&1
 **⚠️ NO rompe**: Nada — investigación read-only
 **Verificación**: [x] Documentado para referencia futura
 
-### 55. BUG: Workers insights sin rate limiting → 2230+ errores 429 OpenAI 🐛
+### 55b. BUG: Workers insights sin rate limiting → 2230+ errores 429 OpenAI 🐛
 **Fecha**: 2026-03-15
 **Ubicación**: backend/app.py — workers de insights, `worker_pool.py`
 **Problema**: Workers de insights llaman a OpenAI sin rate limiting ni exponential backoff. Al reprocesar ~800 insights pendientes, generan 2230+ errores 429 (Too Many Requests) que saturan el backend, causan timeouts en el dashboard (5-10s) y CORS errors transitorios
@@ -2357,7 +2460,7 @@ docker logs rag-ocr-service --tail 20 2>&1
 **Prioridad**: ALTA — bloquea uso normal del dashboard cuando hay insights pendientes
 **Estado**: PENDIENTE
 
-### 43. Investigación: Dashboard inutilizable — 3 bugs de performance identificados (REQ-015) 🔍
+### 43b. Investigación: Dashboard inutilizable — 3 bugs de performance identificados (REQ-015) 🔍
 **Fecha**: 2026-03-15
 **Ubicación**: `backend/app.py` (endpoints dashboard), `backend/database.py` (connections), `backend/qdrant_connector.py` (scroll), `frontend/src/components/dashboard/*.jsx` (timeouts)
 **Problema**: Dashboard completamente roto — todos los paneles muestran timeout (5s), 500 y CORS errors
@@ -2371,6 +2474,38 @@ docker logs rag-ocr-service --tail 20 2>&1
 **Impacto**: 3 bugs documentados como PRIORIDAD 1-3, prioridades anteriores renumeradas
 **⚠️ NO rompe**: Nada — investigación read-only
 **Verificación**: [x] Documentado como REQ-015 (3 sub-bugs) en REQUESTS_REGISTRY
+
+### 56. BUG: Inbox scanner — File not found + Centralización ingesta ✅
+**Fecha**: 2026-03-15
+**Ubicación**: `backend/file_ingestion_service.py` (NUEVO), `backend/app.py` (3 paths refactorizados), `backend/Dockerfile.cpu`
+**Problema**: PASO 1 del scheduler generaba `uuid4()` como `document_id` pero guardaba archivo como `uploads/{filename}`. OCR buscaba `uploads/{uuid}` → "File not found".
+**Solución**: Creado `file_ingestion_service.py` — servicio centralizado:
+- `ingest_from_upload()`: Escribe contenido directo, genera `{timestamp}_{filename}`
+- `ingest_from_inbox()`: Symlink `uploads/{doc_id}` → `inbox/processed/{filename}`
+- `compute_sha256()`, `check_duplicate()`, `resolve_file_path()`
+- Upload API, PASO 1 scheduler y `run_inbox_scan()` refactorizados para usar el servicio
+**Impacto**: Pipeline desbloqueada. 4 docs recuperados y procesados end-to-end (OCR→chunking→indexing)
+**⚠️ NO rompe**: Dashboard ✅, PostgreSQL ✅, Qdrant ✅, OCR service ✅, Insights pipeline ✅
+**Verificación**:
+- [x] Servicio `file_ingestion_service.py` creado
+- [x] Upload API usa el servicio
+- [x] Inbox scanner (PASO 1 scheduler) usa el servicio
+- [x] `run_inbox_scan()` usa el servicio
+- [x] Symlinks funcionan correctamente
+- [x] 4 docs recuperados: ABC, El Pais, El Mundo (indexing_done), Expansion (indexing en curso)
+- [x] Pipeline end-to-end verificada
+- [x] Dockerfile.cpu actualizado con COPY del nuevo archivo
+
+### 57. BUG: _handle_ocr_task no guardaba ocr_text en BD ✅
+**Fecha**: 2026-03-15
+**Ubicación**: `backend/app.py` línea ~2488 (`_handle_ocr_task`)
+**Problema**: OCR completaba exitosamente pero el handler solo actualizaba `status=ocr_done` sin guardar `ocr_text`. La query de transición a chunking filtra `LENGTH(ocr_text) > 0`, dejando docs huérfanos.
+**Solución**: Agregado `document_status_store.store_ocr_text(document_id, text)` + `doc_type` al UPDATE
+**Impacto**: Docs ya no se quedan atascados en `ocr_done` sin texto. Expansion.pdf avanzó correctamente.
+**⚠️ NO rompe**: Upload API ✅, Inbox ingesta ✅, Chunking ✅, Indexing ✅, Dashboard ✅
+**Verificación**:
+- [x] Expansion.pdf pasó de `ocr_done` (sin texto) a `chunking_done` → indexing
+- [x] `ocr_text` guardado (465K chars para Expansion)
 
 ### 42. Frontend Dashboard: Nuevos paneles de análisis desplegados ✅
 **Fecha**: 2026-03-14

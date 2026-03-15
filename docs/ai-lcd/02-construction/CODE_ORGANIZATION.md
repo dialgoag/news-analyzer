@@ -19,8 +19,8 @@ NewsAnalyzer-RAG/
 │       ├── 01-inception/
 │       ├── 02-construction/
 │       └── 03-operations/
-├── rag-enterprise/                      # RAG Enterprise (I3K-IT) clonado
-│   ├── rag-enterprise-structure/        # Código principal
+├── app/                                 # Aplicación principal (inspirada en RAG Enterprise)
+│   ├── backend/                         # Backend + Docker + servicios
 │   │   ├── backend/                     # FastAPI backend
 │   │   │   ├── app.py                   # App principal + endpoints
 │   │   │   ├── rag_pipeline.py          # Pipeline RAG + LLM clients

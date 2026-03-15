@@ -1,0 +1,28 @@
+"""
+Migration 016: Add file_hash column to document_status
+
+Domain: Document Processing
+Description: Add SHA256 hash column for file deduplication and integrity verification
+Depends on: 002_document_status_schema
+"""
+
+from yoyo import step
+
+steps = [
+    step(
+        """
+        ALTER TABLE document_status ADD COLUMN file_hash TEXT
+        """,
+        """
+        ALTER TABLE document_status DROP COLUMN file_hash
+        """
+    ),
+    step(
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_status_file_hash ON document_status(file_hash)
+        """,
+        """
+        DROP INDEX IF EXISTS idx_document_status_file_hash
+        """
+    ),
+]

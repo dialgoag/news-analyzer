@@ -1,0 +1,121 @@
+/* Recovered from production CSS bundle */
+
+.stuck-workers-panel {
+  background:#1e293b;
+  border:1px solid #ef4444;
+  border-radius:8px;
+  padding:16px;
+  margin-bottom:16px;
+  box-shadow:0 0 10px #ef444433;
+}
+
+.alert-badge {
+  background:#fee2e2;
+  color:#991b1b;
+  border:1px solid #fca5a5;
+  padding:6px 12px;
+  border-radius:12px;
+  font-size:.85rem;
+  font-weight:600;
+}
+
+.stuck-workers-list {
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+
+.stuck-worker-card {
+  background:#0f172a;
+  border:1px solid #ef4444;
+  border-radius:6px;
+  padding:16px;
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:16px;
+  transition:all .2s;
+}
+
+.stuck-worker-card:hover {
+  border-color:#f87171;
+  box-shadow:0 2px 8px #ef44444d;
+}
+
+.worker-info {
+  flex:1;
+}
+
+.time-remaining.near-timeout {
+  color:#ef4444;
+  animation:blink 1s infinite;
+}
+
+.progress-bar-container {
+  position:relative;
+  height:12px;
+  background:#334155;
+  border-radius:6px;
+  overflow:hidden;
+  margin-bottom:6px;
+}
+
+.progress-bar-bg {
+  position:absolute;
+  top:0;
+  left:0;
+  right:0;
+  bottom:0;
+  background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,.1) 50%,transparent 100%);
+  animation:shimmer 2s infinite;
+}
+
+.progress-bar-fill {
+  position:absolute;
+  top:0;
+  left:0;
+  height:100%;
+  transition:width .3s ease,background-color .3s ease;
+  border-radius:6px;
+  z-index:1;
+}
+
+.cancel-button {
+  background:#ef4444;
+  color:#fff;
+  border:none;
+  padding:10px 16px;
+  border-radius:4px;
+  font-weight:600;
+  font-size:.9rem;
+  cursor:pointer;
+  transition:all .2s;
+  white-space:nowrap;
+}
+
+.cancel-button:hover:not(:disabled) {
+  background:#dc2626;
+  transform:translateY(-1px);
+  box-shadow:0 2px 4px #ef444466;
+}
+
+.cancel-button:disabled {
+  background:#6b7280;
+  cursor:not-allowed;
+  opacity:.6;
+}
+
+.progress-bar-container {
+  flex:1;
+  height:8px;
+  background:rgba(15,23,42,.8);
+  border-radius:4px;
+  overflow:hidden;
+  min-width:100px;
+}
+
+.progress-bar-fill {
+  height:100%;
+  transition:width .3s ease;
+  border-radius:4px;
+}

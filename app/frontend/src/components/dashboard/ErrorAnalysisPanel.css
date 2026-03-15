@@ -1,0 +1,139 @@
+/* Recovered from production CSS bundle */
+
+.error-analysis-panel {
+  background:#1e293b;
+  border:1px solid #334155;
+  border-radius:8px;
+  padding:16px;
+  margin-bottom:16px;
+}
+
+.error-summary {
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+}
+
+.error-card {
+  background:#0f172a;
+  border:1px solid #334155;
+  border-radius:6px;
+  padding:16px;
+  transition:all .2s;
+}
+
+.error-card:hover {
+  border-color:#475569;
+  box-shadow:0 2px 8px #0003;
+}
+
+.error-card.severity-high {
+  border-left:4px solid #ef4444;
+}
+
+.error-card.severity-medium {
+  border-left:4px solid #f59e0b;
+}
+
+.error-card.severity-low {
+  border-left:4px solid #3b82f6;
+}
+
+.error-card-header {
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  margin-bottom:12px;
+  gap:12px;
+}
+
+.error-count-badge {
+  background:#334155;
+  color:#f1f5f9;
+  padding:4px 12px;
+  border-radius:12px;
+  font-weight:700;
+  font-size:.9rem;
+  flex-shrink:0;
+}
+
+.error-cause {
+  background:#1e293b;
+  padding:10px 12px;
+  border-radius:4px;
+  margin-bottom:12px;
+  font-size:.9rem;
+  color:#cbd5e1;
+  border-left:3px solid #475569;
+}
+
+.error-cause strong {
+  color:#f1f5f9;
+}
+
+.error-documents {
+  margin-bottom:12px;
+}
+
+.error-documents details {
+  cursor:pointer;
+}
+
+.error-documents summary {
+  color:#94a3b8;
+  font-size:.85rem;
+  padding:6px 0;
+  -webkit-user-select:none;
+  -moz-user-select:none;
+  user-select:none;
+}
+
+.error-documents summary:hover {
+  color:#cbd5e1;
+}
+
+.error-documents ul {
+  margin:8px 0 0 20px;
+  padding:0;
+  list-style:none;
+}
+
+.error-documents li {
+  padding:4px 0;
+  color:#94a3b8;
+  font-size:.85rem;
+  word-break:break-word;
+}
+
+.error-documents li.more-documents {
+  font-style:italic;
+  color:#64748b;
+}
+
+.error-actions {
+  margin-top:12px;
+}
+
+.clean-button {
+  background:#4caf50;
+  color:#fff;
+  border:none;
+  padding:8px 16px;
+  border-radius:4px;
+  font-weight:600;
+  font-size:.9rem;
+  cursor:pointer;
+  transition:all .2s;
+}
+
+.clean-button:hover:not(:disabled) {
+  background:#45a049;
+  transform:translateY(-1px);
+  box-shadow:0 2px 4px #0003;
+}
+
+.clean-button:disabled {
+  background:#6b7280;
+  cursor:not-allowed;
+  opacity:.6;
+}

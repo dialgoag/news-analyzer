@@ -120,7 +120,7 @@ Crea backups en `local-data/backups/`:
 
 1. **Hacer backup**:
 ```bash
-cd rag-enterprise/rag-enterprise-structure/
+cd app/
 bash backup.sh
 ```
 
@@ -139,7 +139,7 @@ docker-compose logs backend | tail -50
 ### Ejecutar Migraciones
 
 ```bash
-cd rag-enterprise/rag-enterprise-structure/
+cd app/
 
 # Detener y limpiar (OPCIONAL)
 docker-compose down

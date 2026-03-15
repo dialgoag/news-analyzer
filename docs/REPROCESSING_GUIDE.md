@@ -69,7 +69,7 @@ Esta funcionalidad permite reprocesar documentos completos (OCR + Chunking + Ind
 ### 1. Reconstruir y Reiniciar Servicios
 
 ```bash
-cd /Users/diego.a/Workspace/Experiments/NewsAnalyzer-RAG/rag-enterprise/rag-enterprise-structure
+cd app
 chmod +x deploy.sh
 ./deploy.sh
 ```
@@ -77,7 +77,7 @@ chmod +x deploy.sh
 ### 2. Iniciar Tika Manualmente (si es necesario)
 
 ```bash
-cd /Users/diego.a/Workspace/Experiments/NewsAnalyzer-RAG/rag-enterprise/rag-enterprise-structure
+cd app
 chmod +x start-tika.sh
 ./start-tika.sh
 ```

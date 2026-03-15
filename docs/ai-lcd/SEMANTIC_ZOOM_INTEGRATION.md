@@ -70,7 +70,7 @@ Se ha implementado e integrado el **zoom semántico jerárquico** en dos compone
 ### Nuevos Archivos Creados
 
 ```
-rag-enterprise/frontend/src/
+app/frontend/src/
 ├── services/
 │   └── semanticZoomService.js              [400 líneas - Servicio core]
 │
@@ -88,7 +88,7 @@ docs/ai-lcd/
 ### Archivos Modificados
 
 ```
-rag-enterprise/frontend/src/components/
+app/frontend/src/components/
 └── PipelineDashboard.jsx                   [Importa nuevos componentes]
 ```
 
@@ -315,7 +315,7 @@ ENTONCES:
 
 ### 1. Build del Frontend
 ```bash
-cd rag-enterprise/frontend
+cd app/frontend
 npm install  # Instalar dependencias si hay nuevas
 npm run build
 ```
@@ -343,7 +343,7 @@ npm start
 
 ### 4. Rebuild Backend (si necesario)
 ```bash
-cd ../rag-enterprise-structure
+cd ../backend
 docker compose build frontend
 docker compose up -d frontend
 ```

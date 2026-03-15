@@ -1,0 +1,75 @@
+# CPU-only Dockerfile - Para macOS, Linux sin GPU, o desarrollo rápido
+# Sin CUDA, sin Tika embebido (usar OCR_ENGINE=ocrmypdf con ocr-service)
+# Build: ~5-8 min (vs 15-20 min con CUDA)
+FROM python:3.11-slim
+
+ENV HF_HOME=/root/.cache/huggingface
+ENV TRANSFORMERS_CACHE=/root/.cache/huggingface
+ENV SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface
+
+WORKDIR /app
+
+# Dependencias del sistema (sin Java/Tika)
+RUN apt-get update && apt-get install -y \
+    git \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    curl \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# rclone para backups
+RUN curl -fsSL https://rclone.org/install.sh | bash
+
+# PyTorch CPU (mucho más ligero que CUDA)
+RUN pip install --no-cache-dir torch torchvision torchaudio
+
+# Upgrade pip
+RUN pip install --upgrade pip setuptools wheel
+
+# Dependencias Python
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Código backend
+COPY backend/app.py .
+COPY backend/rag_pipeline.py .
+COPY backend/ocr_service.py .
+COPY backend/ocr_service_ocrmypdf.py .
+COPY backend/embeddings_service.py .
+COPY backend/qdrant_connector.py .
+COPY backend/auth.py .
+COPY backend/auth_models.py .
+COPY backend/database.py .
+COPY backend/middleware.py .
+COPY backend/backup_service.py .
+COPY backend/backup_models.py .
+COPY backend/backup_scheduler.py .
+COPY backend/pipeline_states.py .
+COPY backend/worker_pool.py .
+COPY backend/migration_runner.py .
+COPY backend/file_ingestion_service.py .
+
+# Migraciones de base de datos
+COPY backend/migrations/ ./migrations/
+
+COPY backend/entrypoint.sh .
+RUN chmod +x /app/entrypoint.sh
+
+RUN mkdir -p /app/uploads /app/data /app/backups /app/inbox
+
+EXPOSE 8000
+
+# CPU: no CUDA
+ENV CUDA_VISIBLE_DEVICES=""
+ENV OLLAMA_HOST=ollama
+ENV OLLAMA_PORT=11434
+
+HEALTHCHECK --interval=30s --timeout=120s --start-period=90s --retries=5 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+ENTRYPOINT ["/app/entrypoint.sh"]

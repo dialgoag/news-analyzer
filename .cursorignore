@@ -1,0 +1,9 @@
+# Excluir del contexto del asistente (archivos sensibles)
+.env
+.env.*
+!*.env.example
+!**/.env.example
+
+# Cobertura recursiva en subdirectorios
+**/.env
+**/.env.*

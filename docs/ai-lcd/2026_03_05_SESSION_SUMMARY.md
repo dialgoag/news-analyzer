@@ -16,7 +16,7 @@
 - **Verificación**: Logs muestran "OCR Workers Count: 10, env var: 10" ✅
 
 **Archivos modificados**:
-- `/rag-enterprise/rag-enterprise-structure/docker-compose.yml` (líneas 43-44)
+- `app/docker-compose.yml` (líneas 43-44)
 
 ---
 
@@ -28,8 +28,8 @@
 - Estilos visuales diferenciados por estado (animaciones pulsantes, bordes de color)
 
 **Archivos modificados**:
-- `/rag-enterprise/frontend/src/App.jsx` (líneas 2048-2101)
-- `/rag-enterprise/frontend/src/App.css` (estilos para `.processing-active`, `.pending`, `.completed`)
+- `app/frontend/src/App.jsx` (líneas 2048-2101)
+- `app/frontend/src/App.css` (estilos para `.processing-active`, `.pending`, `.completed`)
 
 ---
 
@@ -45,7 +45,7 @@
 - **Beneficio**: Arquitectura simple, predecible, sin competencia entre schedulers
 
 **Archivos modificados**:
-- `/rag-enterprise/rag-enterprise-structure/backend/app.py`:
+- `app/backend/app.py`:
   - Nueva función `master_pipeline_scheduler()` (líneas 497-567)
   - Modificación a `_initialize_processing_queue()` para incluir status `'pending'` (línea 481)
   - Agregar scheduler al startup (línea 689)
@@ -86,8 +86,8 @@ AND NOT EXISTS (
   - Responsive design
 
 **Archivos creados**:
-- `/rag-enterprise/frontend/src/components/PipelineDashboard.jsx` (nuevo)
-- `/rag-enterprise/frontend/src/components/PipelineDashboard.css` (nuevo)
+- `app/frontend/src/components/PipelineDashboard.jsx` (nuevo)
+- `app/frontend/src/components/PipelineDashboard.css` (nuevo)
 
 **Dependencias instaladas**:
 - `npm install d3 --save` (agregado a package.json)
@@ -103,8 +103,8 @@ AND NOT EXISTS (
 - Eliminados duplicados del componente `WorkersStatusTable.jsx` (removida sección de Progress bars interno)
 
 **Archivos modificados**:
-- `/rag-enterprise/frontend/src/App.jsx` (líneas 1980-2170)
-- `/rag-enterprise/frontend/src/components/WorkersStatusTable.jsx` (removida columna derecha)
+- `app/frontend/src/App.jsx` (líneas 1980-2170)
+- `app/frontend/src/components/WorkersStatusTable.jsx` (removida columna derecha)
 
 ---
 

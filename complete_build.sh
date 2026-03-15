@@ -3,7 +3,7 @@
 
 set -e
 
-cd /Users/diego.a/Workspace/Experiments/NewsAnalyzer-RAG/rag-enterprise/rag-enterprise-structure
+cd "$(dirname "$0")/app"
 
 echo "🔨 Esperando imagen base..."
 
