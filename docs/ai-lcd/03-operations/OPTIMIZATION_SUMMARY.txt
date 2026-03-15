@@ -1,0 +1,307 @@
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                   PERFORMANCE OPTIMIZATION ANALYSIS                           ║
+║               NewsAnalyzer-RAG OCR & Insights Ingestion                       ║
+║                                                                               ║
+║  Objetivo: Aumentar velocidad de ingesta 2-6x sin añadir hardware            ║
+║  Audiencia: DevOps, desarrolladores backend                                   ║
+║  Fecha: 2026-03-03                                                            ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. ESTADO ACTUAL (BASELINE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Sistema: NewsAnalyzer-RAG v1.6
+Configuración: Mac M4 Pro, 32GB RAM, CPU only (sin GPU)
+
+Métricas actuales:
+  - 15 documentos indexados
+  - 4,700 chunks en Qdrant
+  - INGEST_PARALLEL_WORKERS = 2
+  - INSIGHTS_THROTTLE_SECONDS = 60
+  - OCR: PyMuPDF (rápido) + Tika (lento) + Tesseract (muy lento)
+
+Cuello de botella:
+  ⏱️  OCR (Tesseract): 12-15s por PDF (100 páginas)
+  ⏱️  Insights: 60s throttle + 10-30s LLM call = 70-90s por item
+  ⏱️  Parallelism: 2 documentos simultáneamente
+  ⏱️  Throughput: 15 documentos en 40-50 minutos
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. ANÁLISIS DE OPORTUNIDADES (Prioridad)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔴 ALTA PRIORIDAD - Impacto: 2-6x
+
+  [1] Reducir INSIGHTS_THROTTLE (60s → 10s)
+      ├─ Razón: 60s es muy conservador para 10 reintentos
+      ├─ Impacto: 6x en caso de éxito (10s vs 60s en primer intento)
+      ├─ Esfuerzo: 1 minuto (.env)
+      ├─ Riesgo: Bajo (con backoff exponencial, sin cambio en reintentos)
+      └─ Total: 15 documentos en 40-50 min → 20-30 min (2.5x)
+
+  [2] Aumentar INGEST_PARALLEL_WORKERS (2 → 4)
+      ├─ Razón: 2 workers es muy conservador en máquina de 8 cores
+      ├─ Impacto: 2x en OCR/indexación (2 vs 4 en paralelo)
+      ├─ Esfuerzo: 1 minuto (.env)
+      ├─ Riesgo: Bajo (monitoreado, con limite de 8)
+      └─ Total: 20-30 min → 15-20 min (2x)
+      → COMBINADO: 40-50 min → 12-15 min (3-4x)
+
+  [3] Parallelizar Tesseract OCR (secuencial → 4 workers)
+      ├─ Razón: Procesa 1 página a la vez
+      ├─ Impacto: 3x en OCR para PDFs escaneados (12-15s → 3-5s)
+      ├─ Esfuerzo: 2 horas (nuevo método + testing)
+      ├─ Riesgo: Bajo (ThreadPoolExecutor, I/O-bound)
+      └─ Total: 12-15 min → 10-12 min (1.2-1.5x)
+
+  [4] Aumentar Tika memory + connection pool
+      ├─ Razón: 4GB heap + 8 conexiones es insuficiente con 4 workers
+      ├─ Impacto: 1.5x en Tika (menos timeouts, mejor throughput)
+      ├─ Esfuerzo: 30 minutos (cambio + testing)
+      ├─ Riesgo: Bajo (auto-tune por RAM disponible)
+      └─ Total: 10-12 min → 9-10 min (1.1-1.2x)
+
+🟡 MEDIA PRIORIDAD - Impacto: 1-2x (bonus)
+
+  [5] Parallelizar Insights queue (1 → 4 workers)
+      ├─ Impacto: 4x en insights (1 vs 4 items en paralelo)
+      ├─ Esfuerzo: 3 horas
+      ├─ Riesgo: Medio (cuidado con OpenAI RPM 500 límite)
+      └─ Total: 9-10 min → 6-8 min (1.3-1.5x)
+
+  [6] OCR Cache (evitar re-OCR PDFs duplicados)
+      ├─ Impacto: 2-5x para PDFs repetidos
+      ├─ Esfuerzo: 2 horas
+      ├─ Riesgo: Bajo
+      └─ Total: Aplicable a flujos de re-indexación
+
+  [7] Async pre-fetch contexto (insights)
+      ├─ Impacto: 1.5x en cola grande
+      ├─ Esfuerzo: 2 horas
+      ├─ Riesgo: Bajo
+      └─ Total: 6-8 min → 5-6 min (1.2x)
+
+🟢 BAJA PRIORIDAD - Impacto: 0.5-1.5x
+
+  [8] Auto-tune parallel workers
+      ├─ Impacto: Varía según máquina (0.5-1.5x)
+      ├─ Esfuerzo: 1 hora
+      ├─ Riesgo: Bajo
+      └─ Total: Útil para diferentes entornos
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. COMPARATIVA - ANTES vs DESPUÉS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SCENARIO 1: Procesar 1 documento (Antes)
+┌─────────────────────────┐
+│ OCR (15s) → 📊 Chunking (2s) → Indexing (28s) → 💡 Insights (80s)
+├─────────────────────────┤
+│ Total: 125 segundos (2 min)
+└─────────────────────────┘
+
+SCENARIO 2: Procesar 15 documentos secuencialmente (Antes)
+┌────────────────────────────────────────────────────────────────────────────┐
+│ [Doc 1: 125s] [Doc 2: 125s] ... [Doc 15: 125s]
+├────────────────────────────────────────────────────────────────────────────┤
+│ Total: 1,875 segundos ≈ 31 minutos
+│ (En realidad: 40-50 min por OCR/Insights más lento)
+└────────────────────────────────────────────────────────────────────────────┘
+
+SCENARIO 3: Con Fase 1 (INGEST_PARALLEL_WORKERS=4 + INSIGHTS_THROTTLE=10)
+┌─────────────────────────────┐
+│ OCR (15s) + 📊 Chunking (2s) + Indexing (28s) = 45s (paralelo)
+│ 💡 Insights: 10s + 20s LLM = 30s (menos throttle)
+├─────────────────────────────┤
+│ Por doc: 75s
+│ 4 en paralelo: 75s × (15/4) = 281 segundos ≈ 4-5 min
+│ Total para 15 docs: 20-30 minutos (vs 40-50 min)
+│ Aceleración: 2-3x
+└─────────────────────────────┘
+
+SCENARIO 4: Con Fase 1+2 (Tesseract parallelism + Tika optimization)
+┌─────────────────────────────┐
+│ OCR (5s) + 📊 Chunking (2s) + Indexing (25s) = 32s (paralelo)
+│ 💡 Insights: 10s + 20s LLM = 30s (4 paralelo)
+├─────────────────────────────┤
+│ Por doc: 62s
+│ 4 OCR/indexing + 4 insights = 62s × (15/4) = 232 segundos ≈ 3.9 min
+│ Total para 15 docs: 10-15 minutos (vs 40-50 min)
+│ Aceleración: 4-5x
+└─────────────────────────────┘
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. GRÁFICAS DE IMPACTO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Tiempo total (15 documentos):
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│  Antes        ████████████████████████████ 40-50 min           │
+│  Fase 1       ████████████ 20-30 min                           │
+│  Fase 1+2     ███████ 10-15 min                                │
+│  Fase 1+2+3   █████ 6-10 min (con cache + async)              │
+│                                                                 │
+│  Aceleración: 1x → 2-3x → 4-5x → 5-8x                         │
+└─────────────────────────────────────────────────────────────────┘
+
+Tiempo de OCR (100 páginas):
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│  Tesseract sec  ███████████ 12-15s                             │
+│  Tesseract par  ████ 3-5s (3-4x más rápido)                    │
+│                                                                 │
+│  PyMuPDF        ██ 2-3s (ya optimizado)                        │
+└─────────────────────────────────────────────────────────────────┘
+
+Tiempo de Insights (1 item, éxito):
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│  INSIGHTS_THROTTLE=60  ████████ 60s throttle                   │
+│  INSIGHTS_THROTTLE=10  █ 10s throttle (6x más rápido)          │
+│  + LLM call (20s)      ██ 20s (sin cambio)                     │
+│                                                                 │
+│  Total: 80s → 30s (2.7x)                                       │
+└─────────────────────────────────────────────────────────────────┘
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. IMPLEMENTACIÓN RECOMENDADA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FASE 1 (Quick Win - 5 minutos)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Cambios: .env solamente (sin código)
+
+1. Editar: rag-enterprise-structure/.env
+   INGEST_PARALLEL_WORKERS=4          (de 2)
+   INSIGHTS_THROTTLE_SECONDS=10       (de 60)
+   INSIGHTS_MAX_RETRIES=5             (sin cambio, pero verificar)
+
+2. Reiniciar backend:
+   docker compose restart backend
+
+3. Verificar:
+   docker compose logs backend | grep "INGEST_PARALLEL_WORKERS"
+
+Resultado: 2-3x aceleración
+
+
+FASE 2 (Full Optimization - 4 horas)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Cambios: Código + config
+
+1. Parallelizar Tesseract
+   - Archivo: backend/ocr_service.py
+   - Cambio: Nuevo método _extract_with_tesseract_parallel()
+   - Tiempo: 1.5 horas
+
+2. Aumentar Tika memory + pool
+   - Archivo: backend/ocr_service.py
+   - Cambio: Auto-tune heap, aumentar connection pool
+   - Tiempo: 1 hora
+
+3. Parallelizar Insights (opcional)
+   - Archivo: backend/app.py
+   - Cambio: ThreadPoolExecutor en insights queue
+   - Tiempo: 1.5 horas
+
+4. Rebuild + test:
+   COMPOSE_FILE=docker-compose.local.yml docker compose build backend
+   docker compose up -d
+
+Resultado: 4-5x aceleración total (vs baseline)
+
+
+FASE 3 (Advanced - 6 horas, opcional)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Implementar OCR cache
+2. Async insights pre-fetch
+3. Batch embeddings (si GPU disponible)
+
+Resultado: 5-8x aceleración total (vs baseline)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. CHECKLIST DE IMPLEMENTACIÓN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FASE 1 (5 min):
+  ☐ Backup .env actual
+  ☐ Editar INGEST_PARALLEL_WORKERS=4
+  ☐ Editar INSIGHTS_THROTTLE_SECONDS=10
+  ☐ docker compose restart backend
+  ☐ Verificar logs: docker compose logs backend | grep "PARALLEL"
+  ☐ Procesar 3 documentos de prueba
+  ☐ Notar tiempo en logs (ej: "Total time: 45.32s")
+  ☐ Comparar con antes
+
+FASE 2 (4 horas):
+  ☐ Leer OPTIMIZATION_CODE_EXAMPLES.md
+  ☐ Modificar ocr_service.py (Tesseract + Tika)
+  ☐ Modificar app.py (insights parallelism)
+  ☐ Agregar variables en .env:
+     OCR_TESSERACT_WORKERS=4
+     TIKA_HEAP_GB=0 (auto)
+     TIKA_POOL_CONNECTIONS=16
+     INSIGHTS_PARALLEL_WORKERS=4
+  ☐ docker compose build backend
+  ☐ docker compose up -d
+  ☐ Procesar 3 documentos de prueba
+  ☐ Notar tiempo (debe ser ~3-4x más rápido)
+  ☐ Revisar logs para errores
+
+FASE 3 (opcional, 6 horas):
+  ☐ Implementar OCR cache
+  ☐ Implementar async insights
+  ☐ Testing final
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. MONITOREO Y VALIDACIÓN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Antes de cambios:
+  $ docker compose logs backend | grep "PROCESSING COMPLETED" | head -5
+  # Notar: "Total time: X.XXs"
+
+Después de Fase 1:
+  $ docker compose logs backend | grep "PROCESSING COMPLETED" | head -5
+  # Notar: "Total time: Y.YYs" (debe ser ~2-3x menor)
+
+Cálculo:
+  Aceleración = X / Y
+
+Ejemplo:
+  - Antes: 45.32s per doc
+  - Después: 18.50s per doc
+  - Aceleración: 45.32 / 18.50 = 2.45x ✅
+
+Criterios de éxito:
+  ✅ Fase 1: 2-3x aceleración (sin errores)
+  ✅ Fase 2: 4-5x aceleración total
+  ✅ Fase 3: 5-8x aceleración total
+  ✅ Tasas de error: <5%
+  ✅ Memoria: <80% utilización
+  ✅ OpenAI: <500 RPM (respeto de límites)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. REFERENCIAS Y ARCHIVOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Documentación creada:
+  • PERFORMANCE_OPTIMIZATION.md       (Análisis detallado, 7 KB)
+  • OPTIMIZATION_QUICK_START.md       (Guía rápida, 5 KB)
+  • OPTIMIZATION_CODE_EXAMPLES.md     (Código listo, 8 KB)
+  • OPTIMIZATION_SUMMARY.txt          (Este archivo)
+
+Archivos a modificar:
+  • .env                              (variables de config)
+  • backend/ocr_service.py            (OCR + Tika)
+  • backend/app.py                    (Insights queue)
+
+Leáse primero: OPTIMIZATION_QUICK_START.md
+Código detallado: OPTIMIZATION_CODE_EXAMPLES.md
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Documento creado: 2026-03-03
+Autor: AI-DLC Performance Analysis

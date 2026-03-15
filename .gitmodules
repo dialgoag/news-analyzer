@@ -1,0 +1,3 @@
+[submodule "RAG-Enterprise"]
+	path = RAG-Enterprise
+	url = https://github.com/I3K-IT/RAG-Enterprise.git

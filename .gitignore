@@ -1,0 +1,46 @@
+# Environment files (contain API keys and secrets)
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.so
+venv/
+env/
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker volumes data
+qdrant-data/
+ollama-data/
+data/
+volumes/
+local-data/
+
+# Uploads and database (runtime data)
+uploads/
+*.db
+*.sqlite3
+backups/
+
+# HuggingFace model cache
+.cache/
