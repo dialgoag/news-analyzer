@@ -520,9 +520,11 @@ const ForceGraph = lazy(() => import('./ForceGraph'));
 ### 12.6 Visualizaciones Avanzadas
 
 #### Sankey Diagram
-**Uso**: Flujo de datos entre stages.  
-**Librería**: `d3-sankey`  
-**Best Practice**: Click en node/link para filtrar.
+**Uso**: Flujo de datos entre stages del pipeline.  
+**Librería**: `d3-sankey@0.12.3` (plugin separado, NO parte de d3 core)  
+**API clave**: `d3.sankey()`, `d3.sankeyLinkHorizontal()`, `d3.sankeyJustify`  
+**Best Practice**: Click en node/link para filtrar. Gradiente `source-target` para links. `mix-blend-mode: "screen"` en fondos oscuros.  
+**Referencia completa**: Ver [`02-construction/D3_SANKEY_REFERENCE.md`](./D3_SANKEY_REFERENCE.md) — API completa, código de referencia de Observable (Mike Bostock), patrones de D3 Graph Gallery, y análisis de gaps con nuestra implementación.
 
 #### Force-Directed Graph
 **Uso**: Relaciones entre entidades/topics.  
@@ -610,3 +612,4 @@ Antes de dar por terminado un dashboard, verificar:
 |-------|---------|---------|-------|
 | 2026-03-04 | 1.0 | Creación: lineamientos visuales para dashboards analíticos | AI-DLC |
 | 2026-03-13 | 1.1 | Agregado: D3.js Advanced Patterns (§12), Dashboard Checklist (§13) | AI-DLC |
+| 2026-03-16 | 1.2 | Ampliado: §12.6 Sankey Diagram con referencia a D3_SANKEY_REFERENCE.md | AI-DLC |

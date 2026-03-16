@@ -22,7 +22,7 @@ import torch
 import requests
 from pathlib import Path
 
-from rag_pipeline import RAGPipeline, wait_for_ollama, ensure_model
+from rag_pipeline import RAGPipeline, RateLimitError, wait_for_ollama, ensure_model
 from ocr_service import get_ocr_service, OCRService
 from embeddings_service import EmbeddingsService
 from qdrant_connector import QdrantConnector
@@ -465,6 +465,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    """Return JSON with CORS headers for unhandled exceptions (fixes CORS-blocked 500s)."""
+    logger = logging.getLogger(__name__)
+    logger.error(f"Unhandled exception on {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error: {type(exc).__name__}"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Simple TTL cache for dashboard endpoints
+# ---------------------------------------------------------------------------
+import threading as _cache_threading
+
+_dashboard_cache: Dict[str, dict] = {}
+_dashboard_cache_lock = _cache_threading.Lock()
+
+_CACHE_TTL = {
+    "dashboard_summary": 15,
+    "dashboard_analysis": 15,
+    "documents_list": 10,
+    "documents_status": 10,
+    "workers_status": 10,
+}
+
+
+def _cache_get(key: str):
+    with _dashboard_cache_lock:
+        entry = _dashboard_cache.get(key)
+        if entry and (time.time() - entry["ts"]) < _CACHE_TTL.get(key, 15):
+            return entry["data"]
+    return None
+
+
+def _cache_set(key: str, data):
+    with _dashboard_cache_lock:
+        _dashboard_cache[key] = {"data": data, "ts": time.time()}
+
+
 # Global services
 ocr_service: Optional[OCRService] = None
 embeddings_service: Optional[EmbeddingsService] = None
@@ -590,6 +632,15 @@ def master_pipeline_scheduler():
             conn_cleanup = document_status_store.get_connection()
             cursor_cleanup = conn_cleanup.cursor()
             
+            # Clean stale completed entries (accumulate forever otherwise)
+            cursor_cleanup.execute(
+                "DELETE FROM worker_tasks WHERE status = 'completed' "
+                "AND completed_at < NOW() - INTERVAL '1 hour'"
+            )
+            stale_cleaned = cursor_cleanup.rowcount
+            if stale_cleaned:
+                logger.debug(f"🧹 Cleaned {stale_cleaned} stale completed worker_tasks")
+
             cursor_cleanup.execute("""
                 SELECT worker_id, document_id, task_type
                 FROM worker_tasks
@@ -602,6 +653,14 @@ def master_pipeline_scheduler():
                 logger.warning(f"🔧 Detected {len(crashed_workers)} crashed workers, recovering...")
                 
                 for worker_id, doc_id, task_type in crashed_workers:
+                    if not task_type:
+                        logger.debug(f"   ⏭ Skipping {worker_id} — no task_type (phantom entry)")
+                        cursor_cleanup.execute(
+                            "DELETE FROM worker_tasks WHERE worker_id = %s",
+                            (worker_id,),
+                        )
+                        continue
+
                     cursor_cleanup.execute(
                         "DELETE FROM worker_tasks WHERE worker_id = %s",
                         (worker_id,),
@@ -2653,6 +2712,12 @@ async def _handle_insights_task(task_data: dict, worker_id: str):
         processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", 'insights', 'completed')
         logger.info(f"[{worker_id}] ✅ Insights generated")
         
+    except RateLimitError as e:
+        logger.warning(f"[{worker_id}] ⏳ OpenAI 429 rate limited — re-enqueuing as pending (not an error): {e}")
+        news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_PENDING)
+        processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", 'insights', 'completed')
+        return
+
     except Exception as e:
         logger.error(f"[{worker_id}] Insights failed: {e}", exc_info=True)
         news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_ERROR, error_message=str(e)[:200])
@@ -3109,14 +3174,12 @@ async def detect_crashed_workers():
         conn = document_status_store.get_connection()
         cursor = conn.cursor()
 
-        # 1) worker_tasks: everything started/assigned is orphaned
-        cursor.execute(
-            "DELETE FROM worker_tasks WHERE status IN (%s, %s)",
-            (WorkerStatus.STARTED, WorkerStatus.ASSIGNED),
-        )
+        # 1) worker_tasks: everything started/assigned is orphaned;
+        #    completed entries are stale history that accumulates forever
+        cursor.execute("DELETE FROM worker_tasks")
         wt_deleted = cursor.rowcount
         if wt_deleted:
-            logger.warning(f"🧹 Startup: deleted {wt_deleted} orphaned worker_tasks")
+            logger.warning(f"🧹 Startup: deleted {wt_deleted} worker_tasks (all orphaned on restart)")
 
         # 2) processing_queue: 'processing' entries have no live worker
         cursor.execute(
@@ -3357,7 +3420,11 @@ async def list_documents(
     status: Optional[str] = None,
     source: Optional[str] = None,
 ):
-    """List all documents with status (pending, processing, indexed, error). Merges DB status with Qdrant indexed docs."""
+    """List all documents with status. DB is source of truth (no Qdrant scroll)."""
+    cache_key = f"documents_list:{status or ''}:{source or ''}"
+    cached = _cache_get(cache_key) if not status and not source else None
+    if cached is not None:
+        return cached
     try:
         rows = document_status_store.get_all(status_filter=status, source_filter=source)
         by_id = {}
@@ -3389,28 +3456,6 @@ async def list_documents(
                 insights_status=None,
                 insights_progress=None,
             )
-        # Backfill: docs in Qdrant but not in our table (indexed before feature)
-        if qdrant_connector:
-            try:
-                qdrant_docs = qdrant_connector.get_indexed_documents()
-                for d in qdrant_docs:
-                    if d["document_id"] not in by_id:
-                        by_id[d["document_id"]] = DocumentMetadata(
-                            filename=d["filename"],
-                            upload_date=d.get("upload_date", ""),
-                            document_id=d["document_id"],
-                            num_chunks=d.get("num_chunks", 0),
-                            status=DocStatus.INDEXING_DONE,
-                            source=None,
-                            indexed_at=None,
-                            error_message=None,
-                            news_date=None,
-                            processing_stage=None,
-                            insights_status=None,
-                            insights_progress=None,
-                        )
-            except Exception as e:
-                logger.warning(f"Could not merge Qdrant docs: {e}")
         doc_ids = list(by_id.keys())
         # Preferir insights por noticia (news_item_insights) cuando existan items para el documento.
         item_counts = news_item_store.get_counts_by_document_ids(doc_ids) if doc_ids else {}
@@ -3459,11 +3504,14 @@ async def list_documents(
         docs.sort(key=lambda x: x.upload_date or "", reverse=True)
         total_indexed = total_units
         with_insights_done = done_units
-        return DocumentsListResponse(
+        resp = DocumentsListResponse(
             documents=docs,
             total=len(docs),
             insights_summary={"total_indexed": total_indexed, "with_insights_done": with_insights_done},
         )
+        if not status and not source:
+            _cache_set("documents_list::", resp)
+        return resp
     except Exception as e:
         logger.error(f"Error listing documents: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -3475,8 +3523,10 @@ async def get_documents_status():
     Endpoint específico para DocumentsTable.jsx del frontend.
     Retorna status de documentos con campos esperados por el dashboard.
     """
+    cached = _cache_get("documents_status")
+    if cached is not None:
+        return cached
     try:
-        # Obtener todos los documentos
         rows = document_status_store.get_all(status_filter=None, source_filter=None)
         
         # Obtener IDs de documentos
@@ -3516,9 +3566,9 @@ async def get_documents_status():
                 insights_total=insights_total
             ))
         
-        # Ordenar por fecha de subida (más recientes primero)
         result.sort(key=lambda x: x.uploaded_at or "", reverse=True)
         
+        _cache_set("documents_status", result)
         return result
     except Exception as e:
         logger.error(f"Error getting documents status: {str(e)}")
@@ -4729,6 +4779,9 @@ async def get_dashboard_summary(
     
     Uses inbox files as source of truth for total count.
     """
+    cached = _cache_get("dashboard_summary")
+    if cached is not None:
+        return cached
     try:
         import os
         from pathlib import Path
@@ -4894,7 +4947,7 @@ async def get_dashboard_summary(
         
         conn.close()
         
-        return {
+        result = {
             "timestamp": datetime.now().isoformat(),
             "files": files,
             "news_items": news_items,
@@ -4904,6 +4957,8 @@ async def get_dashboard_summary(
             "insights": insights,
             "errors": errors,
         }
+        _cache_set("dashboard_summary", result)
+        return result
         
     except Exception as e:
         logger.error(f"Error fetching dashboard summary: {e}", exc_info=True)
@@ -4921,6 +4976,9 @@ async def get_workers_status(
     """Get detailed status of Generic Worker Pool - shows each worker and their specific current task."""
     global generic_worker_pool
     
+    cached = _cache_get("workers_status")
+    if cached is not None:
+        return cached
     try:
         conn = document_status_store.get_connection()
         cursor = conn.cursor()
@@ -5213,7 +5271,7 @@ async def get_workers_status(
         idle_workers_count = len([w for w in workers_status if w["status"] == "idle"])
         error_workers_count = len([w for w in workers_status if w["status"] == "error"])
         
-        return {
+        result = {
             "timestamp": datetime.now().isoformat(),
             "workers": workers_status,
             "summary": {
@@ -5222,10 +5280,12 @@ async def get_workers_status(
                 "idle_workers": idle_workers_count,
                 "error_workers": error_workers_count,
                 "pool_size": pool_size,
-                "pending_tasks": pending_counts,  # Show pending tasks breakdown
+                "pending_tasks": pending_counts,
                 "unhealthy_services": len([w for w in workers_status if w["type"] == "Service" and w["status"] != "healthy"]),
             }
         }
+        _cache_set("workers_status", result)
+        return result
         
     except Exception as e:
         logger.error(f"Error fetching workers status: {e}", exc_info=True)
@@ -5240,6 +5300,9 @@ async def get_dashboard_analysis(
     Comprehensive dashboard analysis endpoint.
     Provides detailed analysis of errors, pipeline status, workers, and database state.
     """
+    cached = _cache_get("dashboard_analysis")
+    if cached is not None:
+        return cached
     try:
         conn = document_status_store.get_connection()
         cursor = conn.cursor()
@@ -5583,7 +5646,7 @@ async def get_dashboard_analysis(
         
         conn.close()
         
-        return {
+        result = {
             "timestamp": datetime.now().isoformat(),
             "errors": {
                 "groups": error_groups,
@@ -5612,6 +5675,8 @@ async def get_dashboard_analysis(
                 "inconsistencies": inconsistencies
             }
         }
+        _cache_set("dashboard_analysis", result)
+        return result
         
     except Exception as e:
         logger.error(f"Error fetching dashboard analysis: {e}", exc_info=True)

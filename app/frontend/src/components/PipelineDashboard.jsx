@@ -35,15 +35,14 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger }) {
         // Fetch summary
         const summaryResponse = await axios.get(`${API_URL}/api/dashboard/summary`, {
           headers: { Authorization: `Bearer ${token}` },
-          timeout: 5000
+          timeout: 20000
         });
         setData(summaryResponse.data);
         
-        // Fetch documents list for individual document tracking
         try {
           const docsResponse = await axios.get(`${API_URL}/api/documents`, {
             headers: { Authorization: `Bearer ${token}` },
-            timeout: 5000
+            timeout: 20000
           });
           setDocuments(docsResponse.data?.documents || []);
         } catch (docErr) {
@@ -61,7 +60,7 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger }) {
     };
 
     fetchPipelineData();
-    const interval = setInterval(fetchPipelineData, 5000); // Refresh every 5s
+    const interval = setInterval(fetchPipelineData, 20000);
     return () => clearInterval(interval);
   }, [API_URL, token, refreshTrigger]);
 

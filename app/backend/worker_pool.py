@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 # Lock to serialize OCR task claims - prevents race condition where multiple workers
 # pass can_assign_ocr() before any commits, exceeding OCR_PARALLEL_WORKERS
 _ocr_claim_lock = Lock()
+_insights_claim_lock = Lock()
 
 
 class GenericWorkerPool:
@@ -150,9 +151,14 @@ class GenericWorkerPool:
                 min_workers_per_stage = 2
                 # OCR limit: max concurrent OCR workers (prevents Tika saturation)
                 ocr_parallel_limit = int(os.getenv("OCR_PARALLEL_WORKERS", "5"))
+                # Insights limit: max concurrent insights workers (prevents OpenAI 429)
+                insights_parallel_limit = int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "3"))
                 
                 def can_assign_ocr():
                     return current_workers.get('ocr', 0) < ocr_parallel_limit
+                
+                def can_assign_insights():
+                    return current_workers.get('insights', 0) < insights_parallel_limit
                 
                 selected_task_type = None
                 
@@ -160,8 +166,9 @@ class GenericWorkerPool:
                 for task_type_check in priority_order:
                     current = current_workers.get(task_type_check, 0)
                     pending = pending_tasks.get(task_type_check, 0)
-                    # OCR: respect OCR_PARALLEL_WORKERS limit
                     if task_type_check == 'ocr' and not can_assign_ocr():
+                        continue
+                    if task_type_check == 'insights' and not can_assign_insights():
                         continue
                     if pending > 0 and current < min_workers_per_stage:
                         selected_task_type = task_type_check
@@ -170,12 +177,12 @@ class GenericWorkerPool:
                 
                 # PASS 2: If all stages have minimum workers, assign to stage with MOST pending
                 if not selected_task_type:
-                    # Find stage with most pending tasks (prioritizing pipeline completion)
                     max_pending = 0
                     for task_type_check in priority_order:
                         pending = pending_tasks.get(task_type_check, 0)
-                        # OCR: respect OCR_PARALLEL_WORKERS limit
                         if task_type_check == 'ocr' and not can_assign_ocr():
+                            continue
+                        if task_type_check == 'insights' and not can_assign_insights():
                             continue
                         if pending > max_pending:
                             max_pending = pending
@@ -228,32 +235,46 @@ class GenericWorkerPool:
                         conn.commit()
                         logger.info(f"{worker_id}: Claimed {task_type} task for {task_data['filename']} (Priority: complete pipeline)")
                 
-                # 2. Claim insights task (highest priority)
+                # 2. Claim insights task (with concurrency lock, like OCR)
                 elif selected_task_type == 'insights':
-                    cursor.execute("""
-                        UPDATE news_item_insights
-                        SET status = 'generating'
-                        WHERE news_item_id = (
-                            SELECT news_item_id FROM news_item_insights
-                            WHERE status IN ('pending', 'queued')
-                            ORDER BY news_item_id ASC
-                            LIMIT 1
-                        )
-                        RETURNING news_item_id, document_id, filename, title
-                    """)
-                    insights_task = cursor.fetchone()
-                    
-                    if insights_task:
-                        task_type = 'insights'
-                        task_data = {
-                            'news_item_id': insights_task['news_item_id'],
-                            'document_id': insights_task['document_id'],
-                            'filename': insights_task['filename'],
-                            'title': insights_task['title'],
-                        }
-                        task_found = True
-                        conn.commit()
-                        logger.info(f"{worker_id}: Claimed insights task for {task_data.get('title') or task_data['filename']} (Priority: complete pipeline)")
+                    _insights_claim_lock.acquire()
+                    try:
+                        cursor.execute("""
+                            SELECT COUNT(*) FROM news_item_insights
+                            WHERE status = 'generating'
+                        """)
+                        result = cursor.fetchone()
+                        generating_count = result['count'] if result else 0
+                        if generating_count >= insights_parallel_limit:
+                            selected_task_type = None
+                            task_found = False
+                        else:
+                            cursor.execute("""
+                                UPDATE news_item_insights
+                                SET status = 'generating'
+                                WHERE news_item_id = (
+                                    SELECT news_item_id FROM news_item_insights
+                                    WHERE status IN ('pending', 'queued')
+                                    ORDER BY news_item_id ASC
+                                    LIMIT 1
+                                )
+                                RETURNING news_item_id, document_id, filename, title
+                            """)
+                            insights_task = cursor.fetchone()
+                            
+                            if insights_task:
+                                task_type = 'insights'
+                                task_data = {
+                                    'news_item_id': insights_task['news_item_id'],
+                                    'document_id': insights_task['document_id'],
+                                    'filename': insights_task['filename'],
+                                    'title': insights_task['title'],
+                                }
+                                task_found = True
+                                conn.commit()
+                                logger.info(f"{worker_id}: Claimed insights task for {task_data.get('title') or task_data['filename']} (Priority: complete pipeline)")
+                    finally:
+                        _insights_claim_lock.release()
                 
                 conn.close()
                 

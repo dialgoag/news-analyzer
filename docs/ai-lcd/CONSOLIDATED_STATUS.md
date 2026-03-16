@@ -1,9 +1,98 @@
-# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-15
+# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-16
 
-> **Versión definitiva post-sesión**: Infraestructura lista para levantar app
+> **Versión definitiva post-sesión**: Rate limit OpenAI resuelto, insights re-enqueue automático
 
-**Última actualización**: 2026-03-15  
-**Próxima sesión**: `cp .env.example .env` → editar OPENAI_API_KEY → `docker compose up -d`
+**Última actualización**: 2026-03-16  
+**Prioridad**: Fix #65 (Dashboard Performance) → REQ-014 (UX Dashboard)
+
+---
+
+### 65. Fix Dashboard Performance — Cache + sin Qdrant scroll + CORS 500 (REQ-015) ✅
+**Fecha**: 2026-03-16
+**Ubicación**: `backend/app.py` (cache TTL, exception handler, endpoints summary/analysis/documents/status/workers), `frontend` (polling + timeouts)
+**Problema**: Dashboard inutilizable — endpoints 15-54s, timeouts 5s, 500 sin CORS, Qdrant scroll saturando.
+**Solución**:
+- Cache en memoria TTL: `dashboard_summary` 15s, `dashboard_analysis` 15s, `documents_list`/`documents_status`/`workers_status` 10s
+- `/api/documents`: eliminado backfill con `qdrant_connector.get_indexed_documents()` (scroll); fuente de verdad = BD
+- Exception handler global: `@app.exception_handler(Exception)` devuelve JSON con CORS en 500
+- Frontend: polling 15-20s (antes 3-5s), timeouts 15-20s (antes 5s)
+**Impacto**: Respuestas rápidas en cache hit, menos carga en Qdrant/BD, 500 con CORS, menos timeouts
+**⚠️ NO rompe**: OCR ✅, Workers ✅, Pipeline ✅, REQ-017/018 ✅
+**Verificación**:
+- [x] Cache get/set en 5 endpoints
+- [x] Qdrant scroll eliminado de list_documents
+- [x] Exception handler registrado
+- [x] Frontend: DocumentsTable 15s/15s, WorkersTable 15s/15s, PipelineDashboard 20s/20s, paneles analysis 20s
+- [x] Rebuild --no-cache backend frontend; docker compose up -d; logs sin errores
+
+---
+
+### 63. Fix Rate Limit OpenAI 429 — Enfoque C (retry rápido + re-enqueue) ✅
+**Fecha**: 2026-03-16
+**Ubicación**: `backend/rag_pipeline.py` (líneas 153-212), `backend/app.py` (líneas 25, 2656-2660), `backend/worker_pool.py` (líneas 31, 154-161, 171, 185, 238-275)
+**Problema**: 392 insights fallidos por `429 Too Many Requests` de OpenAI. GenericWorkerPool permitía hasta 20 workers de insights simultáneos sin rate limiting. Items marcados como `error` permanente cuando 429 no es un error real.
+**Solución**:
+- `RateLimitError` exception en `rag_pipeline.py` — distingue 429 de errores reales
+- `OpenAIChatClient.invoke()` — 1 quick retry (2s + jitter), luego lanza `RateLimitError`
+- `_handle_insights_task()` — catch `RateLimitError` → re-enqueue como `pending` (no `error`), libera worker inmediatamente
+- `worker_pool.py` — `INSIGHTS_PARALLEL_WORKERS` limita concurrencia (default 3, con lock atómico)
+**Impacto**: Workers nunca se bloquean más de ~4s, items con 429 se reintentan automáticamente, máx 3 requests simultáneos a OpenAI
+**⚠️ NO rompe**: OCR ✅, Chunking ✅, Indexing ✅, Dedup SHA256 ✅, Dashboard ✅, Master Scheduler ✅
+**Verificación**:
+- [x] `RateLimitError` creada y exportada
+- [x] Quick retry con backoff + jitter en `OpenAIChatClient`
+- [x] `_handle_insights_task` re-encola 429 como `pending`
+- [x] `worker_pool.py` limita insights a `INSIGHTS_PARALLEL_WORKERS`
+- [x] Lock atómico `_insights_claim_lock` previene race conditions
+- [ ] Deploy: rebuild backend + resetear 392 items error → pending
+- [ ] Verificar 0 errores 429 en logs post-deploy
+
+---
+
+### 62. Documentación: Referencia D3-Sankey extraída de fuentes oficiales ✅
+**Fecha**: 2026-03-16
+**Ubicación**: `docs/ai-lcd/02-construction/D3_SANKEY_REFERENCE.md` (nuevo), `docs/ai-lcd/02-construction/VISUAL_ANALYTICS_GUIDELINES.md` §12.6 (actualizado)
+**Problema**: No había documentación detallada del API d3-sankey ni de los patrones oficiales de Observable para mejorar nuestro Sankey
+**Solución**: Extraído código completo de Observable @d3/sankey-component (Mike Bostock), API reference de d3-sankey GitHub, patrones de D3 Graph Gallery. Incluye análisis de gaps vs nuestra implementación y checklist de mejoras.
+**Impacto**: Base técnica documentada para REQ-014 (UX Dashboard) — mejoras al Sankey del pipeline
+**⚠️ NO rompe**: Dashboard ✅, Sankey ✅, Pipeline ✅ (solo documentación, sin cambios de código)
+**Verificación**:
+- [x] D3_SANKEY_REFERENCE.md creado con API completa + código de referencia
+- [x] VISUAL_ANALYTICS_GUIDELINES.md §12.6 actualizado con referencia
+
+---
+
+### 64. Fix: Crashed Workers Loop + Startup Recovery completa (REQ-018) ✅
+**Fecha**: 2026-03-16
+**Ubicación**: `backend/app.py` — `detect_crashed_workers()` (línea ~3118) + PASO 0 scheduler (línea ~589)
+**Problema**: 3 bugs combinados:
+1. `worker_tasks` con `completed` se acumulaban para siempre (60+ registros basura)
+2. PASO 0 scheduler detectaba entries con `task_type = None` como "crashed" → loop cada 10s
+3. Startup recovery no limpiaba `completed`, solo `started/assigned`
+**Solución**:
+- `detect_crashed_workers()`: DELETE ALL worker_tasks al startup (todos son huérfanos tras restart)
+- PASO 0: limpia `completed` >1h + skip recovery si `task_type` es `None` (phantom entry)
+**Impacto**: Startup limpio (63 worker_tasks + 14 queue + 6 insights recuperados), 0 loops fantasma
+**⚠️ NO rompe**: OCR ✅, Chunking ✅, Indexing ✅, Insights ✅, Dashboard ✅
+**Verificación**:
+- [x] Startup: 63 worker_tasks eliminados, 14 queue reseteados, 6 insights reseteados
+- [x] 0 mensajes "crashed workers" fantasma en logs
+- [x] PASO 0 no entra en loop con task_type=None
+
+---
+
+### 60. BUG: 392 insights fallidos por 429 Too Many Requests de OpenAI 🔴
+**Fecha**: 2026-03-16
+**Ubicación**: backend/app.py — insights worker / rag_pipeline.py — generate_insights_from_context()
+**Problema**: Pipeline envía requests a OpenAI sin rate limiting. 392 news items fallaron con `429 Client Error: Too Many Requests`. No hay retry con backoff ni throttling por RPM/TPM.
+**Solución**: PENDIENTE — Implementar rate limiting + retry con exponential backoff
+**Impacto**: 392 insights bloqueados (72% del total), solo 148 completados
+**⚠️ NO rompe**: OCR ✅, Chunking ✅, Indexing ✅ (pipeline anterior funciona)
+**Verificación**:
+- [ ] Rate limiter implementado (max N requests/min)
+- [ ] Retry con exponential backoff (1s, 2s, 4s, 8s...)
+- [ ] Resetear 392 items de error → pending
+- [ ] Insights completados sin 429
 
 ---
 

@@ -2,9 +2,9 @@
 
 > **Propósito**: Rastrear TODAS las peticiones del usuario con trazabilidad completa
 > 
-> **Última actualización**: 2026-03-15  
-> **Total peticiones**: 16  
-> **Completadas**: 14 | Pendientes: 2 | Rechazadas: 0
+> **Última actualización**: 2026-03-16  
+> **Total peticiones**: 18  
+> **Completadas**: 16 | Pendientes: 2 | Rechazadas: 0
 
 ---
 
@@ -26,8 +26,10 @@
 | **REQ-012** | 2026-03-13 | "Migrar Tika → OCRmyPDF" | ✅ **COMPLETADA** | v3.0 | **#26, #27, #31** |
 | **REQ-013** | 2026-03-14 | "Sankey vacío + Errores API" | ✅ **COMPLETADA** | v2.5 | **#28, #29, #30** |
 | **REQ-014** | 2026-03-15 | "Mejoras UX Dashboard (4 sub-peticiones)" | 🔄 **PENDIENTE** | v3.1 | — |
-| **REQ-015** | 2026-03-15 | "BUG: Dashboard inutilizable — timeouts + 500 + CORS" | 🔴 **PENDIENTE** | v3.0.1 | — |
+| **REQ-015** | 2026-03-15 | "BUG: Dashboard inutilizable — timeouts + 500 + CORS" | ✅ **IMPLEMENTADA** | v3.0.3 | **#65** |
 | **REQ-016** | 2026-03-15 | "BUG: Inbox File not found + Centralizar ingesta en servicio" | ✅ **COMPLETADA** | v3.0.2 | **#56, #57** |
+| **REQ-017** | 2026-03-16 | "BUG: 429 OpenAI Rate Limit — insights bloqueados" | ✅ **IMPLEMENTADA** | v3.0.3 | **#63** |
+| **REQ-018** | 2026-03-16 | "BUG: Crashed workers loop — recovery a None" | ✅ **COMPLETADA** | v3.0.3 | **#64** |
 
 ---
 
@@ -1265,6 +1267,26 @@ Inventario de BD reveló 461 news items de docs `completed` sin registro en `new
 
 ---
 
+#### REQ-014.5: Pipeline Analysis — Insights muestra "0/0/0" (datos incoherentes)
+**Problema**:
+- La sección de Insights en PipelineAnalysisPanel muestra "0/0/0" en lugar de conteos reales
+- El endpoint `/api/dashboard/analysis` no está retornando datos coherentes para insights
+- Hay 255 done + 1057 pending en BD pero el panel muestra ceros
+
+**Solución propuesta**:
+1. Verificar que el endpoint `/api/dashboard/analysis` retorna datos de insights correctos
+2. Corregir las queries de insights en el endpoint
+3. Verificar que el frontend lee los campos correctos
+
+**Archivos afectados**:
+- `backend/app.py` (endpoint `/api/dashboard/analysis` — queries de insights)
+- `frontend/src/components/dashboard/PipelineAnalysisPanel.jsx`
+
+**Verificación**:
+- [ ] Panel muestra conteos reales de insights (done, pending, generating, error)
+
+---
+
 **Contradicciones verificadas**:
 - **REQ-007** (Dashboard D3.js): ✅ COMPLEMENTA — mejora UX sobre base existente
 - **REQ-013** (Sankey vacío): ✅ COMPLEMENTA — extiende zoom semántico ya implementado
@@ -1293,11 +1315,18 @@ Inventario de BD reveló 461 news items de docs `completed` sin registro en `new
 
 **Metadata**:
 - **Fecha**: 2026-03-15
-- **Sesión**: Sesión 23 (Performance Investigation)
+- **Sesión**: Sesión 23 (Performance Investigation) → **Implementado** Sesión 28 (2026-03-16)
 - **Prioridad**: 🔴 CRÍTICA
-- **Estado**: 🔴 PENDIENTE
-- **Versión target**: v3.0.1 (hotfix)
+- **Estado**: ✅ **IMPLEMENTADA** (Fix #65)
+- **Versión target**: v3.0.3
 - **Tipo**: BUG (3 sub-bugs relacionados)
+
+**Implementación (Fix #65 — 2026-03-16)**:
+- Cache TTL en backend: `dashboard_summary`/`dashboard_analysis` 15s, `documents_list`/`documents_status`/`workers_status` 10s
+- `/api/documents`: eliminado backfill con Qdrant scroll; BD como única fuente de verdad
+- Exception handler global: `@app.exception_handler(Exception)` devuelve JSON con CORS en 500
+- Frontend: polling 15-20s (antes 3-5s), timeouts 15-20s (antes 5s)
+- Verificación: rebuild --no-cache backend frontend; docker compose up -d; logs sin errores
 
 **Contexto**:
 Dashboard completamente inutilizable. Todos los paneles muestran errores. Investigación revela 3 problemas combinados.
@@ -1473,4 +1502,87 @@ worker_pool - ERROR - pipeline_worker_15: Task insights failed: No chunks found
 - `backend/Dockerfile.cpu`
 
 **Versión**: v3.0.2
+
+---
+
+### **REQ-017: "BUG: 429 OpenAI Rate Limit — insights bloqueados"**
+
+**Metadata**:
+- **Fecha**: 2026-03-16
+- **Sesión**: Sesión 27 (Fix Rate Limit OpenAI)
+- **Prioridad**: 🔴 CRÍTICA (bloquea generación de insights)
+- **Estado**: ✅ **IMPLEMENTADA** (pendiente deploy + reset 392 items)
+
+**Descripción Original**:
+> Diagnóstico de logs revela 392 news items con error `429 Client Error: Too Many Requests` de OpenAI. Solo 148/540 insights completados (27%).
+
+**Problema Identificado**:
+1. `GenericWorkerPool` permite hasta 20 workers de insights simultáneos (sin límite)
+2. `_handle_insights_task` no tiene retry para 429 — marca como `error` permanente
+3. `OpenAIChatClient.invoke()` no tiene retry — crash inmediato en 429
+
+**Solución Implementada** (Enfoque C — retry rápido + re-enqueue):
+- ✅ `RateLimitError` exception en `rag_pipeline.py` — distingue 429 de errores reales
+- ✅ `OpenAIChatClient.invoke()` — 1 quick retry (2s + jitter), luego `RateLimitError`
+- ✅ `_handle_insights_task` — catch `RateLimitError` → status `pending` (no `error`), worker libre
+- ✅ `worker_pool.py` — `INSIGHTS_PARALLEL_WORKERS` con lock atómico (default 3, como OCR)
+
+**Principio clave**: 429 = "espera", no "error". El item vuelve a `pending` y se reintenta después.
+
+**Cambios Incluidos**:
+- Fix #63: Rate Limit OpenAI — Enfoque C
+
+**Archivos modificados**:
+- `backend/rag_pipeline.py` (RateLimitError + quick retry en OpenAIChatClient)
+- `backend/app.py` (import RateLimitError + catch en _handle_insights_task)
+- `backend/worker_pool.py` (insights_parallel_limit + _insights_claim_lock)
+
+**Verificaciones**:
+- [x] RateLimitError creada y exportada
+- [x] Quick retry (2s + jitter) en OpenAIChatClient
+- [x] _handle_insights_task re-encola 429 como pending
+- [x] worker_pool.py limita insights con lock atómico
+- [ ] Deploy + reset 392 items
+- [ ] 0 errores 429 en logs post-deploy
+
+**Contradicciones**: Ninguna. Ortogonal a REQ-001 (OCR) y REQ-004 (Master Pipeline).
+**Versión**: v3.0.3
+
+---
+
+### **REQ-018: "BUG: Crashed workers loop — recovery a None"**
+
+**Metadata**:
+- **Fecha**: 2026-03-16
+- **Sesión**: Sesión 27 (Fix Startup Recovery)
+- **Prioridad**: 🟡 MEDIA (ruido en logs, no bloquea funcionalidad)
+- **Estado**: ✅ **COMPLETADA**
+
+**Descripción Original**:
+> Logs del backend muestran cada 10 segundos: `WARNING: Detected 2-3 crashed workers, recovering...` seguido de `Recovered task_type for document_id... → None`. Loop infinito sin efecto real.
+
+**Problema Identificado**:
+1. `worker_tasks` con status `completed` nunca se limpiaban (60+ registros acumulados)
+2. PASO 0 scheduler encontraba entries con `task_type = None` → loop cada 10s
+3. Startup recovery solo limpiaba `started/assigned`, no `completed`
+
+**Solución Implementada**:
+- ✅ `detect_crashed_workers()`: DELETE ALL worker_tasks al startup (todos huérfanos)
+- ✅ PASO 0: limpia `completed` >1h para evitar acumulación durante runtime
+- ✅ PASO 0: skip recovery si `task_type` es `None` (phantom entry, solo DELETE)
+
+**Cambios Incluidos**:
+- Fix #64: Startup recovery + limpieza fantasmas
+
+**Archivos modificados**:
+- `backend/app.py` (`detect_crashed_workers` + PASO 0 scheduler)
+
+**Verificaciones**:
+- [x] Startup: 63 worker_tasks eliminados
+- [x] Startup: 14 processing_queue reseteados a pending
+- [x] Startup: 6 insights generating reseteados a pending
+- [x] 0 loops "crashed workers" fantasma en logs
+
+**Contradicciones**: Ninguna. Resuelve REQ-018 y complementa REQ-006/REQ-010.
+**Versión**: v3.0.3
 

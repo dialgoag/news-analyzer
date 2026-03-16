@@ -2,8 +2,106 @@
 
 > Decisiones, cambios importantes, y contexto entre sesiones
 
-**Última actualización**: 2026-03-15  
-**Sesión**: 21+ (Infraestructura Docker para producción local)
+**Última actualización**: 2026-03-16  
+**Sesión**: 28 (Dashboard Performance — REQ-015)
+
+---
+
+## Sesión 28: Dashboard Performance REQ-015 (2026-03-16)
+
+### Cambio: Cache + sin Qdrant scroll + CORS 500 + polling/timeouts
+- **Decisión**: Reducir latencia con cache TTL en backend y eliminar scroll a Qdrant en `/api/documents`; asegurar CORS en 500 con exception handler; alinear frontend (polling 15-20s, timeouts 15-20s) con TTL del cache.
+- **Alternativas consideradas**: Connection pooling en database.py — pospuesto (mayor impacto); solo cache — elegido como primer paso.
+- **Impacto en roadmap**: Dashboard usable sin timeouts; REQ-014 (UX) puede seguir.
+- **Riesgo**: Cache puede mostrar datos hasta 15s antiguos; aceptable para monitoreo.
+
+### Documentado para después (REQ-014)
+- **REQ-014.5**: Pipeline Analysis — Insights muestra "0/0/0" (queries incoherentes); corregir endpoint `/api/dashboard/analysis` y frontend.
+- Stage "Upload" en análisis ya documentado en REQ-014.1.
+
+---
+
+## Sesión 27: Fix Rate Limit OpenAI 429 + Startup Recovery (REQ-017 + REQ-018) (2026-03-16)
+
+### Cambio 1: REQ-017 — Enfoque C — retry rápido + re-enqueue como pending
+- **Decisión**: 429 no es error del item, es señal de "espera". Items vuelven a `pending` (no `error`) y el worker se libera inmediatamente para otras tareas.
+- **Alternativas consideradas**:
+  - A) Retry largo en cliente (60s backoff) — rechazado: bloquea worker, no puede hacer otras tareas
+  - B) Re-enqueue sin retry — rechazado: genera mucho churn en scheduler
+  - C) **Elegida**: 1 quick retry (2-4s), si persiste → re-enqueue + libera worker
+- **Impacto en roadmap**: Desbloquea generación de insights. 1016 items reseteados de error → pending.
+- **Riesgo**: Con 3 workers aún hay 429. Puede necesitar bajar a 1-2 workers.
+
+### Cambio 2: REQ-018 — Startup recovery completa + limpieza de fantasmas
+- **Decisión**: Al restart, ALL worker_tasks son huérfanos (los threads murieron con el contenedor). DELETE total es seguro y elimina basura acumulada.
+- **Problema resuelto**: 60 completed + 3 started = 63 registros basura. PASO 0 detectaba entries con task_type=None como "crashed" → loop infinito cada 10s.
+- **Fix adicional**: PASO 0 ahora limpia completed >1h y skip phantom entries.
+- **Resultado verificado**: Startup limpio, 0 loops fantasma, 14 queue + 6 insights recuperados correctamente.
+
+---
+
+## Sesión 26: Documentación D3-Sankey Reference (2026-03-16)
+
+### Contexto
+Usuario pidió extraer documentación de https://d3-graph-gallery.com/sankey y https://observablehq.com/@d3/sankey-component para mejorar el Sankey del frontend. Se usó el export de código del notebook Observable (tgz) para obtener el código fuente completo del componente SankeyChart de Mike Bostock.
+
+### Cambio: Referencia D3-Sankey
+- **Decisión**: Crear documento de referencia técnica separado (`D3_SANKEY_REFERENCE.md`) en vez de incrustar todo en VISUAL_ANALYTICS_GUIDELINES
+- **Alternativas consideradas**: Meter todo en VISUAL_ANALYTICS_GUIDELINES → rechazado, demasiado largo y mezcla lineamientos con API reference
+- **Impacto en roadmap**: Facilita REQ-014 (UX Dashboard) — ya hay base técnica para mejorar el Sankey
+- **Riesgo**: Ninguno (solo documentación)
+
+### Contenido extraído
+- API completa d3-sankey (nodos, links, alineación, sorting, extent, iterations)
+- `SankeyChart` component de Observable (597 forks) — código completo adaptable
+- Ejemplo simplificado @d3/sankey/2 (295 forks)
+- Patrón básico D3 Graph Gallery (con drag)
+- Análisis de gaps vs `PipelineSankeyChartWithZoom.jsx`
+- Checklist de mejoras aplicables
+
+---
+
+## Sesión 25: Diagnóstico Pipeline en Producción (2026-03-16)
+
+### Contexto
+Primera ejecución real del pipeline completo tras levantar la app con `docker compose up -d`. Se subieron 245 PDFs de periódicos españoles (El País, El Mundo, ABC, La Razón, La Vanguardia, Expansión, etc.) de enero-marzo 2026.
+
+### Hallazgos de Diagnóstico
+
+**Pipeline activo y procesando**:
+- OCR: 25 completados, 5 en proceso, 214 pendientes (~3-5 min/PDF con OCR, <1s extracción directa)
+- Chunking: 26 completados
+- Indexing: 8 completados, 16 en proceso, 2 pendientes
+- 344 news items extraídos, 8 documentos en Qdrant (3,887 chunks)
+
+**Bug #60: OpenAI Rate Limiting (PRIORIDAD 1)**:
+- 392 news items fallaron con `429 Too Many Requests`
+- Solo 148 insights completados (27% success rate)
+- Causa raíz: sin rate limiter ni retry con backoff
+- Decisión: Implementar rate limiting + exponential backoff + resetear errores
+
+**Bug #61: Crashed Workers Loop (PRIORIDAD 2)**:
+- Scheduler detecta 2-3 "crashed workers" cada 10s
+- Recovery asigna `task_type = None` (workers fantasma)
+- 0 workers realmente asignados en `worker_tasks`
+- Causa raíz: lógica de detección no valida si el worker tiene task real
+- Decisión: Fix en detección para no marcar como crashed sin task asignado
+
+### Decisión
+- Documentar ambos bugs y priorizar: primero rate limiting (bloquea insights), luego crashed workers (ruido de logs)
+- No tocar OCR pipeline (funcionando correctamente)
+
+### Alternativas consideradas
+- Resetear todos los insights a pending sin fix de rate limit → rechazado: volvería a fallar igual
+- Reducir workers de insights a 1 → insuficiente, necesita backoff real
+
+### Riesgo
+- MEDIO: Rate limit depende del tier de la API key de OpenAI
+- BAJO: Crashed workers loop no afecta funcionalidad
+
+### Impacto en roadmap
+- REQ-014 (UX) y REQ-015 (Dashboard performance) quedan detrás de estos bugs
+- Sin insights el dashboard no puede mostrar análisis completo
 
 ---
 

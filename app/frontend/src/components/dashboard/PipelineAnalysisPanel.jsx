@@ -28,7 +28,7 @@ export function PipelineAnalysisPanel({ API_URL, token, refreshTrigger }) {
         setLoading(true);
         const response = await axios.get(`${API_URL}/api/dashboard/analysis`, {
           headers: { Authorization: `Bearer ${token}` },
-          timeout: 10000
+          timeout: 20000
         });
         setAnalysis(response.data);
         setError(null);

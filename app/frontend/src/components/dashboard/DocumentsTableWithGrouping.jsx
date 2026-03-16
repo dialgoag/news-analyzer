@@ -58,7 +58,7 @@ export function DocumentsTable({ API_URL, token, refreshTrigger }) {
           `${API_URL}/api/documents/status`,
           {
             headers: { Authorization: `Bearer ${token}` },
-            timeout: 5000
+            timeout: 15000
           }
         );
         setDocuments(response.data || []);
@@ -74,7 +74,7 @@ export function DocumentsTable({ API_URL, token, refreshTrigger }) {
     };
 
     fetchDocuments();
-    const interval = setInterval(fetchDocuments, 5000);
+    const interval = setInterval(fetchDocuments, 15000);
     return () => clearInterval(interval);
   }, [API_URL, token, refreshTrigger]);
 

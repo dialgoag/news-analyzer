@@ -2,16 +2,59 @@
 
 > Plan detallado, timeline, checklist de verificación
 > 
-> **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo actualizado a 2026-03-15 con todos los fixes y optimizaciones.
+> **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo actualizado a 2026-03-16 con todos los fixes y optimizaciones.
 >
-> **📋 ÚLTIMO**: Frontend modular recuperado desde source map + CSS extraído del bundle de producción (Sesión 2026-03-15)
+> **📋 ÚLTIMO**: App levantada en producción local. Pipeline activo procesando 245 PDFs. 2 bugs detectados: rate limit OpenAI + crashed workers loop.
 
-**Última actualización**: 2026-03-15  
-**Versión**: 3.0 (Frontend modular recuperado + Docker unificado + Recovery automática)
+**Última actualización**: 2026-03-16  
+**Versión**: 3.0.2 (Pipeline en producción + Diagnóstico)
+
+---
+
+## 🔥 PRIORIDADES ACTUALES (2026-03-16)
+
+### PRIORIDAD 1: REQ-017 — Rate Limit OpenAI (Fix #63) ✅
+**Estado**: IMPLEMENTADO — Pendiente deploy + reset de 392 items
+**Solución aplicada** (Enfoque C):
+1. ✅ `RateLimitError` + quick retry (2s) en `rag_pipeline.py`
+2. ✅ `_handle_insights_task` re-encola 429 como `pending` (no `error`)
+3. ✅ `worker_pool.py` limita insights a `INSIGHTS_PARALLEL_WORKERS` (default 3)
+4. ⏳ Post-deploy: `UPDATE news_item_insights SET status='pending', error_message=NULL WHERE status='error' AND error_message LIKE '%429%'`
+
+### PRIORIDAD 2: REQ-018 — Crashed Workers Loop (Fix #64) ✅
+**Estado**: IMPLEMENTADO + VERIFICADO — Deploy exitoso
+**Solución aplicada**:
+1. ✅ Startup: DELETE ALL worker_tasks (todos huérfanos tras restart)
+2. ✅ PASO 0: limpia completed >1h, skip si task_type=None
+3. ✅ Verificado: 63 worker_tasks + 14 queue + 6 insights limpiados, 0 loops fantasma
+
+### PRIORIDAD 3: REQ-015 — Dashboard Performance (Fix #65) ✅
+**Estado**: IMPLEMENTADO + VERIFICADO — Cache TTL 10-15s, sin Qdrant scroll, CORS 500, polling/timeouts 15-20s. Rebuild + up; logs OK.
+
+### PRIORIDAD 4: REQ-014 — UX Dashboard 🔵
+**Estado**: PENDIENTE — Siguiente en cola
 
 ---
 
 ## ✅ COMPLETADO RECIENTEMENTE
+
+### 🎯 Sesión 26: Documentación D3-Sankey Reference (2026-03-16)
+
+#### [x] Referencia D3-Sankey extraída de fuentes oficiales (2026-03-16) - ESTABLE
+**Ubicación**: `docs/ai-lcd/02-construction/D3_SANKEY_REFERENCE.md`
+
+**Completado**:
+- ✅ API completa d3-sankey (nodos, links, alineación, sorting, extent)
+- ✅ Código `SankeyChart` component de Observable (Mike Bostock, 597 forks)
+- ✅ Ejemplo simplificado @d3/sankey/2 (295 forks)
+- ✅ Patrones D3 Graph Gallery (drag, CSS hover)
+- ✅ Análisis de gaps vs `PipelineSankeyChartWithZoom.jsx`
+- ✅ Checklist de mejoras aplicables
+- ✅ VISUAL_ANALYTICS_GUIDELINES.md §12.6 actualizado
+
+**Impacto**: Base técnica para REQ-014 (UX Dashboard)
+
+---
 
 ### 🎯 Sesión 19-Tarde: Dashboard Data Layer + Restauración (2026-03-14 10:00-10:50)
 

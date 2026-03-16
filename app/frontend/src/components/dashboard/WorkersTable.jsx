@@ -32,11 +32,11 @@ export function WorkersTable({ API_URL, token, refreshTrigger }) {
         const [workersResponse, analysisResponse] = await Promise.allSettled([
           axios.get(`${API_URL}/api/workers/status`, {
             headers: { Authorization: `Bearer ${token}` },
-            timeout: 5000
+            timeout: 15000
           }),
           axios.get(`${API_URL}/api/dashboard/analysis`, {
             headers: { Authorization: `Bearer ${token}` },
-            timeout: 5000
+            timeout: 15000
           })
         ]);
 
@@ -70,7 +70,7 @@ export function WorkersTable({ API_URL, token, refreshTrigger }) {
     };
 
     fetchWorkersStatus();
-    interval = setInterval(fetchWorkersStatus, 3000);
+    interval = setInterval(fetchWorkersStatus, 15000);
     
     return () => {
       if (interval) clearInterval(interval);

@@ -5,6 +5,7 @@ Orchestrates: Retrieval + LLM Generation with Source Attribution
 
 import json
 import logging
+import random
 import time
 from typing import List, Tuple, Dict, Optional
 import requests as _requests
@@ -149,8 +150,20 @@ def ensure_model(base_url: str, model: str):
     logger.info("=" * 70)
 
 
+class RateLimitError(Exception):
+    """Raised when OpenAI returns 429 after quick retries are exhausted.
+    This is NOT a real error — the item should be re-enqueued as pending."""
+
+    def __init__(self, message: str, retry_after: float = 0):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class OpenAIChatClient:
     """OpenAI-compatible API client. Works with OpenAI, Azure, and compatible APIs."""
+
+    QUICK_RETRIES = 1
+    QUICK_RETRY_BASE_WAIT = 2.0
 
     def __init__(self, model: str, api_key: str, temperature: float = 0.0,
                  timeout: int = 120, base_url: str = "https://api.openai.com/v1"):
@@ -169,17 +182,34 @@ class OpenAIChatClient:
         return self.invoke(prompt)
 
     def invoke(self, prompt: str) -> str:
-        resp = self._session.post(
-            f"{self.base_url}/chat/completions",
-            json={
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": self.temperature,
-            },
-            timeout=self.timeout,
+        last_exc = None
+        for attempt in range(1 + self.QUICK_RETRIES):
+            resp = self._session.post(
+                f"{self.base_url}/chat/completions",
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": self.temperature,
+                },
+                timeout=self.timeout,
+            )
+            if resp.status_code != 429:
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]["content"]
+
+            retry_after = float(resp.headers.get("Retry-After", 0))
+            last_exc = resp
+            if attempt < self.QUICK_RETRIES:
+                wait = self.QUICK_RETRY_BASE_WAIT * (2 ** attempt) + random.uniform(0, 1)
+                logger.warning(
+                    f"OpenAI 429 — quick retry {attempt + 1}/{self.QUICK_RETRIES} in {wait:.1f}s"
+                )
+                time.sleep(wait)
+
+        raise RateLimitError(
+            f"OpenAI 429 after {1 + self.QUICK_RETRIES} attempts",
+            retry_after=retry_after,
         )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
 
 
 class OllamaChatDirect:
