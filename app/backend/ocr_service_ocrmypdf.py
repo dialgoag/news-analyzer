@@ -146,12 +146,11 @@ class OCRServiceOCRmyPDF:
                     error_detail=error_detail[:500]  # Limitar tamaño
                 )
                 
-                return ""
+                raise ValueError(f"OCRmyPDF failed ({response.status_code}): {error_detail}")
                 
         except requests.exceptions.Timeout:
-            logger.error(
-                f"⏱️ Timeout after {timeout}s ({timeout/60:.1f}min) for {filename} ({size_mb:.1f}MB)"
-            )
+            msg = f"Timeout after {timeout}s ({timeout/60:.1f}min) for {filename}"
+            logger.error(f"⏱️ {msg}")
             
             # Registrar timeout en DB
             self._log_to_db(
@@ -164,7 +163,7 @@ class OCRServiceOCRmyPDF:
                 error_detail=f"Exceeded {timeout}s timeout"
             )
             
-            return ""
+            raise ValueError(msg)
             
         except requests.exceptions.ConnectionError as e:
             logger.error(f"🔌 Connection error: {e}")
@@ -180,7 +179,7 @@ class OCRServiceOCRmyPDF:
                 error_detail=str(e)[:500]
             )
             
-            return ""
+            raise ValueError(f"Connection error: {e}")
             
         except Exception as e:
             logger.error(f"❌ Error: {type(e).__name__}: {str(e)}")
@@ -196,7 +195,7 @@ class OCRServiceOCRmyPDF:
                 error_detail=str(e)[:500]
             )
             
-            return ""
+            raise ValueError(f"{type(e).__name__}: {str(e)}")
     
     def _log_to_db(self, filename: str, file_size_mb: float, success: bool,
                    processing_time_sec: float = None, timeout_used_sec: int = None,

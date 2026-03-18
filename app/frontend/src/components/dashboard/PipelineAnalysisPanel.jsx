@@ -7,13 +7,16 @@
 
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import { API_TIMEOUT_MS } from '../../config/apiConfig';
 import './PipelineAnalysisPanel.css';
 
 const stageColors = {
+  upload: '#f59e0b',
   ocr: '#3b82f6',
   chunking: '#8b5cf6',
   indexing: '#ec4899',
-  insights: '#10b981'
+  insights: '#10b981',
+  'indexing insights': '#06b6d4'
 };
 
 export function PipelineAnalysisPanel({ API_URL, token, refreshTrigger }) {
@@ -28,7 +31,7 @@ export function PipelineAnalysisPanel({ API_URL, token, refreshTrigger }) {
         setLoading(true);
         const response = await axios.get(`${API_URL}/api/dashboard/analysis`, {
           headers: { Authorization: `Bearer ${token}` },
-          timeout: 20000
+          timeout: API_TIMEOUT_MS
         });
         setAnalysis(response.data);
         setError(null);
@@ -82,7 +85,8 @@ export function PipelineAnalysisPanel({ API_URL, token, refreshTrigger }) {
         {stages.map((stage, index) => {
           const isBlocked = stage.blockers && stage.blockers.length > 0;
           const hasReady = stage.ready_for_next > 0;
-          const totalTasks = stage.pending_tasks + stage.processing_tasks + stage.completed_tasks;
+          const errorTasks = stage.error_tasks ?? 0;
+          const totalTasks = stage.pending_tasks + stage.processing_tasks + stage.completed_tasks + errorTasks;
           const completionPercent = totalTasks > 0 
             ? Math.round((stage.completed_tasks / totalTasks) * 100) 
             : 0;
@@ -126,6 +130,28 @@ export function PipelineAnalysisPanel({ API_URL, token, refreshTrigger }) {
                     <span className="stat-label">Completados</span>
                     <span className="stat-value completed">{stage.completed_tasks}</span>
                   </div>
+                  <div className="stat-item">
+                    <span className="stat-label">Errores</span>
+                    <span className="stat-value error">❌ {stage.error_tasks ?? 0}</span>
+                  </div>
+                  {stage.paused_tasks != null && stage.paused_tasks > 0 && (
+                    <div className="stat-item">
+                      <span className="stat-label">Pausados</span>
+                      <span className="stat-value paused">⏸️ {stage.paused_tasks}</span>
+                    </div>
+                  )}
+                  {stage.granularity === 'news_item' && (stage.docs_with_all_insights_done != null || stage.docs_with_pending_insights != null) && (
+                    <div className="stat-item stat-hint" title="Vista documento: 1 doc → N news_items → N insights">
+                      <span className="stat-label">Docs</span>
+                      <span className="stat-value">✓{(stage.docs_with_all_insights_done ?? 0)} ⏳{(stage.docs_with_pending_insights ?? 0)}</span>
+                    </div>
+                  )}
+                  {stage.granularity === 'document' && (stage.total_chunks > 0 || stage.news_items_count > 0) && (
+                    <div className="stat-item stat-hint" title="Por documento; chunks internos por news_item">
+                      <span className="stat-label">Chunks/News</span>
+                      <span className="stat-value">{stage.total_chunks ?? 0} / {(stage.news_items_count ?? 0)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 

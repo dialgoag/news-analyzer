@@ -344,17 +344,24 @@ class DocumentStatusStore:
         num_chunks: Optional[int] = None,
         news_date: Optional[str] = None,
         processing_stage: Optional[str] = None,
+        clear_indexed_at: bool = False,
+        clear_error_message: bool = False,
     ) -> bool:
-        """Update status for a document. processing_stage: 'ocr' | 'chunking' | 'indexing' (solo si status=processing)."""
+        """Update status for a document. processing_stage: 'ocr' | 'chunking' | 'indexing' (solo si status=processing).
+        clear_indexed_at/clear_error_message=True sets column to NULL."""
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
             updates = ["status = %s"]
             args = [status]
-            if indexed_at is not None:
+            if clear_indexed_at:
+                updates.append("indexed_at = NULL")
+            elif indexed_at is not None:
                 updates.append("indexed_at = %s")
                 args.append(indexed_at)
-            if error_message is not None:
+            if clear_error_message:
+                updates.append("error_message = NULL")
+            elif error_message is not None:
                 updates.append("error_message = %s")
                 args.append(error_message)
             if num_chunks is not None:
@@ -460,10 +467,11 @@ class DocumentStatusStore:
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
-            row = cursor.execute(
+            cursor.execute(
                 "SELECT * FROM document_status WHERE document_id = %s",
                 (document_id,),
-            ).fetchone()
+            )
+            row = cursor.fetchone()
             return dict(row) if row else None
         finally:
             conn.close()
@@ -510,20 +518,19 @@ class DocumentStatusStore:
             conn.close()
 
     def get_pending_documents(self, limit: int = 2) -> List[tuple]:
-        """Get next documents in 'processing' status for OCR queue (oldest first).
+        """Get next documents in upload_done/ocr_pending for OCR queue (oldest first).
         
         Returns list of tuples: (document_id, file_path, filename)
         """
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
-            # Construct file path based on UPLOAD_DIR (assuming documents are in uploads dir)
             import os
             from pathlib import Path
             
             cursor.execute(
                 """SELECT document_id, filename, ingested_at FROM document_status
-                   WHERE status = 'processing' ORDER BY ingested_at ASC LIMIT %s""",
+                   WHERE status IN ('upload_done', 'ocr_pending') ORDER BY ingested_at ASC LIMIT %s""",
                 (limit,),
             )
             rows = cursor.fetchall()
@@ -542,18 +549,18 @@ class DocumentStatusStore:
             conn.close()
 
     def get_recovery_queue(self) -> List[Dict]:
-        """Get documents that need recovery (incomplete processing).
+        """Get documents that need recovery (stuck in *_processing > 5 min).
         
-        Returns list of dicts with: {document_id, filename, last_completed_step, next_step}
+        Returns list of dicts with: {document_id, filename, status, indexed_at}
         """
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
-            # Find documents that are stuck in 'processing' status
+            # DocStatus schema: ocr_processing, chunking_processing, indexing_processing
             cursor.execute("""
                 SELECT document_id, filename, status, indexed_at
                 FROM document_status
-                WHERE status IN ('processing', 'queued')
+                WHERE status IN ('ocr_processing', 'chunking_processing', 'indexing_processing')
                 AND ingested_at < NOW() - INTERVAL '5 minutes'
                 ORDER BY ingested_at ASC
             """)
@@ -657,12 +664,16 @@ class ProcessingQueueStore:
                 conn.rollback()
                 return False
             
-            # Safe to assign this document to the worker (atomic INSERT)
+            # Safe to assign this document to the worker (atomic INSERT; ON CONFLICT for retries)
+            now_iso = datetime.utcnow().isoformat()
             cursor.execute("""
                 INSERT INTO worker_tasks
-                (worker_id, worker_type, document_id, task_type, status, assigned_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (worker_id, worker_type, document_id, task_type, 'assigned', datetime.utcnow().isoformat()))
+                (worker_id, worker_type, document_id, task_type, status, assigned_at, error_message, completed_at)
+                VALUES (%s, %s, %s, %s, 'assigned', %s, NULL, NULL)
+                ON CONFLICT (worker_id, document_id, task_type) DO UPDATE SET
+                    status = 'assigned', assigned_at = EXCLUDED.assigned_at,
+                    error_message = NULL, completed_at = NULL, started_at = NULL
+            """, (worker_id, worker_type, document_id, task_type, now_iso))
             conn.commit()
             return True
         except Exception as e:
@@ -709,6 +720,8 @@ class ProcessingQueueStore:
     
     def get_free_worker_slot(self) -> bool:
         """Check if there's a free worker slot available."""
+        import os
+        max_workers = int(os.getenv("PIPELINE_WORKERS_COUNT", "25"))
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
@@ -718,8 +731,7 @@ class ProcessingQueueStore:
                 WHERE status IN ('assigned', 'started')
             """)
             active_count = cursor.fetchone()['active']
-            # Can be adjusted based on actual worker count
-            return active_count < 4  # Max 4 concurrent workers
+            return active_count < max_workers
         finally:
             conn.close()
 
@@ -1205,6 +1217,7 @@ class NewsItemInsightsStore:
     STATUS_PENDING = "pending"
     STATUS_QUEUED = "queued"
     STATUS_GENERATING = "generating"
+    STATUS_INDEXING = "indexing"
     STATUS_DONE = "done"
     STATUS_ERROR = "error"
 
@@ -1277,6 +1290,7 @@ class NewsItemInsightsStore:
         status: str,
         content: Optional[str] = None,
         error_message: Optional[str] = None,
+        llm_source: Optional[str] = None,
     ) -> bool:
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -1290,6 +1304,9 @@ class NewsItemInsightsStore:
             if error_message is not None:
                 updates.append("error_message = %s")
                 args.append(error_message)
+            if llm_source is not None:
+                updates.append("llm_source = %s")
+                args.append(llm_source)
             args.append(news_item_id)
             cursor.execute(
                 f"UPDATE news_item_insights SET {', '.join(updates)} WHERE news_item_id = %s",
@@ -1300,16 +1317,54 @@ class NewsItemInsightsStore:
         finally:
             conn.close()
 
+    def set_indexed_in_qdrant(self, news_item_id: str) -> bool:
+        """Mark insight as indexed in Qdrant."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE news_item_insights SET indexed_in_qdrant_at = NOW(), status = %s, updated_at = NOW() WHERE news_item_id = %s",
+                (self.STATUS_DONE, news_item_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def claim_one_for_indexing(self) -> Optional[Dict]:
+        """Atomically claim one insight (status=done, indexed_in_qdrant_at IS NULL) for indexing. Sets status=indexing."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                UPDATE news_item_insights
+                SET status = %s, updated_at = NOW()
+                WHERE news_item_id = (
+                    SELECT news_item_id FROM news_item_insights
+                    WHERE status = %s AND content IS NOT NULL AND indexed_in_qdrant_at IS NULL
+                    ORDER BY news_item_id ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                )
+                RETURNING news_item_id, document_id, filename, title, content
+            """, (self.STATUS_INDEXING, self.STATUS_DONE))
+            row = cursor.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def get_by_news_item_id(self, news_item_id: str) -> Optional[Dict]:
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
-            row = cursor.execute(
+            cursor.execute(
                 """SELECT news_item_id, document_id, filename, item_index, title, status, content, error_message,
-                          text_hash, created_at, updated_at
+                          text_hash, llm_source, created_at, updated_at
                    FROM news_item_insights WHERE news_item_id = %s""",
                 (news_item_id,),
-            ).fetchone()
+            )
+            row = cursor.fetchone()
             return dict(row) if row else None
         finally:
             conn.close()
@@ -1319,7 +1374,7 @@ class NewsItemInsightsStore:
         cursor = conn.cursor()
         try:
             cursor.execute(
-                """SELECT news_item_id, document_id, filename, item_index, title, status, error_message, created_at, updated_at
+                """SELECT news_item_id, document_id, filename, item_index, title, status, error_message, llm_source, created_at, updated_at
                    FROM news_item_insights WHERE document_id = %s ORDER BY item_index ASC LIMIT %s""",
                 (document_id, limit),
             )
@@ -1335,7 +1390,7 @@ class NewsItemInsightsStore:
         cursor = conn.cursor()
         try:
             cursor.execute(
-                """SELECT news_item_id, content, updated_at, created_at
+                """SELECT news_item_id, content, llm_source, updated_at, created_at
                    FROM news_item_insights
                    WHERE text_hash = %s AND status = %s
                    ORDER BY updated_at DESC NULLS LAST, created_at DESC

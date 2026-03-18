@@ -7,6 +7,7 @@
 
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import { API_TIMEOUT_MS, API_TIMEOUT_ACTION_MS } from '../../config/apiConfig';
 import './StuckWorkersPanel.css';
 
 export function StuckWorkersPanel({ API_URL, token, refreshTrigger }) {
@@ -22,7 +23,7 @@ export function StuckWorkersPanel({ API_URL, token, refreshTrigger }) {
         setLoading(true);
         const response = await axios.get(`${API_URL}/api/dashboard/analysis`, {
           headers: { Authorization: `Bearer ${token}` },
-          timeout: 20000
+          timeout: API_TIMEOUT_MS
         });
         setAnalysis(response.data);
         setError(null);
@@ -53,7 +54,7 @@ export function StuckWorkersPanel({ API_URL, token, refreshTrigger }) {
         {},
         {
           headers: { Authorization: `Bearer ${token}` },
-          timeout: 30000
+          timeout: API_TIMEOUT_ACTION_MS
         }
       );
 
@@ -64,8 +65,10 @@ export function StuckWorkersPanel({ API_URL, token, refreshTrigger }) {
         window.location.reload();
       }, 1000);
     } catch (err) {
+      const detail = err.response?.data?.detail;
+      const msg = typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.join('; ') : JSON.stringify(detail ?? err.message);
       console.error('Error canceling worker:', err);
-      alert(`❌ Error al cancelar worker: ${err.response?.data?.detail || err.message}`);
+      alert(`❌ Error al cancelar worker: ${msg}`);
     } finally {
       setCanceling(prev => {
         const next = new Set(prev);

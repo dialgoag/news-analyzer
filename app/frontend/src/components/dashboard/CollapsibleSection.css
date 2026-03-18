@@ -1,0 +1,59 @@
+.collapsible-section {
+  margin-bottom: 8px;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.collapsible-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #1e293b;
+  cursor: pointer;
+  user-select: none;
+}
+
+.collapsible-section-header:hover {
+  background: #334155;
+}
+
+.collapse-icon {
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+.section-title {
+  flex: 1;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.section-badge {
+  font-size: 0.75rem;
+  color: #f59e0b;
+}
+
+.collapsible-section-content {
+  padding: 12px;
+  background: #0f172a;
+  min-height: 0;
+}
+
+/* When inside visualizations-grid or tables-grid-collapsible, fill the cell */
+.visualizations-grid .collapsible-section,
+.tables-grid-collapsible .collapsible-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.visualizations-grid .collapsible-section-content,
+.tables-grid-collapsible .collapsible-section-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}

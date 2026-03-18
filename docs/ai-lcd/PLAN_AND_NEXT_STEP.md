@@ -2,12 +2,12 @@
 
 > Plan detallado, timeline, checklist de verificación
 > 
-> **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo actualizado a 2026-03-16 con todos los fixes y optimizaciones.
+> **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> **📋 ÚLTIMO**: App levantada en producción local. Pipeline activo procesando 245 PDFs. 2 bugs detectados: rate limit OpenAI + crashed workers loop.
+> **📋 ÚLTIMO**: Fix #94 (Errores de Insights en análisis y retry) — insights visibles y reintentables desde dashboard.
 
-**Última actualización**: 2026-03-16  
-**Versión**: 3.0.2 (Pipeline en producción + Diagnóstico)
+**Última actualización**: 2026-03-18  
+**Versión**: 3.0.10 (Insights en error analysis + retry)
 
 ---
 
@@ -32,11 +32,86 @@
 **Estado**: IMPLEMENTADO + VERIFICADO — Cache TTL 10-15s, sin Qdrant scroll, CORS 500, polling/timeouts 15-20s. Rebuild + up; logs OK.
 
 ### PRIORIDAD 4: REQ-014 — UX Dashboard 🔵
-**Estado**: PENDIENTE — Siguiente en cola
+**Estado**: EN PROGRESO — Fix #76–83 aplicados (Upload/OCR, requeue, scheduler, Zoom Sankey, Upload inbox, colapsables)  
+**Doc frontend**: `docs/ai-lcd/02-construction/FRONTEND_DASHBOARD_API.md` (API contract, granularidad, IDs)  
+**Aplicar**: `cd app && docker compose build --no-cache backend frontend && docker compose up -d`
+
+### PRIORIDAD 5: Coherencia + Indexing (Fix #66, #67, #68) ✅
+**Estado**: IMPLEMENTADO + VERIFICADO (2026-03-17)
+- Fix #66: Huérfanos — startup recovery verificado
+- Fix #67: Coherencia totales dashboard (document_status fuente)
+- Fix #68: Indexing performance (batch 4, workers 8)
+
+### PRIORIDAD 6: Huérfanos runtime (Fix #69) ✅
+**Estado**: IMPLEMENTADO (2026-03-17)
+- Excluir insights del reset (document_id mismatch)
+- Guardia orphans > 20 → log ERROR
+
+### PRIORIDAD 7: REQ-014.5 Insights pipeline (Fix #70) ✅
+**Estado**: IMPLEMENTADO (2026-03-17)
+- Revisión pipeline + INSIGHTS_PIPELINE_REVIEW.md
+- Dashboard: summary + analysis con INNER JOIN news_items
+- Workers insights: filename desde news_item_insights
+
+### PRIORIDAD 8: Pipeline completa + doc frontend (Fix #71) ✅
+**Estado**: IMPLEMENTADO (2026-03-17)
+- PASO 0: crashed insights → news_item_insights generating→pending
+- PIPELINE_FULL_AUDIT.md
+- **FRONTEND_DASHBOARD_API.md** — API contract, granularidad, IDs para REQ-014
+
+### PRIORIDAD 9: Qdrant Docker (Fix #74) ✅
+**Estado**: IMPLEMENTADO (2026-03-17)
+- Límites memoria 4G; MAX_SEARCH_REQUESTS=100
+- Healthcheck omitido (imagen mínima sin wget/curl)
+
+---
+
+## 📋 IMPROVEMENTS PENDIENTES
+
+> **Fuente única**: `PENDING_BACKLOG.md` (no hay listas paralelas)
+
+| # | Mejora | Prioridad | Esfuerzo |
+|---|--------|-----------|----------|
+| 1 | ~~Cache/batch chunks~~ → **scroll_filter** ✅ — Qdrant Filter+MatchAny server-side (Fix #75) | — | — |
+| 2 | ~~Recovery para insights~~ ✅ — Inferir task_type=insights cuando doc_id=insight_* (Fix #75) | — | — |
+| 3 | ~~GPU para embeddings~~ ✅ — backend/Dockerfile CUDA + EMBEDDING_DEVICE (Fix #75) | — | — |
+| 4 | ~~**REQ-014.4 Zoom semántico**~~ ✅ — 3 niveles drill-down en Sankey (Fix #82) | — | — |
+| 5 | ~~**PEND-001**~~ — Insights vectorizados en Qdrant ✅ (2026-03-16) | — | — |
+| 6 | ~~**PEND-008**~~ — Workers vs processing (worker_tasks atómico) ✅ (2026-03-17) | — | — |
+| 7 | **PEND-002** — Botón Reindex en Dashboard | Media | Bajo |
+| 8 | **PEND-006** — Coherencia totales Insights (error_tasks) | Media | Bajo |
+| 9 | **PEND-007** — Coherencia totales Upload (semántica total) | Media | Bajo |
+| 10 | **PEND-004** — Qdrant healthcheck | Baja | Bajo |
+| 11 | **PEND-005** — Verificar llm_source en endpoints insights | Baja | Muy bajo |
+| 12 | **PEND-009** — Refactor Backend SOLID / Single Responsibility | Media | Alto |
+
+---
+
+## 🔄 REBUILD Y VERIFICACIÓN (2026-03-18)
+
+```bash
+cd app && docker compose up -d --build backend frontend
+```
+
+**Checklist post-rebuild**:
+- [ ] Dashboard carga sin errores
+- [ ] Sección Errores expandida por defecto; muestra grupos de error (incl. stage="insights")
+- [ ] Errores de Insights visibles cuando news_item_insights tiene status='error'
+- [ ] Botón "Reintentar todos los errores" visible cuando hay errores
+- [ ] Botón "Reintentar este grupo" por cada grupo (excepto Shutdown ordenado)
+- [ ] Click retry → 200 OK (no 422); alert con retried_count
+- [ ] Pipeline: cada etapa muestra fila "Errores" (❌ N)
+- [ ] Totales cuadran: pending + processing + completed + error por etapa
+- [ ] Bloqueos: 0 cuando etapas completas (no falsos positivos)
+- [ ] Pending: cola real (0 si no hay tareas en processing_queue)
 
 ---
 
 ## ✅ COMPLETADO RECIENTEMENTE
+
+### 🎯 Sesión 40: Dashboard errores + retry (2026-03-18)
+- Fix #92: Retry desde document_status; retry por stage (OCR/Chunking/Indexing)
+- error_tasks en todas las etapas; UI retry funcional; fix 422
 
 ### 🎯 Sesión 26: Documentación D3-Sankey Reference (2026-03-16)
 

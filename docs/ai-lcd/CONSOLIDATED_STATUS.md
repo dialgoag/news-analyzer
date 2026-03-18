@@ -1,9 +1,421 @@
-# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-16
+# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-18
 
-> **Versión definitiva post-sesión**: Rate limit OpenAI resuelto, insights re-enqueue automático
+> **Versión definitiva**: Fix #94 Errores de Insights en análisis y retry.
 
-**Última actualización**: 2026-03-16  
-**Prioridad**: Fix #65 (Dashboard Performance) → REQ-014 (UX Dashboard)
+**Última actualización**: 2026-03-18  
+**Prioridad**: REQ-014 (UX Dashboard) — ver FRONTEND_DASHBOARD_API.md
+
+---
+
+## Aplicar cambios
+
+```bash
+cd app && docker compose up -d --build backend frontend
+```
+
+### 94. Errores de Insights en Análisis y Retry ✅
+**Fecha**: 2026-03-18
+**Ubicación**: `backend/app.py` (get_dashboard_analysis, retry_error_workers)
+**Problema**: Errores de Insights (news_item_insights con status='error') no aparecían en la sección "Análisis de Errores" ni podían reintentarse. El análisis solo consultaba document_status.
+**Solución**:
+- **Análisis**: Query adicional a `news_item_insights WHERE status='error'`; grupos con stage="insights", document_ids como `insight_{news_item_id}`; total_errors incluye insights.
+- **Retry**: Soporte para IDs con prefijo `insight_`; separar doc_ids vs insight_ids; para insights: `set_status(news_item_id, STATUS_PENDING, error_message=None)`; worker pool los recoge en siguiente poll.
+- **can_auto_fix**: 429/rate limit, timeout, connection, errores genéricos LLM → True; "No chunks" → False.
+**Impacto**: Errores de Insights visibles y reintentables desde dashboard
+**⚠️ NO rompe**: Pipeline ✅, Retry documentos ✅, Dashboard ✅
+
+---
+
+### 93. Fix: Duplicate key worker_tasks en retry + Mensajes OCR ✅
+**Fecha**: 2026-03-18
+**Ubicación**: `worker_pool.py`, `database.py`, `ocr_service_ocrmypdf.py`, `app.py` (can_auto_fix)
+**Problema**:
+1. Retry fallaba con `duplicate key value violates unique constraint "worker_tasks_worker_id_document_id_task_type_key"` — mismo worker reintentaba mismo doc y el INSERT chocaba con fila existente (status=error).
+2. Errores OCR genéricos ("OCR returned empty text") ocultaban causa real (ej. "Only PDF files are supported", timeout, connection).
+**Solución**:
+- **worker_tasks**: INSERT con `ON CONFLICT (worker_id, document_id, task_type) DO UPDATE SET status='assigned', error_message=NULL, ...` en worker_pool.py (pipeline, insights, indexing_insights) y database.py (assign_worker).
+- **OCR**: ocr_service_ocrmypdf raise ValueError con mensaje real en lugar de return ""; app.py can_auto_fix: "OCRmyPDF failed", "Connection error"; exclusión "Only PDF files are supported" (no retryable).
+**Impacto**: Retry sin errores de duplicate key; errores OCR informativos en dashboard
+**⚠️ NO rompe**: Pipeline ✅, Retry ✅, Dashboard ✅
+
+---
+
+### 92. Dashboard: Errores + Retry UI + Retry por stage ✅
+**Fecha**: 2026-03-18
+**Ubicación**: `backend/app.py` (retry_error_workers, error analysis, dashboard stages), `frontend/ErrorAnalysisPanel.jsx`, `PipelineAnalysisPanel.jsx`, `PipelineDashboard.jsx`
+**Problema**:
+1. Retry usaba worker_tasks (24h) → no encontraba todos los errores.
+2. Retry por stage incorrecto: docs con error en Chunking se reintentaban como Indexing (si tenían ocr_text).
+3. "Server disconnected" en Chunking no tenía can_auto_fix → botón no aparecía.
+4. Sección Errores colapsada por defecto; botón "Reintentar" retornaba 422.
+5. Error groups limitaban document_ids a 10 → retry por grupo incompleto.
+**Solución**:
+- **Retry**: Fuente document_status (todos los errores); sin límite 24h.
+- **Retry por stage**: `processing_stage` determina qué reintentar: ocr/upload → OCR; chunking → Chunking; indexing → Indexing.
+- **can_auto_fix**: Añadidos "Server disconnected", "Connection aborted", "RemoteDisconnected".
+- **UI**: Sección Errores expandida; botón "Reintentar todos"; botón "Reintentar este grupo" por grupo.
+- **422 fix**: Endpoint usa `Request` + `await request.json()` en lugar de Body/Pydantic.
+- **document_ids**: ARRAY_AGG sin límite para retry por grupo completo.
+**Impacto**: Retry funcional desde UI; todos los errores reintentables; stage correcto por doc
+**⚠️ NO rompe**: Pipeline ✅, Retry ✅, Dashboard ✅
+
+**Incluye**: error_tasks en todas las etapas (Upload, OCR, Chunking, Indexing, Insights); fila "Errores" en PipelineAnalysisPanel; totales cuadran.
+
+---
+
+### 91. Fix: Indexing tasks pendientes no creadas + Bloqueos falsos + Pending falso ✅
+**Fecha**: 2026-03-18
+**Ubicación**: `backend/app.py` (scheduler PASO 3, dashboard analysis blockers, pending_tasks)
+**Problema**:
+1. **Indexing pendientes**: Scheduler solo buscaba docs con `processing_stage=chunking` y `status=chunking_done`. Docs con `status=indexing_pending` (recovery/rollback) o con `processing_stage` NULL nunca recibían tarea.
+2. **Bloqueos falsos**: OCR/Chunking/Indexing mostraban "3 Bloqueos" cuando las etapas estaban completas.
+3. **Pending falso**: Fórmula `total - completed - processing` contaba docs en ERROR como "pending" (ej. 8 docs con "OCR returned empty text" aparecían como "7 pending" en Indexing). No había tareas reales en processing_queue.
+**Solución**:
+- **Scheduler**: Query ampliada a `status IN (chunking_done, indexing_pending)` sin exigir `processing_stage`.
+- **Bloqueos**: Solo añadir blocker cuando la etapa siguiente tiene pending/processing Y la actual no produce.
+- **Pending**: Usar `processing_queue.pending` (cola real) en lugar de `total - completed - processing` para OCR, Chunking, Indexing.
+**Impacto**: Pending refleja tareas reales; docs en error no se cuentan como pendientes
+**⚠️ NO rompe**: Pipeline ✅, Dashboard ✅
+
+---
+
+### 90. Fix: Errores yoyo en logs PostgreSQL ✅
+**Fecha**: 2026-03-18
+**Ubicación**: `backend/migration_runner.py`
+**Problema**: PostgreSQL registraba ERROR en cada arranque: `yoyo_lock already exists`, `yoyo_tmp_* does not exist` (yoyo-migrations usa CREATE/DROP sin IF EXISTS).
+**Solución**: Monkey-patch de `create_lock_table` y `_check_transactional_ddl` para usar `CREATE TABLE IF NOT EXISTS` y `DROP TABLE IF EXISTS`.
+**Impacto**: Logs PostgreSQL limpios en arranque
+**⚠️ NO rompe**: Migraciones ✅, Pipeline ✅
+
+**Verificación post-rebuild**:
+- [ ] Dashboard carga sin errores
+- [ ] Upload > 0 si hay archivos en inbox
+- [ ] Secciones Errores, Análisis, Workers Stuck, DB, Sankey, Workers, Documentos — todas colapsables
+- [ ] Sankey: click etapa → drill-down; click doc → flujo individual
+
+---
+
+### 89. worker_tasks insert atómico (PEND-008) ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `worker_pool.py`, `app.py` § detect_crashed_workers
+**Problema**: Insert en worker_tasks era non-fatal; si fallaba, el worker procesaba pero no quedaba registro → gráfica subcontaba vs pipeline.
+**Solución**:
+- **indexing_insights**: claim (UPDATE) + insert en misma transacción; si insert falla → rollback.
+- **insights, ocr/chunking/indexing**: mismo patrón — insert antes de commit; falla → rollback.
+- **Recovery**: insights con status='indexing' sin worker_tasks → reset a 'done'.
+**Impacto**: Gráfica workers y pipeline coherentes
+**⚠️ NO rompe**: Pipeline ✅, Recovery ✅
+
+---
+
+### 88. Indexing Insights como etapa de primera clase ✅
+**Fecha**: 2026-03-16
+**Ubicación**: `app.py` (dashboard analysis, workers status), `worker_pool.py`, `database.py`, `pipeline_states.py`, `PipelineAnalysisPanel.jsx`, `PipelineSankeyChartWithZoom.jsx`, `PipelineDashboard.jsx`
+**Problema**: Indexing insights era sub-paso dentro de Insights; sin estados propios, sin cola, sin recovery ni visibilidad en dashboard.
+**Solución**:
+- **Estados**: `TaskType.INDEXING_INSIGHTS`, `InsightStatus.INDEXING`; columna `indexed_in_qdrant_at`
+- **Worker pool**: claim + insert worker_tasks en misma transacción (ver §89); prioridad antes de insights
+- **Master scheduler**: `indexing_insights` en generic_task_dispatcher; recovery en detect_crashed_workers
+- **Dashboard**: stage "Indexing Insights" en `/api/dashboard/analysis`; color cyan en frontend
+- **Workers status**: type_map, filename para insight_*, pending_counts indexing_insights
+**Impacto**: Indexing insights integrado igual que OCR/Chunking/Indexing/Insights
+**⚠️ NO rompe**: OCR ✅, Insights ✅, RAG ✅
+**Verificación**: [ ] Migración 014; [ ] Dashboard muestra stage; [ ] Workers status muestra Indexing Insights
+**Vars**: `INDEXING_INSIGHTS_PARALLEL_WORKERS` (default 4). Ver `03-operations/ENVIRONMENT_CONFIGURATION.md`
+
+---
+
+### 87. PEND-001: Insights vectorizados en Qdrant ✅
+**Fecha**: 2026-03-16
+**Ubicación**: `app.py` (_index_insight_in_qdrant, _handle_insights_task, _insights_worker_task, run_news_item_insights_queue_job, _run_reindex_all), `qdrant_connector.py` (insert_insight_vector, delete_insight_by_news_item)
+**Problema**: Insights solo en DB; preguntas de alto nivel ("¿qué postura tienen los artículos?") no recuperaban bien.
+**Solución**:
+- Tras generar insight → embed(content) → insert en Qdrant con metadata content_type=insight, news_item_id, document_id, filename, text, title
+- Búsqueda RAG: chunks e insights en misma colección; search devuelve ambos por similitud
+- Reindex-all: re-indexa insights existentes tras borrar vectores
+- Delete document: borra chunks + insights (mismo document_id)
+**Impacto**: Preguntas de alto nivel mejoran; insights participan en contexto RAG
+**⚠️ NO rompe**: Pipeline ✅, Insights ✅, Reindex ✅
+**Verificación**: [ ] Generar insight → ver en Qdrant; [ ] Query "postura" → recupera insights
+
+---
+
+### 86. Workers activos: límites + visibilidad en dashboard ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `worker_pool.py`, `database.py`
+**Problema**: Menos workers activos de los esperados; pool con límites OCR=5, Insights=3 por defecto; pool workers no aparecían en worker_tasks.
+**Solución**:
+- **Límites**: OCR_PARALLEL_WORKERS, INSIGHTS_PARALLEL_WORKERS, INDEXING_INSIGHTS_PARALLEL_WORKERS, etc. (default 4 desde 2026-03-16)
+- **worker_tasks**: Pool workers insertan en worker_tasks al reclamar tarea → visibles en dashboard
+- **get_free_worker_slot**: usa PIPELINE_WORKERS_COUNT
+**Impacto**: Más workers activos; dashboard muestra todos los workers del pool
+**⚠️ NO rompe**: Pipeline ✅, Master scheduler ✅
+**Vars**: Ver `03-operations/ENVIRONMENT_CONFIGURATION.md` (fuente única)
+
+---
+
+### 85. Indexing timeout + retry mejorado ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `app.py` (requeue, retry_error_workers), `rag_pipeline.py`, `qdrant_connector.py`
+**Problema**: Docs con timeout en indexing seguían fallando al reintentar; retry hacía OCR+chunking de nuevo.
+**Solución**:
+- **Retry indexing only**: Si doc tiene ocr_text → enqueue INDEXING directo (skip OCR+chunking)
+- **requeue** y **retry_error_workers** usan esta lógica
+- **index_chunk_records**: batches de INDEXING_BATCH_SIZE (default 100) para evitar timeout
+- **Qdrant**: QDRANT_TIMEOUT_SEC (default 1200s) para docs grandes
+**Impacto**: Retry más rápido; menos timeouts en docs grandes
+**⚠️ NO rompe**: Pipeline ✅, Requeue ✅
+**Verificación**: [ ] Doc con error indexing → Retry → indexing only; [ ] Doc grande indexa en batches
+
+---
+
+### 84. 401 Unauthorized → auto-logout ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `main.jsx`, `useAuth.js`
+**Problema**: Tras rebuild del backend, tokens anteriores fallan (401) si JWT_SECRET_KEY no persiste.
+**Solución**: Interceptor axios en 401 → dispatch `auth:unauthorized`; useAuth escucha y cierra sesión.
+**Impacto**: Usuario vuelve a login en lugar de ver errores repetidos.
+**⚠️ NO rompe**: Login ✅, Dashboard ✅
+
+---
+
+### 83. Upload desde inbox + secciones colapsables ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `backend/app.py` (analysis), `PipelineDashboard.jsx`, `DatabaseStatusPanel.jsx`
+**Problema**: Upload mostraba 0 cuando había archivos en inbox; no todas las secciones eran colapsables.
+**Solución**:
+- **Upload**: total_documents = max(inbox_count, total_documents, upload_total); pending += archivos en inbox sin fila en DB
+- **Colapsables**: StuckWorkersPanel, DatabaseStatusPanel, Sankey, Workers, Documentos — todas envueltas en CollapsibleSection
+- DatabaseStatusPanel: prop `embedded` para omitir header cuando está dentro de CollapsibleSection
+**Impacto**: Upload nunca 0 si hay archivos; todas las secciones expandibles/colapsables
+**⚠️ NO rompe**: Pipeline ✅, Dashboard ✅
+**Verificación**: [ ] Archivos en inbox → Upload > 0; [ ] Todas las secciones colapsables
+
+---
+
+### 82. REQ-014.4 Zoom semántico — Drill-down Sankey 3 niveles ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `PipelineSankeyChartWithZoom.jsx`, `PipelineSankeyChart.css`
+**Problema**: Sankey solo mostraba overview; no había forma de explorar documentos por etapa.
+**Solución**:
+- **Nivel 0 (Overview)**: Click en header de etapa → Nivel 1
+- **Nivel 1 (By Stage)**: Docs en esa etapa; click en línea → Nivel 2
+- **Nivel 2 (By Document)**: Flujo individual de un doc
+- Breadcrumb `Overview › Stage › Doc` con navegación al hacer click
+- Hit areas invisibles en líneas para facilitar click
+**Impacto**: Exploración por etapa y por documento sin perder contexto
+**⚠️ NO rompe**: Sankey overview ✅, colapsar grupos ✅, filtros ✅
+**Verificación**: [ ] Click etapa → ver docs; [ ] Click doc → ver flujo; [ ] Breadcrumb navega
+
+---
+
+### 81. Scheduler: usar todo el pool de workers ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `backend/app.py`, `docker-compose.yml`
+**Problema**: Límites por tipo (OCR 3–5, Indexing 6–8) dejaban workers ociosos con trabajo pendiente.
+**Solución**:
+- task_limits: cada tipo puede usar hasta TOTAL_WORKERS si hay trabajo
+- TOTAL_WORKERS desde PIPELINE_WORKERS_COUNT
+- docker-compose: defaults 4 por tipo (ver ENVIRONMENT_CONFIGURATION.md)
+**Impacto**: Pool completo utilizado; OCR+Indexing+otros según carga
+**⚠️ NO rompe**: Pipeline ✅, Workers ✅
+**Verificación**: [ ] Rebuild; [ ] Ver workers activos con mix OCR/Indexing
+
+---
+
+### 80. Scheduler: priorizar OCR sobre Indexing ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `backend/app.py` (master_pipeline_scheduler)
+**Problema**: Tareas OCR pendientes no se veían en workers activos; solo indexing.
+**Causa**: ORDER BY priority DESC, created_at ASC → indexing (más antiguas) se asignaba antes que OCR.
+**Solución**: ORDER BY pipeline (ocr→chunking→indexing→insights), luego priority, created_at.
+**Impacto**: OCR no se mata de hambre; workers activos muestran mix correcto.
+**⚠️ NO rompe**: Pipeline ✅, Workers ✅
+
+---
+
+### 79. Fix requeue 500 — get_by_document_id + clear fields ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `database.py` (get_by_document_id, update_status), `app.py` (requeue), frontend (error msg)
+**Problema**: Cancelar/reprocesar worker → 500; "Error canceling worker: B".
+**Solución**:
+- **get_by_document_id**: cursor.execute() devuelve None en psycopg2; separar execute y fetchone()
+- **update_status**: clear_indexed_at, clear_error_message para SET col = NULL en requeue
+- **Frontend**: manejar detail como string/array en mensaje de error
+**Impacto**: Requeue funciona; mensajes de error legibles
+**⚠️ NO rompe**: Pipeline ✅, Dashboard ✅
+**Verificación**: [ ] Cancelar worker stuck; [ ] Reintentar documento con error
+
+---
+
+### 78. Migración 012 — normalizar document_status + fix get_recovery_queue ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `migrations/012_normalize_document_status.py`, `database.py`
+**Problema**: Side effects de quitar legacy — docs con status antiguo no contaban en dashboard.
+**Solución**:
+- **Migración 012**: UPDATE document_status: pending/queued→upload_pending, processing→ocr_processing, chunked→chunking_done, indexed→indexing_done
+- **get_recovery_queue**: usa ocr_processing, chunking_processing, indexing_processing
+- **get_pending_documents**: usa upload_done, ocr_pending
+**Impacto**: Un solo esquema; datos actuales normalizados; sin side effects
+**⚠️ NO rompe**: Pipeline ✅, Dashboard ✅
+**Verificación**: [ ] yoyo apply (o restart backend); [ ] Dashboard muestra datos correctos
+
+---
+
+### 77. document_id por hash — evita sobrescritura mismo nombre ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `file_ingestion_service.py` (_generate_document_id)
+**Problema**: document_id = timestamp_filename → mismo nombre + mismo segundo = colisión; sobrescribe archivo, insert falla, huérfanos en DB.
+**Solución**: document_id = file_hash (SHA256). Mismo contenido → duplicado rechazado; distinto contenido → hash distinto → sin colisión.
+**Impacto**: Sin sobrescritura; sin huérfanos; dedup por hash coherente con document_id.
+**⚠️ NO rompe**: Upload ✅, Inbox ✅, OCR ✅ (archivo sin extensión; PyMuPDF/ocrmypdf detectan por magic bytes)
+**Verificación**: [ ] Rebuild backend; [ ] Subir dos PDFs mismo nombre distinto contenido
+
+---
+
+### 76. Dashboard Upload 0 + OCR siempre pending ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `backend/app.py` (stages_analysis: Upload, OCR, Chunking, Indexing)
+**Problema**: Upload mostraba 0 en todo; OCR siempre pending (processing_queue incompleta).
+**Solución**:
+- **Upload**: Solo DocStatus.UPLOAD_* (un solo esquema, sin legacy)
+- **OCR/Chunking/Indexing**: document_status como fuente de verdad para completed; max(queue_completed, docs_con_stage_done)
+**Impacto**: Dashboard coherente; OCR pending correcto cuando processing_queue vacía
+**⚠️ NO rompe**: Pipeline ✅, Workers ✅, Summary ✅
+**Verificación**: [ ] Rebuild backend; [ ] Verificar Upload/OCR en dashboard
+
+---
+
+### 75. Improvements 1,2,3 — Qdrant filter + recovery insights + GPU ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `qdrant_connector.py`, `app.py` PASO 0, `embeddings_service.py`, `backend/Dockerfile`, `docker-compose.nvidia.yml`
+**Problema**: Scroll Qdrant O(n) por request; recovery skip insights con task_type=None; GPU no documentada.
+**Solución**:
+- **1. Qdrant scroll_filter**: get_chunks_by_document_ids y get_chunks_by_news_item_ids usan Filter+MatchAny (server-side) — O(k) no O(n)
+- **2. Recovery insights**: Si doc_id empieza con "insight_" y task_type=None → inferir task_type=insights
+- **3. GPU**: backend/Dockerfile (CUDA 12.1); EMBEDDING_DEVICE env; nvidia compose con EMBEDDING_DEVICE=cuda
+**Impacto**: Menos carga Qdrant; recovery insights correcto; GPU lista para volumen alto
+**⚠️ NO rompe**: OCR ✅, Chunking ✅, Indexing ✅, Insights ✅
+**Verificación**: [ ] Rebuild backend; [ ] Con GPU: COMPOSE_FILE=...:docker-compose.nvidia.yml up
+
+---
+
+### 74. Qdrant Docker — recursos + performance ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `app/docker-compose.yml`
+**Problema**: Qdrant sin límites de recursos ni tuning de performance.
+**Solución**:
+- `deploy.resources`: limits memory 4G, reservations 1G
+- `QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_REQUESTS`: 100
+- Healthcheck omitido (imagen mínima sin wget/curl)
+**Impacto**: Qdrant con recursos acotados; menos riesgo de OOM
+**⚠️ NO rompe**: Backend ✅, Pipeline ✅
+**Verificación**: [x] docker compose up -d OK
+
+---
+
+### 73. Dashboard granularidad coherente (chunking/indexing) ✅
+**Fecha**: 2026-03-16
+**Ubicación**: `backend/app.py` (summary, analysis), `PipelineAnalysisPanel.jsx`, `FRONTEND_DASHBOARD_API.md`
+**Problema**: Chunking/indexing sin info de chunks/news_items; granularidad incoherente vs insights.
+**Solución**:
+- Summary: chunking/indexing con `granularity: "document"`, `chunks_total`, `news_items_count`
+- Analysis stages: Chunking/Indexing con `granularity`, `total_chunks`, `news_items_count`
+- PipelineAnalysisPanel: hint "Chunks/News X / Y" para stages document
+**Impacto**: Vista coherente; chunks y news_items visibles sin cambiar pipeline
+**⚠️ NO rompe**: Dashboard ✅, Summary ✅, Analysis ✅
+**Verificación**: [ ] Rebuild backend + frontend
+
+---
+
+### 72. Timeouts parametrizables + botón Reintentar + fix retry/cancel ✅
+**Fecha**: 2026-03-16
+**Ubicación**: `app/frontend/src/config/apiConfig.js`, `PipelineDashboard.jsx`, componentes dashboard
+**Problema**: Errores de timeout (15-20s); botón Reintentar ausente en error banner; retry/requeue con timeout 10s insuficiente.
+**Solución**:
+- `apiConfig.js`: VITE_API_TIMEOUT_MS (60s default), VITE_API_TIMEOUT_ACTION_MS (90s default)
+- PipelineDashboard: botón Reintentar en error banner; fetchPipelineData como useCallback
+- Todos los componentes: usar API_TIMEOUT_MS/API_TIMEOUT_ACTION_MS en axios
+- WorkersTable: retry individual 10s→90s (API_TIMEOUT_ACTION_MS)
+**Impacto**: Menos timeouts; Reintentar funcional; retry/cancel con margen suficiente
+**⚠️ NO rompe**: Dashboard ✅, Workers ✅, StuckWorkers ✅, ErrorAnalysis ✅
+**Verificación**: [ ] Rebuild frontend; probar con VITE_API_TIMEOUT_MS=120000
+
+---
+
+### 71. Pipeline completa — auditoría + fix crashed insights + doc frontend ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `backend/app.py`, `docs/ai-lcd/02-construction/`
+**Problema**: Crashed insights workers no se recuperaban; summary/analysis filtros distintos; falta doc para frontend.
+**Solución**:
+- PASO 0: Para insights crashed, UPDATE news_item_insights generating→pending (news_item_id)
+- Summary: insights con INNER JOIN news_items (alineado con analysis)
+- Analysis: Insights stage con granularity, docs_with_all_insights_done, docs_with_pending_insights
+- **FRONTEND_DASHBOARD_API.md**: contrato API, granularidad, IDs compuestos
+**Impacto**: Insights se recuperan en runtime; docs listos para REQ-014
+**⚠️ NO rompe**: OCR ✅, Chunking ✅, Indexing ✅, Insights ✅, Dashboard ✅
+**Verificación**: [ ] Rebuild backend
+
+---
+
+### 70. REQ-014.5 Insights pipeline + dashboard ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `backend/app.py`, `docs/ai-lcd/02-construction/INSIGHTS_PIPELINE_REVIEW.md`
+**Problema**: Insights 0/0/0; descoordinación IDs (insight_{id} vs doc_id); workers insights sin filename.
+**Solución**:
+- Revisión pipeline: insights usan news_item_insights (no processing_queue); master no encola insights (correcto)
+- Dashboard: summary + analysis con INNER JOIN news_items (cadena doc→news→insight)
+- Workers status/analysis: filename para insights vía news_item_insights (document_id="insight_xxx")
+**Impacto**: Insights coherentes; workers insights muestran filename/title
+**⚠️ NO rompe**: OCR ✅, Chunking ✅, Indexing ✅, Insights ✅, Dashboard ✅
+
+---
+
+### 69. Huérfanos runtime — excluir insights + guardia loop ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `backend/app.py` líneas 690-712 (PASO 0 scheduler)
+**Problema**: Fix huérfanos podía resetear insights válidos cada ciclo (loop) — processing_queue usa doc_id, worker_tasks usa "insight_{id}".
+**Solución**:
+- Excluir insights: `AND task_type != 'insights'`
+- Guardia: si orphans_fixed > 20 en un ciclo → log ERROR (posible loop)
+**Impacto**: Sin loops; insights no afectados; OCR/chunking/indexing huérfanos se recuperan.
+**⚠️ NO rompe**: OCR ✅, Chunking ✅, Indexing ✅, Insights ✅, Dashboard ✅
+**Verificación**: [x] Revisión final; [x] Rebuild + restart backend; logs OK
+
+---
+
+### 68. Performance Indexing — batch embeddings + más workers ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `backend/embeddings_service.py`, `backend/app.py`
+**Problema**: Indexing era cuello de botella — BGE-M3 CPU batch_size=2, pocos workers.
+**Solución**:
+- BGE-M3 cpu_batch_size: 2 → 4 (~2x más rápido por doc)
+- Env override: `EMBEDDING_BATCH_SIZE_CPU`, `EMBEDDING_BATCH_SIZE_GPU` (1-32 / 1-64)
+- INDEXING_PARALLEL_WORKERS: default 6→8, max 10→12
+**Impacto**: Indexing ~2x más rápido; más docs en paralelo
+**⚠️ NO rompe**: OCR ✅, Chunking ✅, Insights ✅, Dashboard ✅
+**Verificación**: [x] Rebuild backend; logs muestran `batch: 4`; workers indexando en paralelo
+
+---
+
+### 67. Coherencia totales dashboard — document_status como fuente ✅
+**Fecha**: 2026-03-17
+**Ubicación**: `backend/app.py` — `/api/dashboard/summary`, `/api/dashboard/analysis`
+**Problema**: Totales incoherentes entre etapas (OCR 244, Chunking 245, chunking/indexing en chunks no docs).
+**Solución**:
+- Dashboard summary: chunking/indexing usan total_docs y processing_queue (docs, no chunks)
+- Pipeline analysis: total_documents por etapa; pending = total - completed - processing
+- Insights: usa news_item_insights (no processing_queue)
+**Impacto**: pending + processing + completed = total en cada etapa
+**⚠️ NO rompe**: Dashboard ✅, Pipeline ✅
+
+---
+
+### 66. Huérfanos — verificación startup recovery ✅
+**Fecha**: 2026-03-17
+**Ubicación**: Verificación (no código)
+**Problema**: Confirmar que PASO 0 + detect_crashed_workers limpian huérfanos al levantar backend.
+**Resultado**: Startup recovery borra worker_tasks, resetea processing_queue y insights generating → pending. Verificado en logs.
 
 ---
 
@@ -214,22 +626,8 @@
 - [x] 5 servicios UP y healthy
 - [x] Workers procesando normalmente
 
-### 48. Diagnóstico: Bug `LIMIT ?` en database.py — PENDIENTE FIX
-**Fecha**: 2026-03-15
-**Ubicación**: `database.py` líneas 515, 997, 1154, 1256, 1312
-**Problema**: 5 queries usan `LIMIT ?` (SQLite) con psycopg2 (PostgreSQL). Error: "not all arguments converted during string formatting"
-**Afecta**: 2 docs en `error` (06-02-26-El Pais, 03-03-26-El Pais) + cualquier llamada a `list_by_document_id()` o `get_next_pending()`
-**Fix propuesto**: `LIMIT ?` → `LIMIT %s` en 5 líneas
-**Estado**: ⏳ PENDIENTE EJECUCIÓN
-
-### 49. Diagnóstico: Indexing Worker NO indexa en Qdrant — PENDIENTE FIX
-**Fecha**: 2026-03-15
-**Ubicación**: `app.py` líneas 2570-2606 (`_handle_indexing_task`) y 2863-2958 (`_indexing_worker_task`)
-**Problema**: Ambas funciones marcan doc como `INDEXING_DONE` y encolan insights, pero NUNCA llaman a `rag_pipeline.index_chunk_records()`. Chunks no se escriben a Qdrant.
-**Afecta**: 13 docs en `indexing_done` con 557 insights "No chunks found"
-**Contraste**: `_process_document_sync` (línea 2024) SÍ indexa — los 4 docs completed pasaron por ahí
-**Fix propuesto**: Indexing worker debe leer `ocr_text` → re-chunk → `index_chunk_records()` → encolar insights
-**Estado**: ⏳ PENDIENTE EJECUCIÓN
+### 48. ~~Diagnóstico: Bug LIMIT ?~~ → Resuelto por Fix #50 ✅
+### 49. ~~Diagnóstico: Indexing Worker NO indexa~~ → Resuelto por Fix #51 ✅
 
 ### 50. Fix LIMIT ? → LIMIT %s en database.py ✅
 **Fecha**: 2026-03-15

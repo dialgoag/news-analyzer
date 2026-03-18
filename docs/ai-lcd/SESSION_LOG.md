@@ -2,8 +2,225 @@
 
 > Decisiones, cambios importantes, y contexto entre sesiones
 
-**Última actualización**: 2026-03-16  
-**Sesión**: 28 (Dashboard Performance — REQ-015)
+**Última actualización**: 2026-03-18  
+**Sesión**: 42 (Errores de Insights en análisis y retry)
+
+---
+
+## Sesión 42: Errores de Insights en análisis y retry (2026-03-18)
+
+### Cambio 1: Incluir news_item_insights en error analysis
+- **Problema**: Errores de Insights (news_item_insights status='error') no aparecían en la sección "Análisis de Errores"; solo se consultaba document_status.
+- **Decisión**: Query adicional a news_item_insights; grupos con stage="insights"; document_ids como insight_{news_item_id} para retry; total_errors incluye insights.
+- **Impacto**: Errores de Insights visibles en dashboard.
+
+### Cambio 2: Retry para insight_* IDs
+- **Problema**: retry_error_workers solo manejaba document_status; insights en error no podían reintentarse.
+- **Decisión**: Separar doc_ids vs insight_ids (prefijo "insight_"); para insights: set_status(news_item_id, STATUS_PENDING, error_message=None); worker pool los recoge en siguiente poll.
+- **Retry all**: Incluye tanto document_status como news_item_insights.
+- **Impacto**: Botón "Reintentar" funcional para insights.
+
+### Cambio 3: can_auto_fix para Insights
+- **Decisión**: 429/rate limit, timeout, connection, errores genéricos LLM → can_auto_fix=True; "No chunks" → False (verificar documento).
+
+---
+
+## Sesión 41: Fix duplicate worker_tasks + mensajes OCR (2026-03-18)
+
+### Cambio 1: ON CONFLICT en worker_tasks
+- **Problema**: Retry fallaba con duplicate key — mismo worker reintentaba mismo doc; fila (worker_id, document_id, task_type) ya existía con status=error.
+- **Decisión**: INSERT ... ON CONFLICT (worker_id, document_id, task_type) DO UPDATE SET status='assigned', error_message=NULL, ... en worker_pool.py (pipeline, insights, indexing_insights) y database.py assign_worker.
+- **Impacto**: Retry sin errores de constraint.
+
+### Cambio 2: OCR raise en lugar de return ""
+- **Problema**: "OCR returned empty text" ocultaba causa real (Only PDF files supported, timeout, connection).
+- **Decisión**: ocr_service_ocrmypdf raise ValueError con mensaje real; can_auto_fix para OCRmyPDF failed, Connection error; exclusión "Only PDF files are supported" (no retryable).
+
+---
+
+## Sesión 40: Dashboard errores, retry por stage, error_tasks (2026-03-18)
+
+### Cambio 1: Retry desde document_status
+- **Problema**: retry_error_workers usaba worker_tasks (24h) → no encontraba docs en error antiguos.
+- **Decisión**: Fuente document_status; sin límite temporal. Body: `{}` retry all, `{document_ids: [...]}` retry grupo.
+
+### Cambio 2: Retry por processing_stage
+- **Problema**: Doc con error en Chunking (Server disconnected) tenía ocr_text → retry hacía Indexing (incorrecto).
+- **Decisión**: Usar processing_stage: ocr/upload → OCR; chunking → Chunking; indexing → Indexing.
+
+### Cambio 3: error_tasks en pipeline
+- **Problema**: Totales no cuadraban; docs en error no visibles por etapa.
+- **Decisión**: Añadir error_tasks a cada stage; contar por processing_stage (document_status).
+
+### Cambio 4: UI retry + fix 422
+- **Problema**: Botón retry daba 422; sección Errores colapsada; "Server disconnected" sin botón.
+- **Decisión**: Endpoint usa Request + request.json(); Body/Pydantic causaba 422. Sección expandida; can_auto_fix para Server disconnected; botón "Reintentar todos" visible cuando hay errores.
+
+### Cambio 5: document_ids completos
+- **Problema**: ARRAY_AGG limitaba a 10 → retry por grupo incompleto.
+- **Decisión**: ARRAY_AGG sin límite para retry por grupo.
+
+---
+
+## Sesión 39: Fix errores yoyo en logs PostgreSQL (2026-03-18)
+
+### Cambio: Monkey-patch yoyo para SQL idempotente
+- **Problema**: PostgreSQL registraba ERROR en cada arranque: `yoyo_lock already exists`, `yoyo_tmp_* does not exist`.
+- **Decisión**: Parchear `create_lock_table` y `_check_transactional_ddl` en migration_runner antes de get_backend(); usar CREATE TABLE IF NOT EXISTS y DROP TABLE IF EXISTS.
+- **Alternativas**: Modificar yoyo-migrations (paquete externo) — rechazado; patch local más mantenible.
+- **Impacto**: Logs PostgreSQL limpios; migraciones funcionan igual.
+
+---
+
+## Sesión 38: Consolidación documentación (2026-03-17)
+
+### Cambio: Documentar y consolidar
+- **MIGRATIONS_SYSTEM.md**: Añadidas migraciones 011–014; referencias a migration_runner, MIGRATIONS_DIR; PostgreSQL (no SQLite).
+- **CONSOLIDATED_STATUS.md §81**: Corregido default workers (4, no 25); referencia ENVIRONMENT_CONFIGURATION.
+- **INDEX.md**: Fechas 2026-03-17; entrada "migraciones" en Búsqueda Rápida.
+- **Fuente única**: Variables → ENVIRONMENT_CONFIGURATION; migraciones → MIGRATIONS_SYSTEM; pendientes → PENDING_BACKLOG.
+
+---
+
+## Sesión 37: PEND-008 worker_tasks insert atómico (2026-03-17)
+
+### Cambio: Claim + insert en misma transacción
+- **Problema**: Insert en worker_tasks era non-fatal; si fallaba, el worker procesaba sin registro → gráfica subcontaba; límite (ej. 6) se excedía porque count en worker_tasks quedaba bajo.
+- **Decisión**: Claim (UPDATE) e insert worker_tasks en **misma transacción**. Si insert falla → rollback completo. Aplicar a indexing_insights, insights, ocr/chunking/indexing.
+- **Recovery**: Insights con status='indexing' sin worker_tasks → reset a 'done' (detect_crashed_workers).
+- **Impacto**: Gráfica workers = pipeline; límites *_PARALLEL_WORKERS respetados.
+- **Doc**: CONSOLIDATED_STATUS §89, DASHBOARD_ANALYSIS_KNOWN_ISSUES §4.
+
+---
+
+## Sesión 36: PEND-001 Insights vectorizados en Qdrant (2026-03-16)
+
+### Cambio: Indexar insights en Qdrant
+- **Decisión**: Tras generar insight (LLM), embedir contenido y insertar en Qdrant con metadata content_type=insight.
+- **Alternativas**: Colección separada — rechazado; misma colección permite búsqueda unificada por similitud.
+- **Implementación**: _index_insight_in_qdrant() en app.py; insert_insight_vector/delete_insight_by_news_item en qdrant_connector; llamadas en _handle_insights_task, _insights_worker_task, run_news_item_insights_queue_job; reindex-all re-indexa insights existentes.
+- **Impacto en roadmap**: PEND-001 completado; pipeline completo OCR→Chunking→Indexing→Insights→Indexar insights.
+
+---
+
+## Sesión 35: Upload fix + secciones colapsables (2026-03-17)
+
+### Cambio 1: Upload desde inbox + DB
+- **Problema**: Upload mostraba 0 en pipeline cuando había archivos en inbox.
+- **Decisión**: total_documents = max(inbox_count, total_documents, upload_total); pending += archivos en inbox sin fila en DB.
+- **Impacto**: Upload nunca 0 si hay archivos; datos coherentes en pipeline.
+
+### Cambio 2: Todas las secciones colapsables
+- **Problema**: StuckWorkersPanel, DatabaseStatusPanel, Sankey, Tablas no eran colapsables.
+- **Decisión**: Envolver todas en CollapsibleSection; Tablas dividida en Workers + Documentos.
+- **DatabaseStatusPanel**: prop `embedded` para omitir header cuando está dentro de CollapsibleSection.
+- **Impacto**: UX consistente; usuario puede colapsar cualquier sección.
+
+---
+
+## Sesión 34: REQ-014.4 Zoom semántico — Drill-down Sankey 3 niveles (2026-03-17)
+
+### Cambio: Drill-down en Sankey
+- **Decisión**: Implementar 3 niveles: Overview (click etapa) → By Stage (click doc) → By Document.
+- **Alternativas**: Solo filtro por etapa — rechazado; drill-down mantiene contexto.
+- **Implementación**: Breadcrumb Overview › Stage › Doc; headers de etapa clickables; líneas con hit area invisible; displayedDocuments según zoomLevel.
+- **Impacto en roadmap**: REQ-014.4 completado; Sankey explorable por etapa y documento.
+
+---
+
+## Sesión 33: Fix Dashboard Upload 0 + OCR siempre pending (2026-03-17)
+
+### Cambio 4: Scheduler — priorizar OCR + usar todo el pool
+- **Problema**: OCR no visible en workers; límites por tipo dejaban workers ociosos.
+- **Decisión**: (1) ORDER BY pipeline (ocr→chunking→indexing→insights). (2) task_limits = TOTAL_WORKERS por tipo; docker-compose defaults 25.
+- **Impacto**: OCR priorizado; pool completo utilizado cuando hay trabajo.
+
+### Cambio 3: Migración 012 + fix get_recovery_queue
+- **Problema**: Quitar legacy tenía side effects si había docs con status antiguo.
+- **Decisión**: Migración de datos (012) normaliza todo a DocStatus; get_recovery_queue y get_pending_documents usan nuevo esquema.
+- **Impacto**: Un solo esquema; datos actuales; sin side effects.
+
+### Cambio 2: document_id por hash (evita sobrescritura)
+- **Problema**: document_id = timestamp_filename; dos archivos mismo nombre → mismo document_id → sobrescribe, insert falla, huérfanos.
+- **Decisión**: document_id = file_hash. Determinístico por contenido; sin colisión; coherente con dedup por hash.
+
+### Cambio 1: Upload 0 y OCR siempre pending
+- **Problema**: Upload mostraba 0 en todo; OCR siempre pending en frontend.
+- **Causa**: OCR usaba pending = total - queue_completed - queue_processing; si processing_queue vacía o incompleta, completed=0 → pending=total.
+- **Decisión**: Un solo esquema (DocStatus.*), sin legacy; OCR/Chunking/Indexing usar document_status como fuente de verdad para completed.
+- **Impacto**: Dashboard coherente con document_status.
+
+---
+
+## Sesión 32: Timeouts parametrizables + Reintentar + granularidad dashboard (2026-03-16)
+
+### Cambio 1: Timeouts frontend + botón Reintentar
+- **Decisión**: Parametrizar timeouts vía VITE_* para entornos lentos; añadir Reintentar en error banner; aumentar timeout retry/requeue (10s→90s).
+- **Alternativas**: Solo aumentar hardcoded — rechazado; parametrizable permite ajuste sin rebuild.
+- **Impacto**: Menos timeouts; Reintentar útil; cancel/reintentar con margen suficiente.
+- **Doc**: FRONTEND_DASHBOARD_API.md § 6 Timeouts parametrizables.
+
+### Cambio 2: Qdrant Docker — recursos + performance
+- **Decisión**: Añadir límites de memoria (4G) y MAX_SEARCH_REQUESTS=100 al servicio Qdrant.
+- **Healthcheck**: Omitido — imagen qdrant/qdrant mínima no incluye wget/curl; backend sigue con depends_on service_started.
+- **Impacto**: Qdrant con recursos acotados; menos riesgo de OOM en carga alta.
+
+### Cambio 3: Improvements 1,2,3 (Qdrant filter, recovery, GPU)
+- **1. Qdrant scroll_filter**: get_chunks_by_* usan Filter(must=[FieldCondition(key=..., match=MatchAny(any=ids))]) — server-side filter, O(k) no O(n).
+- **2. Recovery insights**: doc_id.startswith("insight_") + task_type None → inferir task_type=insights.
+- **3. GPU**: backend/Dockerfile con PyTorch CUDA 12.1; EMBEDDING_DEVICE env; docker-compose.nvidia.yml.
+
+### Cambio 4: Granularidad coherente en dashboard
+- **Decisión**: No cambiar pipeline; solo dashboard. Chunking/indexing muestran total_chunks y news_items_count.
+- **Backend**: Summary y analysis con granularity, total_chunks, news_items_count para Chunking e Indexing.
+- **Frontend**: PipelineAnalysisPanel muestra "Chunks/News X / Y" para stages con granularidad document.
+- **Impacto**: Vista coherente con insights (que ya tiene docs + news_item).
+
+---
+
+## Sesión 31: REQ-014.5 Pipeline insights + dashboard + doc frontend (2026-03-17)
+
+### Cambio 1: Revisión pipeline + fix Insights 0/0/0
+- **Decisión**: Verificar pipeline insights antes de continuar; insights no usan processing_queue (por diseño); master scheduler correcto.
+- **Fix dashboard**: Summary + analysis con INNER JOIN news_items; workers insights obtienen filename de news_item_insights.
+- **Documento**: INSIGHTS_PIPELINE_REVIEW.md con flujo, IDs, checklist.
+
+### Cambio 2: Auditoría pipeline completa + fix crashed insights
+- **Bug**: PASO 0 no recuperaba insights crashed — news_item_insights quedaba en generating.
+- **Fix**: Para task_type=insights, UPDATE news_item_insights SET status='pending' WHERE news_item_id.
+- **Documento**: PIPELINE_FULL_AUDIT.md.
+
+### Cambio 3: Documentación para frontend (REQ-014)
+- **FRONTEND_DASHBOARD_API.md**: contrato API, granularidad por etapa, IDs compuestos, estructura stages/workers.
+
+---
+
+## Sesión 30: Huérfanos runtime — exclusión insights + guardia (2026-03-17)
+
+### Cambio: Fix huérfanos sin loop infinito
+- **Decisión**: Excluir task_type='insights' del reset de huérfanos; processing_queue usa document_id=doc_id, worker_tasks usa "insight_{news_item_id}" — el NOT EXISTS nunca coincidiría y resetearía insights válidos cada 10s.
+- **Alternativas**: Adaptar query para insights (complejo) — rechazado; excluir es suficiente.
+- **Guardia**: orphans_fixed > 20 en un ciclo → log ERROR para detectar posible loop.
+- **Impacto**: Sin regresiones; huérfanos OCR/chunking/indexing se recuperan correctamente.
+
+---
+
+## Sesión 29: Coherencia totales + Performance indexing (2026-03-17)
+
+### Cambio 1: Coherencia totales dashboard
+- **Decisión**: Usar document_status como fuente de verdad; pending + processing + completed = total en cada etapa (OCR, Chunking, Indexing). Insights desde news_item_insights.
+- **Problema**: Chunking/indexing mostraban chunks estimados; OCR 244 vs Chunking 245; Insights 0/0/0.
+- **Solución**: Queries coherentes; total_documents por etapa; Insights con datos reales.
+
+### Cambio 2: Performance indexing (cuello de botella)
+- **Decisión**: Aumentar batch embeddings (2→4) y workers indexing (6→8) para reducir tiempo por doc.
+- **Alternativas**: Qdrant wait=False — rechazado (riesgo pérdida datos); modelo más ligero — pospuesto.
+- **Impacto**: ~2x más rápido embeddings; más paralelismo.
+- **Env vars**: EMBEDDING_BATCH_SIZE_CPU, EMBEDDING_BATCH_SIZE_GPU (opcionales).
+
+### Pendientes para después
+- Revisión diseño BD (DATABASE_DESIGN_REVIEW.md)
+- REQ-014 (UX Dashboard), REQ-014.5 (Insights 0/0/0)
 
 ---
 

@@ -3,7 +3,7 @@ RAG Enterprise Backend - FastAPI Application
 Manages: OCR, Embedding, RAG Pipeline, Qdrant Integration
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -24,7 +24,7 @@ from pathlib import Path
 
 from rag_pipeline import RAGPipeline, RateLimitError, wait_for_ollama, ensure_model
 from ocr_service import get_ocr_service, OCRService
-from embeddings_service import EmbeddingsService
+from embeddings_service import EmbeddingsService, PerplexityEmbeddingsService
 from qdrant_connector import QdrantConnector
 import re
 from typing import Dict, Optional, TYPE_CHECKING
@@ -332,7 +332,12 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 _openai_model = os.getenv("OPENAI_MODEL", "gpt-4o")
 _ollama_model = os.getenv("LLM_MODEL", "mistral")
-LLM_MODEL = os.getenv("LLM_MODEL", "") or (_openai_model if LLM_PROVIDER == "openai" else _ollama_model)
+_perplexity_model = os.getenv("PERPLEXITY_MODEL", "sonar-pro")
+LLM_MODEL = os.getenv("LLM_MODEL", "") or (
+    _openai_model if LLM_PROVIDER == "openai" else
+    _perplexity_model if LLM_PROVIDER == "perplexity" else
+    _ollama_model
+)
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "ollama")
 OLLAMA_PORT = os.getenv("OLLAMA_PORT", "11434")
 OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
@@ -426,8 +431,8 @@ INGEST_DEFER_REPORT_GENERATION = os.getenv("INGEST_DEFER_REPORT_GENERATION", "")
 # Throttle: regenerar reporte diario de una fecha como máximo cada N minutos (0 = sin límite). Reduce llamadas al LLM en ingesta masiva.
 INGEST_REPORT_THROTTLE_MINUTES = max(0, int(os.getenv("INGEST_REPORT_THROTTLE_MINUTES", "0")))
 # Chunking al indexar: tamaño y solapamiento (solo lectura desde .env)
-CHUNK_SIZE = max(200, int(os.getenv("CHUNK_SIZE", "1000")))
-CHUNK_OVERLAP = max(0, int(os.getenv("CHUNK_OVERLAP", "100")))
+CHUNK_SIZE = max(200, int(os.getenv("CHUNK_SIZE", "2000")))
+CHUNK_OVERLAP = max(0, int(os.getenv("CHUNK_OVERLAP", "300")))
 
 # Cola de reporte por archivo (insights): throttling OpenAI
 INSIGHTS_QUEUE_ENABLED = os.getenv("INSIGHTS_QUEUE_ENABLED", "true").strip().lower() in ("1", "true", "yes")
@@ -653,6 +658,9 @@ def master_pipeline_scheduler():
                 logger.warning(f"🔧 Detected {len(crashed_workers)} crashed workers, recovering...")
                 
                 for worker_id, doc_id, task_type in crashed_workers:
+                    # Infer insights when doc_id="insight_{id}" (worker_tasks puede tener task_type NULL)
+                    if not task_type and doc_id and str(doc_id).startswith("insight_"):
+                        task_type = TaskType.INSIGHTS
                     if not task_type:
                         logger.debug(f"   ⏭ Skipping {worker_id} — no task_type (phantom entry)")
                         cursor_cleanup.execute(
@@ -665,24 +673,87 @@ def master_pipeline_scheduler():
                         "DELETE FROM worker_tasks WHERE worker_id = %s",
                         (worker_id,),
                     )
-                    cursor_cleanup.execute(
-                        "UPDATE processing_queue SET status = %s "
-                        "WHERE document_id = %s AND task_type = %s AND status = %s",
-                        (QueueStatus.PENDING, doc_id, task_type, QueueStatus.PROCESSING),
-                    )
-                    rollback_to = _RUNTIME_ROLLBACK.get(task_type)
-                    if rollback_to:
+                    if (task_type or "").lower() == "insights" and doc_id and str(doc_id).startswith("insight_"):
+                        # Insights: doc_id="insight_{news_item_id}"; reset news_item_insights
+                        news_item_id = doc_id[8:]  # strip "insight_"
                         cursor_cleanup.execute(
-                            "UPDATE document_status SET status = %s, error_message = NULL "
-                            "WHERE document_id = %s AND status IN (%s)",
-                            (rollback_to, doc_id,
-                             PipelineTransitions.processing_status(
-                                 PipelineTransitions.stage_for_task(task_type))),
+                            "UPDATE news_item_insights SET status = %s, error_message = NULL "
+                            "WHERE news_item_id = %s AND status = %s",
+                            (InsightStatus.PENDING, news_item_id, InsightStatus.GENERATING),
                         )
-                    logger.info(f"   ↻ Recovered {task_type} for {doc_id[:30]}... → {rollback_to}")
+                        if cursor_cleanup.rowcount:
+                            logger.info(f"   ↻ Recovered insights for {news_item_id[:30]}... → pending")
+                    elif (task_type or "").lower() == "indexing_insights" and doc_id and str(doc_id).startswith("insight_"):
+                        news_item_id = doc_id[8:]
+                        cursor_cleanup.execute(
+                            "UPDATE news_item_insights SET status = %s "
+                            "WHERE news_item_id = %s AND status = %s",
+                            (InsightStatus.DONE, news_item_id, InsightStatus.INDEXING),
+                        )
+                        if cursor_cleanup.rowcount:
+                            logger.info(f"   ↻ Recovered indexing_insights for {news_item_id[:30]}... → done (retry)")
+                    else:
+                        # OCR/Chunking/Indexing: processing_queue + document_status
+                        cursor_cleanup.execute(
+                            "UPDATE processing_queue SET status = %s "
+                            "WHERE document_id = %s AND task_type = %s AND status = %s",
+                            (QueueStatus.PENDING, doc_id, task_type, QueueStatus.PROCESSING),
+                        )
+                        rollback_to = _RUNTIME_ROLLBACK.get(task_type)
+                        if rollback_to:
+                            cursor_cleanup.execute(
+                                "UPDATE document_status SET status = %s, error_message = NULL "
+                                "WHERE document_id = %s AND status IN (%s)",
+                                (rollback_to, doc_id,
+                                 PipelineTransitions.processing_status(
+                                     PipelineTransitions.stage_for_task(task_type))),
+                            )
+                        logger.info(f"   ↻ Recovered {task_type} for {doc_id[:30]}... → {rollback_to}")
                 
                 conn_cleanup.commit()
+            else:
+                # Stale delete needs commit even when no crashed workers
+                if stale_cleaned:
+                    conn_cleanup.commit()
             
+            # Reset orphaned processing (processing sin worker activo)
+            # EXCLUIR insights: worker_tasks usa document_id="insight_{id}", processing_queue usa doc_id
+            cursor_cleanup.execute("""
+                UPDATE processing_queue
+                SET status = 'pending'
+                WHERE status = 'processing'
+                AND task_type != 'insights'
+                AND NOT EXISTS (
+                    SELECT 1 FROM worker_tasks wt
+                    WHERE wt.document_id = processing_queue.document_id
+                    AND wt.task_type = processing_queue.task_type
+                    AND wt.status IN ('assigned', 'started')
+                )
+            """)
+            orphans_fixed = cursor_cleanup.rowcount
+            if orphans_fixed:
+                if orphans_fixed > 20:
+                    logger.error(f"⚠️ Reset {orphans_fixed} orphans in one cycle — posible loop, revisar")
+                else:
+                    logger.warning(f"🧹 Reset {orphans_fixed} orphaned processing_queue → pending (no active worker)")
+
+            # Reset orphaned indexing_insights (status=indexing sin worker_tasks — legacy o insert fallido)
+            idx_insights_orphans = 0
+            cursor_cleanup.execute("""
+                UPDATE news_item_insights nii
+                SET status = 'done' WHERE nii.status = 'indexing'
+                AND NOT EXISTS (
+                    SELECT 1 FROM worker_tasks wt
+                    WHERE wt.document_id = 'insight_' || nii.news_item_id
+                    AND wt.task_type = 'indexing_insights' AND wt.status IN ('assigned', 'started')
+                )
+            """)
+            idx_insights_orphans = cursor_cleanup.rowcount
+            if idx_insights_orphans:
+                logger.warning(f"🧹 Reset {idx_insights_orphans} orphaned indexing_insights → done (retry)")
+            
+            if stale_cleaned or crashed_workers or orphans_fixed or idx_insights_orphans:
+                conn_cleanup.commit()
             conn_cleanup.close()
         except Exception as e:
             logger.error(f"❌ Error cleaning crashed workers: {e}")
@@ -797,12 +868,12 @@ def master_pipeline_scheduler():
                 processing_queue_store.enqueue_task(doc_id, filename, TaskType.CHUNKING, priority=1)
             logger.info(f"✅ Created {len(ready_for_chunking)} Chunking tasks")
         
-        # PASO 3: Documentos con Chunking completado sin Indexing task → Crear Indexing tasks
+        # PASO 3: Documentos listos para Indexing sin task en cola → Crear Indexing tasks
+        # Incluye: chunking_done (normal) e indexing_pending (recovery/rollback sin task creada)
         cursor.execute("""
             SELECT ds.document_id, ds.filename
             FROM document_status ds
-            WHERE ds.processing_stage = %s
-            AND ds.status = %s
+            WHERE ds.status IN (%s, %s)
             AND NOT EXISTS (
                 SELECT 1 FROM processing_queue pq
                 WHERE pq.document_id = ds.document_id
@@ -810,7 +881,7 @@ def master_pipeline_scheduler():
                 AND pq.status IN (%s, %s)
             )
             LIMIT 50
-        """, (Stage.CHUNKING, DocStatus.CHUNKING_DONE, TaskType.INDEXING, QueueStatus.PENDING, QueueStatus.PROCESSING))
+        """, (DocStatus.CHUNKING_DONE, DocStatus.INDEXING_PENDING, TaskType.INDEXING, QueueStatus.PENDING, QueueStatus.PROCESSING))
         ready_for_indexing = cursor.fetchall()
         if ready_for_indexing:
             for row in ready_for_indexing:
@@ -876,7 +947,7 @@ def master_pipeline_scheduler():
             conn.commit()
             logger.info(f"✅ Marked {len(ready_for_insights)} news items as pending for insights processing")
         
-        # PASO 5: Documentos con todos los insights completados → Marcar como 'completed'
+        # PASO 5: Documentos con todos los insights completados Y indexados en Qdrant → Marcar como 'completed'
         cursor.execute("""
             SELECT ds.document_id, ds.filename
             FROM document_status ds
@@ -887,7 +958,7 @@ def master_pipeline_scheduler():
             AND NOT EXISTS (
                 SELECT 1 FROM news_item_insights nii
                 WHERE nii.document_id = ds.document_id
-                AND nii.status != %s
+                AND (nii.status != %s OR nii.indexed_in_qdrant_at IS NULL)
             )
             LIMIT 50
         """, (DocStatus.INDEXING_DONE, InsightStatus.DONE))
@@ -907,14 +978,14 @@ def master_pipeline_scheduler():
         # El Master es el ÚNICO que asigna tareas a workers
         # Workers son genéricos y pueden procesar cualquier tipo de tarea
         try:
-            # Configuración total de workers disponibles
-            TOTAL_WORKERS = 25  # Pool total de workers
-            
+            # Configuración total de workers disponibles (usar todo el pool cuando hay trabajo)
+            TOTAL_WORKERS = int(os.getenv("PIPELINE_WORKERS_COUNT", "25"))
+            # Límites por tipo: pueden usar hasta TOTAL_WORKERS si hay trabajo
             task_limits = {
-                TaskType.OCR: max(2, min(int(os.getenv("OCR_PARALLEL_WORKERS", "5")), 10)),
-                TaskType.CHUNKING: max(2, min(int(os.getenv("CHUNKING_PARALLEL_WORKERS", "6")), 10)),
-                TaskType.INDEXING: max(2, min(int(os.getenv("INDEXING_PARALLEL_WORKERS", "6")), 10)),
-                TaskType.INSIGHTS: max(2, min(int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "3")), 10)),
+                TaskType.OCR: max(2, min(int(os.getenv("OCR_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
+                TaskType.CHUNKING: max(2, min(int(os.getenv("CHUNKING_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
+                TaskType.INDEXING: max(2, min(int(os.getenv("INDEXING_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
+                TaskType.INSIGHTS: max(2, min(int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
             }
             
             cursor.execute("""
@@ -942,14 +1013,22 @@ def master_pipeline_scheduler():
             slots_available = TOTAL_WORKERS - total_active
             
             if slots_available > 0:
-                # Obtener tareas pending de TODAS las colas, ordenadas por prioridad
+                # Obtener tareas pending: orden pipeline (OCR→Chunking→Indexing→Insights) para no matar de hambre OCR
                 # CRITICAL: Usar SELECT FOR UPDATE SKIP LOCKED para evitar race conditions
-                # cuando múltiples schedulers ejecutan simultáneamente
                 cursor.execute("""
                     SELECT id, document_id, filename, task_type, priority
                     FROM processing_queue
                     WHERE status = %s
-                    ORDER BY priority DESC, created_at ASC
+                    ORDER BY
+                        CASE task_type
+                            WHEN 'ocr' THEN 1
+                            WHEN 'chunking' THEN 2
+                            WHEN 'indexing' THEN 3
+                            WHEN 'insights' THEN 4
+                            ELSE 5
+                        END,
+                        priority DESC,
+                        created_at ASC
                     LIMIT %s
                     FOR UPDATE SKIP LOCKED
                 """, (QueueStatus.PENDING, slots_available * 2))
@@ -1120,18 +1199,8 @@ async def startup_event():
     logger.info("=" * 80)
     
     try:
-        # 1. Qdrant Connection
-        logger.info("🔗 [1/6] Connecting to Qdrant...")
-        qdrant_connector = QdrantConnector(
-            host=QDRANT_HOST,
-            port=QDRANT_PORT,
-            api_key=QDRANT_API_KEY if QDRANT_API_KEY else None
-        )
-        qdrant_connector.connect()
-        logger.info("✅ Qdrant connected")
-
-        # 2. OCR Service
-        logger.info("🔗 [2/6] Loading OCR Service...")
+        # 1. OCR Service
+        logger.info("🔗 [1/6] Loading OCR Service...")
         try:
             ocr_service = get_ocr_service()
             logger.info("✅ OCR Service ready")
@@ -1140,17 +1209,44 @@ async def startup_event():
             logger.warning("    → System will continue without OCR")
             ocr_service = None
 
-        # 3. Embedding Service
-        logger.info(f"🔗 [3/6] Loading Embedding Service ({EMBEDDING_MODEL})...")
-        embeddings_service = EmbeddingsService(model_name=EMBEDDING_MODEL)
+        # 2. Embedding Service (needed before Qdrant for vector_size)
+        EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "huggingface").strip().lower()
+        if EMBEDDING_PROVIDER == "perplexity":
+            logger.info(f"🔗 [2/6] Loading Perplexity Embeddings ({os.getenv('PERPLEXITY_EMBED_MODEL', 'pplx-embed-v1-4b')})...")
+            if not os.getenv("PERPLEXITY_API_KEY"):
+                raise ValueError("PERPLEXITY_API_KEY required when EMBEDDING_PROVIDER=perplexity")
+            embed_dim = int(os.getenv("EMBEDDING_DIMENSION", "1024"))
+            embeddings_service = PerplexityEmbeddingsService(
+                model=os.getenv("PERPLEXITY_EMBED_MODEL", "pplx-embed-v1-4b"),
+                dimensions=embed_dim,
+            )
+        else:
+            logger.info(f"🔗 [2/6] Loading Embedding Service ({EMBEDDING_MODEL})...")
+            embeddings_service = EmbeddingsService(model_name=EMBEDDING_MODEL)
         logger.info("✅ Embedding Service ready")
 
-        # 4. LLM Provider setup
+        # 3. Qdrant Connection
+        logger.info("🔗 [3/6] Connecting to Qdrant...")
+        qdrant_connector = QdrantConnector(
+            host=QDRANT_HOST,
+            port=QDRANT_PORT,
+            api_key=QDRANT_API_KEY if QDRANT_API_KEY else None,
+            vector_size=embeddings_service.get_embedding_dimension(),
+        )
+        qdrant_connector.connect()
+        logger.info("✅ Qdrant connected")
+
+        # 4. LLM Provider setup (insights: OpenAI/Perplexity/Ollama)
         if LLM_PROVIDER == "openai":
             logger.info(f"🔗 [4/6] Using OpenAI API (model: {LLM_MODEL})...")
             if not OPENAI_API_KEY:
                 raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai. Set it in .env")
             logger.info("✅ OpenAI API key configured")
+        elif LLM_PROVIDER == "perplexity":
+            logger.info(f"🔗 [4/6] Using Perplexity API (model: {LLM_MODEL})...")
+            if not os.getenv("PERPLEXITY_API_KEY"):
+                raise ValueError("PERPLEXITY_API_KEY is required when LLM_PROVIDER=perplexity. Set it in .env")
+            logger.info("✅ Perplexity API key configured")
         else:
             logger.info(f"🔗 [4/6] Connecting to Ollama ({OLLAMA_BASE_URL})...")
             wait_for_ollama(OLLAMA_BASE_URL, timeout=300)
@@ -2118,7 +2214,10 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
                         text_hash=text_hash,
                     )
                     if existing and existing.get("content"):
-                        news_item_insights_store.set_status(nid, news_item_insights_store.STATUS_DONE, content=existing.get("content"))
+                        news_item_insights_store.set_status(
+                            nid, news_item_insights_store.STATUS_DONE,
+                            content=existing.get("content"), llm_source=existing.get("llm_source")
+                        )
                         logger.info(f"News item insights reused for {nid} ({title})")
                 logger.info(f"News item insights queued/reused for {len(items)} item(s)")
             except Exception as eq_err:
@@ -2183,7 +2282,7 @@ def run_insights_queue_job():
             context = context[:80000] + "\n\n[... truncado ...]"
         for attempt in range(INSIGHTS_MAX_RETRIES):
             try:
-                content = rag_pipeline.generate_insights_from_context(context, filename)
+                content, _ = rag_pipeline.generate_insights_with_fallback(context, filename)
                 document_insights_store.set_status(document_id, document_insights_store.STATUS_DONE, content=content)
                 logger.info(f"Insights generated for {filename}")
                 return
@@ -2218,7 +2317,10 @@ def run_news_item_insights_queue_job():
     if text_hash:
         existing = news_item_insights_store.get_done_by_text_hash(text_hash)
         if existing and existing.get("content") and existing.get("news_item_id") != news_item_id:
-            news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_DONE, content=existing["content"])
+            news_item_insights_store.set_status(
+                news_item_id, news_item_insights_store.STATUS_DONE,
+                content=existing["content"], llm_source=existing.get("llm_source")
+            )
             logger.info(f"♻️ Reused insight via text_hash for {news_item_id} ({title}) (saved GPT call)")
             return
     
@@ -2235,9 +2337,9 @@ def run_news_item_insights_queue_job():
         label = f"{filename} — {title}".strip(" —")
         for attempt in range(INSIGHTS_MAX_RETRIES):
             try:
-                content = rag_pipeline.generate_insights_from_context(context, label)
-                news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_DONE, content=content)
-                logger.info(f"News item insights generated for {news_item_id} ({title})")
+                content, llm_source = rag_pipeline.generate_insights_with_fallback(context, label)
+                news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_DONE, content=content, llm_source=llm_source)
+                logger.info(f"News item insights generated for {news_item_id} ({title}) via {llm_source}")
                 return
             except requests.exceptions.HTTPError as e:
                 if e.response is not None and e.response.status_code == 429:
@@ -2289,7 +2391,8 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
                 news_item_insights_store.set_status(
                     news_item_id,
                     news_item_insights_store.STATUS_DONE,
-                    content=existing["content"]
+                    content=existing["content"],
+                    llm_source=existing.get("llm_source")
                 )
                 processing_queue_store.update_worker_status(
                     worker_id, f"insight_{news_item_id}", 'insights', 'completed'
@@ -2327,22 +2430,20 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
         
         logger.info(f"[{worker_id}] Generating insights for {news_item_id} ({len(context)} chars)")
         
-        # Generate insights with retry on 429
+        # Generate insights with fallback chain (OpenAI 429 → Perplexity → Ollama)
         for attempt in range(INSIGHTS_MAX_RETRIES):
             try:
-                # Run in thread to avoid blocking
-                content = await asyncio.to_thread(
-                    rag_pipeline.generate_insights_from_context,
+                content, llm_source = await asyncio.to_thread(
+                    rag_pipeline.generate_insights_with_fallback,
                     context,
                     label
                 )
-                
                 news_item_insights_store.set_status(
                     news_item_id,
                     news_item_insights_store.STATUS_DONE,
-                    content=content
+                    content=content,
+                    llm_source=llm_source
                 )
-                
                 processing_queue_store.update_worker_status(
                     worker_id, f"insight_{news_item_id}", 'insights', 'completed'
                 )
@@ -2351,11 +2452,16 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
                 logger.info(f"[{worker_id}] ✅ Insights generated for {news_item_id}")
                 return
                 
-            except requests.exceptions.HTTPError as e:
-                if e.response is not None and e.response.status_code == 429:
-                    wait = INSIGHTS_THROTTLE_SECONDS * (2 ** attempt)
+            except (requests.exceptions.HTTPError, RateLimitError) as e:
+                is_429 = (
+                    (isinstance(e, requests.exceptions.HTTPError) and e.response is not None and e.response.status_code == 429)
+                    or isinstance(e, RateLimitError)
+                )
+                if is_429 and attempt < INSIGHTS_MAX_RETRIES - 1:
+                    wait = getattr(e, "retry_after", 0) or (INSIGHTS_THROTTLE_SECONDS * (2 ** attempt))
+                    wait = min(max(wait, 5), 120)
                     logger.warning(
-                        f"[{worker_id}] 429 Rate Limit - waiting {wait}s "
+                        f"[{worker_id}] All LLMs rate limited - waiting {wait}s "
                         f"(attempt {attempt + 1}/{INSIGHTS_MAX_RETRIES})"
                     )
                     await asyncio.sleep(wait)
@@ -2661,6 +2767,51 @@ async def _handle_indexing_task(task_data: dict, worker_id: str):
         raise
 
 
+def _index_insight_in_qdrant(news_item_id: str, document_id: str, filename: str, title: str, content: str):
+    """Index insight content in Qdrant for RAG retrieval (PEND-001). Used by indexing_insights worker."""
+    if not qdrant_connector or not embeddings_service:
+        return
+    try:
+        vector = embeddings_service.embed_text(content, is_query=False)
+        if vector:
+            qdrant_connector.insert_insight_vector(
+                vector=vector,
+                news_item_id=news_item_id,
+                document_id=document_id,
+                filename=filename,
+                text=content,
+                title=title or "",
+            )
+    except Exception as e:
+        logger.warning(f"Insight indexing failed for {news_item_id}: {e}")
+
+
+async def _handle_indexing_insights_task(task_data: dict, worker_id: str):
+    """Handler for Indexing Insights tasks - embeds insight content and inserts into Qdrant."""
+    news_item_id = task_data.get("news_item_id")
+    document_id = task_data.get("document_id")
+    filename = task_data.get("filename", "")
+    title = task_data.get("title", "")
+    content = task_data.get("content", "")
+    if not news_item_id or not content:
+        logger.warning(f"[{worker_id}] Indexing insights: missing news_item_id or content")
+        news_item_insights_store.set_status(news_item_id or "unknown", news_item_insights_store.STATUS_DONE)
+        return
+    processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", TaskType.INDEXING_INSIGHTS, WorkerStatus.STARTED)
+    try:
+        _index_insight_in_qdrant(news_item_id, document_id, filename, title, content)
+        news_item_insights_store.set_indexed_in_qdrant(news_item_id)
+        processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", TaskType.INDEXING_INSIGHTS, WorkerStatus.COMPLETED)
+        logger.info(f"[{worker_id}] ✅ Insight indexed in Qdrant: {news_item_id}")
+    except Exception as e:
+        logger.error(f"[{worker_id}] Indexing insights failed: {e}", exc_info=True)
+        news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_DONE)
+        processing_queue_store.update_worker_status(
+            worker_id, f"insight_{news_item_id}", TaskType.INDEXING_INSIGHTS, WorkerStatus.ERROR, error_message=str(e)[:200]
+        )
+        raise
+
+
 async def _handle_insights_task(task_data: dict, worker_id: str):
     """Handler for Insights tasks - generates LLM insights.
     Checks text_hash dedup BEFORE calling GPT to reuse existing insights and save costs."""
@@ -2689,7 +2840,10 @@ async def _handle_insights_task(task_data: dict, worker_id: str):
     if text_hash:
         existing = news_item_insights_store.get_done_by_text_hash(text_hash)
         if existing and existing.get("content") and existing.get("news_item_id") != news_item_id:
-            news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_DONE, content=existing["content"])
+            news_item_insights_store.set_status(
+                news_item_id, news_item_insights_store.STATUS_DONE,
+                content=existing["content"], llm_source=existing.get("llm_source")
+            )
             processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", 'insights', 'completed')
             processing_queue_store.mark_task_completed(f"insight_{news_item_id}", 'insights')
             logger.info(f"[{worker_id}] ♻️ Reused insight via text_hash for {news_item_id} (saved GPT call)")
@@ -2706,11 +2860,11 @@ async def _handle_insights_task(task_data: dict, worker_id: str):
         context = "\n\n".join(texts)[:80000]
         label = f"{filename} — {title}".strip(" —")
         
-        content = rag_pipeline.generate_insights_from_context(context, label)
-        news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_DONE, content=content)
+        content, llm_source = rag_pipeline.generate_insights_with_fallback(context, label)
+        news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_DONE, content=content, llm_source=llm_source)
         
         processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", 'insights', 'completed')
-        logger.info(f"[{worker_id}] ✅ Insights generated")
+        logger.info(f"[{worker_id}] ✅ Insights generated ({llm_source})")
         
     except RateLimitError as e:
         logger.warning(f"[{worker_id}] ⏳ OpenAI 429 rate limited — re-enqueuing as pending (not an error): {e}")
@@ -2735,6 +2889,7 @@ async def generic_task_dispatcher(task_type: str, task_data: dict, worker_id: st
         'chunking': _handle_chunking_task,
         'indexing': _handle_indexing_task,
         'insights': _handle_insights_task,
+        'indexing_insights': _handle_indexing_insights_task,
     }
     
     handler = handlers.get(task_type)
@@ -3856,37 +4011,44 @@ async def requeue_document(
         # The reprocessing logic will compare by text_hash and skip duplicates
         logger.info(f"   ✓ Preserving news_items and insights (no deletion)")
         
-        # 3. Reset document status to ocr_processing
-        document_status_store.update_status(
-            document_id, 
-            DocStatus.OCR_PROCESSING, 
-            processing_stage="ocr",
-            num_chunks=0,
-            indexed_at=None,
-            error_message=None
-        )
-        # Clear OCR text to force reprocessing
-        document_status_store.store_ocr_text(document_id, None)
-        # Mark as reprocess requested (persists across restarts)
-        document_status_store.mark_for_reprocessing(document_id, requested=True)
-        logger.info(f"   ✓ Reset document status to 'processing:ocr' and marked for reprocessing")
-        
-        # 4. Add to processing queue
-        processing_queue_store.enqueue_task(document_id, filename, "ocr", priority=10)
+        # 3. If ocr_text exists and doc failed at indexing → retry indexing only
+        has_ocr = doc.get('ocr_text') and len(str(doc.get('ocr_text') or '').strip()) > 0
+        if has_ocr:
+            document_status_store.update_status(
+                document_id,
+                DocStatus.CHUNKING_DONE,
+                processing_stage="chunking",
+                clear_indexed_at=True,
+                clear_error_message=True,
+            )
+            processing_queue_store.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
+            logger.info(f"   ✓ Retry indexing only (ocr_text exists)")
+        else:
+            document_status_store.update_status(
+                document_id,
+                DocStatus.OCR_PROCESSING,
+                processing_stage="ocr",
+                num_chunks=0,
+                clear_indexed_at=True,
+                clear_error_message=True,
+            )
+            document_status_store.store_ocr_text(document_id, None)
+            document_status_store.mark_for_reprocessing(document_id, requested=True)
+            processing_queue_store.enqueue_task(document_id, filename, TaskType.OCR, priority=10)
+            logger.info(f"   ✓ Reset to OCR and marked for reprocessing")
         logger.info(f"   ✓ Added to processing queue")
         
         logger.info(f"✅ Document requeued successfully: {filename}")
-        logger.info(f"   During reprocessing:")
-        logger.info(f"   - New OCR text will be extracted")
-        logger.info(f"   - News items will be detected and compared by text_hash")
-        logger.info(f"   - Only NEW items (different hash) will be added")
-        logger.info(f"   - Insights will be generated only for new items without insights")
+        if has_ocr:
+            logger.info(f"   Retry indexing only (OCR+chunking already done)")
+        else:
+            logger.info(f"   Full reprocessing: OCR → chunking → indexing")
         
         return {
-            "message": f"Document {filename} requeued for reprocessing (preserving {len(existing_items)} existing news items)",
+            "message": f"Document {filename} requeued" + (" (indexing only)" if has_ocr else " for full reprocessing") + f" (preserving {len(existing_items)} news items)",
             "document_id": document_id,
-            "status": DocStatus.OCR_PROCESSING,
-            "stage": "ocr",
+            "status": DocStatus.CHUNKING_DONE if has_ocr else DocStatus.OCR_PROCESSING,
+            "stage": "indexing" if has_ocr else "ocr",
             "preserved_items": len(existing_items),
             "preserved_insights": insight_stats.get('done', 0)
         }
@@ -3900,57 +4062,75 @@ async def requeue_document(
 
 @app.post("/api/workers/retry-errors")
 async def retry_error_workers(
-    document_ids: Optional[List[str]] = None,
+    request: Request,
     current_user: CurrentUser = Depends(get_current_user)
 ):
     """
-    Retry processing for documents that had errors.
-    
-    If document_ids is provided, retry only those documents.
-    If document_ids is None or empty, retry ALL documents with errors from the last 24 hours.
-    
-    This will:
-    1. Find documents with error status in worker_tasks (last 24h)
-    2. Reset their status to 'processing' with stage 'ocr'
-    3. Clear error messages
-    4. Re-enqueue them in processing_queue with high priority (10)
-    5. Preserve existing news_items and insights (matched by text_hash)
-    
-    Requires: Authentication
+    Retry processing for documents and insights that had errors.
+    Body: { "document_ids": ["id1", "insight_123", ...] } or {} for retry all.
+    IDs con prefijo "insight_" son news_item_insights; el resto son document_status.
     """
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    document_ids = body.get("document_ids") if isinstance(body, dict) else None
     try:
         conn = document_status_store.get_connection()
         cursor = conn.cursor()
         
+        # Separar IDs en documentos vs insights
+        doc_ids = []
+        insight_ids = []
         if document_ids and len(document_ids) > 0:
-            # Retry specific documents
-            placeholders = ','.join(['%s'] * len(document_ids))
+            for did in document_ids:
+                if isinstance(did, str) and did.startswith("insight_"):
+                    insight_ids.append(did[8:])  # strip "insight_"
+                else:
+                    doc_ids.append(did)
+        
+        error_docs = []
+        error_insights = []
+        retry_all = not document_ids or len(document_ids) == 0
+        
+        # Documentos: document_status
+        if doc_ids:
+            placeholders = ','.join(['%s'] * len(doc_ids))
             cursor.execute(f"""
-                SELECT DISTINCT wt.document_id, ds.filename
-                FROM worker_tasks wt
-                LEFT JOIN document_status ds ON wt.document_id = ds.document_id
-                WHERE wt.status = 'error'
-                AND wt.completed_at > NOW() - INTERVAL '24 hours'
-                AND wt.document_id IN ({placeholders})
-            """, document_ids)
+                SELECT document_id, filename FROM document_status
+                WHERE status = %s AND document_id IN ({placeholders})
+            """, (DocStatus.ERROR, *doc_ids))
             error_docs = cursor.fetchall()
-        else:
-            # Retry ALL documents with errors from last 24h
+        elif retry_all:
             cursor.execute("""
-                SELECT DISTINCT wt.document_id, ds.filename
-                FROM worker_tasks wt
-                LEFT JOIN document_status ds ON wt.document_id = ds.document_id
-                WHERE wt.status = 'error'
-                AND wt.completed_at > NOW() - INTERVAL '24 hours'
-                ORDER BY wt.completed_at DESC
-            """)
+                SELECT document_id, filename FROM document_status
+                WHERE status = %s
+                ORDER BY document_id
+            """, (DocStatus.ERROR,))
             error_docs = cursor.fetchall()
+        
+        # Insights: news_item_insights
+        if insight_ids:
+            placeholders = ','.join(['%s'] * len(insight_ids))
+            cursor.execute(f"""
+                SELECT news_item_id, document_id, filename, title FROM news_item_insights
+                WHERE status = %s AND news_item_id IN ({placeholders})
+            """, (news_item_insights_store.STATUS_ERROR, *insight_ids))
+            error_insights = cursor.fetchall()
+        elif retry_all:
+            cursor.execute("""
+                SELECT news_item_id, document_id, filename, title FROM news_item_insights
+                WHERE status = %s
+                ORDER BY news_item_id
+            """, (news_item_insights_store.STATUS_ERROR,))
+            error_insights = cursor.fetchall()
         
         conn.close()
         
-        if not error_docs:
+        if not error_docs and not error_insights:
             return {
-                "message": "No documents with errors found in the last 24 hours",
+                "message": "No documents or insights with errors found",
                 "retried_count": 0,
                 "retried_documents": []
             }
@@ -3959,35 +4139,71 @@ async def retry_error_workers(
         retried_documents = []
         errors = []
         
+        # Reintentar insights (reset a pending)
+        for row in error_insights:
+            news_item_id = row.get('news_item_id')
+            filename = row.get('filename') or row.get('title') or news_item_id
+            try:
+                news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_PENDING, error_message=None)
+                retried_count += 1
+                retried_documents.append({"document_id": f"insight_{news_item_id}", "filename": filename})
+                logger.info(f"✅ Retried insight: {news_item_id} ({filename})")
+            except Exception as e:
+                err_msg = f"Error retrying insight {news_item_id}: {str(e)}"
+                errors.append(err_msg)
+                logger.error(err_msg, exc_info=True)
+        
+        # Reintentar documentos
         for row in error_docs:
             document_id = row.get('document_id')
             filename = row.get('filename') or document_id
             
             try:
-                # Use the existing requeue logic
                 doc = document_status_store.get(document_id)
                 if not doc:
                     errors.append(f"Document {document_id} not found")
                     continue
                 
-                # Reset document status
-                document_status_store.update_status(
-                    document_id,
-                    DocStatus.OCR_PROCESSING,
-                    processing_stage="ocr",
-                    num_chunks=0,
-                    indexed_at=None,
-                    error_message=None
-                )
+                # Decidir qué etapa reintentar según processing_stage y ocr_text
+                has_ocr = doc.get('ocr_text') and len(str(doc.get('ocr_text') or '').strip()) > 0
+                stage = (doc.get('processing_stage') or '').lower()
                 
-                # Clear OCR text to force reprocessing
-                document_status_store.store_ocr_text(document_id, None)
-                
-                # Mark for reprocessing
-                document_status_store.mark_for_reprocessing(document_id, requested=True)
-                
-                # Re-enqueue with high priority
-                processing_queue_store.enqueue_task(document_id, filename, "ocr", priority=10)
+                if not has_ocr or stage in ('ocr', 'upload', ''):
+                    # OCR falló o no hay texto → retry OCR completo
+                    document_status_store.update_status(
+                        document_id,
+                        DocStatus.OCR_PROCESSING,
+                        processing_stage="ocr",
+                        num_chunks=0,
+                        clear_indexed_at=True,
+                        clear_error_message=True,
+                    )
+                    document_status_store.store_ocr_text(document_id, None)
+                    document_status_store.mark_for_reprocessing(document_id, requested=True)
+                    processing_queue_store.enqueue_task(document_id, filename, TaskType.OCR, priority=10)
+                    logger.info(f"   → Retry OCR (no ocr_text or stage={stage})")
+                elif stage == 'chunking':
+                    # Chunking falló (ej. Server disconnected) → retry chunking
+                    document_status_store.update_status(
+                        document_id,
+                        DocStatus.CHUNKING_PROCESSING,
+                        processing_stage="chunking",
+                        clear_indexed_at=True,
+                        clear_error_message=True,
+                    )
+                    processing_queue_store.enqueue_task(document_id, filename, TaskType.CHUNKING, priority=10)
+                    logger.info(f"   → Retry chunking (stage=chunking)")
+                else:
+                    # Indexing falló o stage=indexing → retry indexing
+                    document_status_store.update_status(
+                        document_id,
+                        DocStatus.CHUNKING_DONE,
+                        processing_stage="chunking",
+                        clear_indexed_at=True,
+                        clear_error_message=True,
+                    )
+                    processing_queue_store.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
+                    logger.info(f"   → Retry indexing only (ocr+chunking done)")
                 
                 retried_count += 1
                 retried_documents.append({
@@ -4135,15 +4351,86 @@ async def query_rag(
 # ADMIN ENDPOINTS
 # ============================================================================
 
-@app.post("/api/admin/reindex-all")
-async def reindex_all(background_tasks: BackgroundTasks):
-    """Reindex all documents"""
-    if not rag_pipeline:
-        raise HTTPException(status_code=503, detail="RAG Pipeline not initialized")
+def _run_reindex_all():
+    """
+    Reindex all documents: delete vectors from Qdrant, re-embed and re-insert.
+    Use after changing embedding model or instruction prefix.
+    Only docs with ocr_text are re-indexed (skips OCR+chunking).
+    """
+    if not qdrant_connector or not document_status_store or not processing_queue_store:
+        logger.error("❌ Reindex: missing qdrant_connector or document_status_store")
+        return
+    conn = document_status_store.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT document_id, filename FROM document_status
+        WHERE ocr_text IS NOT NULL AND LENGTH(TRIM(ocr_text)) > 0
+    """)
+    docs = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    if not docs:
+        logger.warning("⚠️ Reindex: no documents with ocr_text found")
+        return
+    logger.info(f"🔄 Reindexing {len(docs)} documents (deleting from Qdrant, re-embedding)...")
+    doc_ids = [r["document_id"] for r in docs]
+    for i, row in enumerate(docs):
+        doc_id = row["document_id"]
+        filename = row["filename"] or doc_id
+        try:
+            qdrant_connector.delete_document(doc_id)
+            document_status_store.update_status(
+                doc_id, DocStatus.CHUNKING_DONE,
+                processing_stage="chunking",
+                clear_indexed_at=True,
+                clear_error_message=True,
+            )
+            processing_queue_store.enqueue_task(doc_id, filename, TaskType.INDEXING, priority=10)
+            if (i + 1) % 10 == 0 or i == 0:
+                logger.info(f"   ✓ Queued {i + 1}/{len(docs)}: {filename[:50]}...")
+        except Exception as e:
+            logger.error(f"   ✗ {filename}: {e}")
 
+    # Re-index existing insights (deleted with delete_document; DB still has them)
+    if qdrant_connector and embeddings_service and doc_ids:
+        conn2 = document_status_store.get_connection()
+        cur2 = conn2.cursor()
+        cur2.execute(
+            """SELECT news_item_id, document_id, filename, title, content
+               FROM news_item_insights
+               WHERE document_id = ANY(%s) AND status IN (%s, %s) AND content IS NOT NULL AND LENGTH(TRIM(content)) > 0""",
+            (doc_ids, news_item_insights_store.STATUS_DONE, news_item_insights_store.STATUS_INDEXING),
+        )
+        insights_to_reindex = [dict(r) for r in cur2.fetchall()]
+        conn2.close()
+        for r in insights_to_reindex:
+            try:
+                _index_insight_in_qdrant(
+                    r["news_item_id"], r["document_id"], r["filename"] or "", r.get("title") or "", r["content"]
+                )
+                news_item_insights_store.set_indexed_in_qdrant(r["news_item_id"])
+            except Exception as e:
+                logger.warning(f"Reindex insight {r.get('news_item_id')}: {e}")
+        if insights_to_reindex:
+            logger.info(f"   ✓ Re-indexed {len(insights_to_reindex)} insights")
+
+    logger.info(f"✅ Reindex queued: {len(docs)} documents. Workers will process them.")
+
+
+@app.post("/api/admin/reindex-all")
+async def reindex_all(
+    background_tasks: BackgroundTasks,
+    current_user: CurrentUser = Depends(require_admin),
+):
+    """
+    Reindex all documents (re-embed with current model/prefix).
+    Use after changing EMBEDDING_MODEL or instruction prefix.
+    Requires: Admin
+    """
+    if not qdrant_connector:
+        raise HTTPException(status_code=503, detail="Qdrant not initialized")
     logger.info("🔄 Starting reindexing of all documents...")
-    background_tasks.add_task(rag_pipeline.reindex_all_documents)
-    return {"message": "Reindexing in progress..."}
+    background_tasks.add_task(_run_reindex_all)
+    return {"message": "Reindexing in progress. Check logs for progress."}
 
 
 @app.delete("/api/admin/memory/{user_id}")
@@ -4823,7 +5110,8 @@ async def get_dashboard_summary(
         completed_files = files_data['completed'] or 0
         processing_files = files_data['processing'] or 0
         error_files = files_data['errors'] or 0
-        
+        total_docs = files_data['total_in_db'] or total_files  # document_status is source of truth
+
         files = {
             "total": total_files,
             "completed": completed_files,
@@ -4877,26 +5165,60 @@ async def get_dashboard_summary(
             "percentage_success": round((completed_files or 0) / (total_files or 1) * 100, 2),
         }
         
-        # 4. CHUNKING - Estimar basado en archivos INBOX
-        chunks_per_file = 20  # Estimación conservadora
+        # 4. CHUNKING - Documentos (granularidad doc; chunks internos por news_item)
+        cursor.execute("""
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending,
+                COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) as processing,
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) as completed
+            FROM processing_queue WHERE task_type = 'chunking'
+        """)
+        ch = cursor.fetchone()
+        ch_completed = ch['completed'] or 0
+        ch_processing = ch['processing'] or 0
+        ch_pending = max(0, total_docs - ch_completed - ch_processing)
+        cursor.execute("SELECT COALESCE(SUM(num_chunks), 0) as n FROM document_status WHERE num_chunks > 0")
+        total_chunks_val = cursor.fetchone()['n'] or 0
+        cursor.execute("SELECT COUNT(*) as n FROM news_items")
+        news_items_val = cursor.fetchone()['n'] or 0
         chunks_estimate = {
-            "total_chunks": total_files * chunks_per_file,
-            "indexed": completed_files * chunks_per_file,
-            "pending": pending_files * chunks_per_file,
+            "granularity": "document",
+            "total": total_docs,
+            "total_chunks": total_docs,
+            "indexed": ch_completed,
+            "completed": ch_completed,
+            "pending": ch_pending,
+            "processing": ch_processing,
             "errors": 0,
-            "percentage_indexed": round((completed_files or 0) / (total_files or 1) * 100, 2),
+            "percentage_indexed": round((ch_completed or 0) / (total_docs or 1) * 100, 2),
+            "chunks_total": int(total_chunks_val),
+            "news_items_count": int(news_items_val),
         }
-        
-        # 5. INDEXACIÓN (Qdrant) - Mismo que chunking
+
+        # 5. INDEXACIÓN (Qdrant) - Documentos (granularidad doc; chunks internos por news_item)
+        cursor.execute("""
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending,
+                COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) as processing,
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) as completed
+            FROM processing_queue WHERE task_type = 'indexing'
+        """)
+        idx = cursor.fetchone()
+        idx_completed = idx['completed'] or 0
+        idx_pending = max(0, total_docs - idx_completed - (idx['processing'] or 0))
         indexing = {
-            "total": chunks_estimate["total_chunks"],
-            "active": chunks_estimate["indexed"],
-            "pending": chunks_estimate["pending"],
+            "granularity": "document",
+            "total": total_docs,
+            "active": idx_completed,
+            "completed": idx_completed,
+            "pending": idx_pending,
             "errors": 0,
-            "percentage_indexed": chunks_estimate["percentage_indexed"],
+            "percentage_indexed": round((idx_completed or 0) / (total_docs or 1) * 100, 2),
+            "total_chunks": int(total_chunks_val),
+            "news_items_count": int(news_items_val),
         }
         
-        # 6. INSIGHTS - Con ponderación por archivos pendientes
+        # 6. INSIGHTS — granularidad news_item; JOIN news_items (cadena doc→news→insight)
         cursor.execute("""
             SELECT 
               COUNT(DISTINCT nii.news_item_id) as total_current,
@@ -4904,7 +5226,7 @@ async def get_dashboard_summary(
               SUM(CASE WHEN nii.status IN ('pending', 'queued', 'generating') THEN 1 ELSE 0 END) as pending,
               SUM(CASE WHEN nii.status = 'error' THEN 1 ELSE 0 END) as errors
             FROM news_item_insights nii
-            WHERE nii.document_id IN (SELECT document_id FROM document_status)
+            INNER JOIN news_items ni ON ni.news_item_id = nii.news_item_id
         """)
         insights_data = cursor.fetchone()
         
@@ -5014,11 +5336,11 @@ async def get_workers_status(
         """)
         active_pipeline_tasks = cursor.fetchall()
         
-        # Get ACTIVE insights being generated
+        # Get ACTIVE insights (generating) and indexing_insights (indexing)
         cursor.execute("""
             SELECT news_item_id, document_id, filename, title 
             FROM news_item_insights 
-            WHERE status = 'generating'
+            WHERE status IN ('generating', 'indexing')
             ORDER BY news_item_id
         """)
         active_insights_tasks = cursor.fetchall()
@@ -5033,12 +5355,20 @@ async def get_workers_status(
         pending_counts = {row['task_type']: row['count'] for row in cursor.fetchall()}
         
         cursor.execute("""
-            SELECT COUNT(*) 
-            FROM news_item_insights 
+            SELECT COUNT(*)
+            FROM news_item_insights
             WHERE status IN ('pending', 'queued')
         """)
         result = cursor.fetchone()
         pending_counts['insights'] = result[list(result.keys())[0]] if result else 0
+
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM news_item_insights
+            WHERE status = 'done' AND indexed_in_qdrant_at IS NULL AND content IS NOT NULL
+        """)
+        result = cursor.fetchone()
+        pending_counts['indexing_insights'] = result[list(result.keys())[0]] if result else 0
         
         conn.close()
         
@@ -5049,6 +5379,12 @@ async def get_workers_status(
         workers_status = []
         worker_idx = 0
         
+        # Map insight_{news_item_id} → filename/title para workers insights (JOIN con document_status falla)
+        insight_display = {
+            f"insight_{r['news_item_id']}": (r.get('filename') or r.get('title') or r['news_item_id'])[:60]
+            for r in active_insights_tasks
+        }
+        
         # Process ONLY real workers from worker_tasks table (not virtual workers from tasks)
         # active_workers contains actual running workers with status='started' or 'processing'
         for row in active_workers:
@@ -5056,6 +5392,8 @@ async def get_workers_status(
             task_type = row.get('task_type')
             document_id = row.get('document_id')
             filename = row.get('filename')
+            if not filename and task_type in ('insights', 'indexing_insights') and document_id:
+                filename = insight_display.get(document_id)
             status = row.get('status')
             started_at = row.get('started_at')
             
@@ -5064,7 +5402,8 @@ async def get_workers_status(
                 'ocr': 'OCR',
                 'chunking': 'Chunking',
                 'indexing': 'Indexing',
-                'insights': 'Insights'
+                'insights': 'Insights',
+                'indexing_insights': 'Indexing Insights'
             }
             # Convert started_at if it's a datetime, otherwise use as-is
             if started_at:
@@ -5126,7 +5465,8 @@ async def get_workers_status(
                 'ocr': 'OCR',
                 'chunking': 'Chunking',
                 'indexing': 'Indexing',
-                'insights': 'Insights'
+                'insights': 'Insights',
+                'indexing_insights': 'Indexing Insights'
             }
             
             # Convert started_at if it's a datetime, otherwise use as-is
@@ -5308,20 +5648,34 @@ async def get_dashboard_analysis(
         cursor = conn.cursor()
         
         # ===== 1. ERROR ANALYSIS =====
-        # Group errors by type and stage
+        # 1a. Errores de documentos (OCR, Chunking, Indexing)
         cursor.execute("""
             SELECT 
                 error_message,
                 processing_stage,
                 COUNT(*) as count,
-                (ARRAY_AGG(document_id ORDER BY document_id DESC))[1:10] as document_ids,
-                (ARRAY_AGG(filename ORDER BY document_id DESC))[1:10] as filenames
+                ARRAY_AGG(document_id ORDER BY document_id) as document_ids,
+                ARRAY_AGG(filename ORDER BY document_id) as filenames
             FROM document_status
             WHERE status = %s
             GROUP BY error_message, processing_stage
             ORDER BY count DESC
         """, (DocStatus.ERROR,))
         error_groups_raw = cursor.fetchall()
+        
+        # 1b. Errores de Insights (news_item_insights)
+        cursor.execute("""
+            SELECT 
+                error_message,
+                COUNT(*) as count,
+                ARRAY_AGG('insight_' || news_item_id ORDER BY news_item_id) as document_ids,
+                ARRAY_AGG(filename ORDER BY news_item_id) as filenames
+            FROM news_item_insights
+            WHERE status = %s
+            GROUP BY error_message
+            ORDER BY count DESC
+        """, (news_item_insights_store.STATUS_ERROR,))
+        insights_errors_raw = cursor.fetchall()
         
         error_groups = []
         real_errors_count = 0
@@ -5346,8 +5700,14 @@ async def get_dashboard_analysis(
             elif 'Shutdown ordenado' in error_msg:
                 cause = "Shutdown ordenado ejecutado - esperado"
                 can_auto_fix = False
-            elif 'OCR returned empty text' in error_msg:
-                cause = "OCR falló o timeout - necesita reprocesamiento"
+            elif 'Only PDF files are supported' in error_msg:
+                cause = "Archivo no es PDF válido - reintentar no ayudará"
+                can_auto_fix = False
+            elif 'OCR returned empty text' in error_msg or 'OCRmyPDF failed' in error_msg:
+                cause = "OCR falló, timeout o error de servicio - reintentar puede resolver"
+                can_auto_fix = True
+            elif 'Server disconnected' in error_msg or 'Connection aborted' in error_msg or 'RemoteDisconnected' in error_msg or 'Connection error' in error_msg:
+                cause = "Conexión interrumpida - reintentar puede resolver"
                 can_auto_fix = True
             elif 'chunk_count' in error_msg:
                 cause = "Bug corregido: acceso a columna incorrecta en indexing worker"
@@ -5366,10 +5726,99 @@ async def get_dashboard_analysis(
                 "filenames": row['filenames'] or []
             })
         
+        # 1c. Añadir grupos de errores de Insights
+        for row in insights_errors_raw:
+            error_msg = row['error_message'] or 'Sin mensaje de error'
+            real_errors_count += row['count']
+            cause = "Desconocido"
+            can_auto_fix = False
+            if 'Max retries (429)' in error_msg or '429' in error_msg:
+                cause = "Rate limit LLM - reintentar puede resolver"
+                can_auto_fix = True
+            elif 'timeout' in error_msg.lower() or 'timed out' in error_msg.lower():
+                cause = "Timeout durante generación de insight"
+                can_auto_fix = True
+            elif 'Server disconnected' in error_msg or 'Connection' in error_msg or 'RemoteDisconnected' in error_msg:
+                cause = "Conexión interrumpida - reintentar puede resolver"
+                can_auto_fix = True
+            elif 'No chunks' in error_msg:
+                cause = "Sin chunks para generar insight - verificar documento"
+                can_auto_fix = False
+            else:
+                cause = "Error en generación LLM - reintentar puede resolver"
+                can_auto_fix = True
+            error_groups.append({
+                "error_message": error_msg,
+                "stage": "insights",
+                "count": row['count'],
+                "cause": cause,
+                "can_auto_fix": can_auto_fix,
+                "document_ids": row['document_ids'] or [],
+                "filenames": row['filenames'] or []
+            })
+        
         # ===== 2. PIPELINE ANALYSIS =====
+        # Total documentos = fuente de verdad (coherencia entre etapas)
+        cursor.execute("SELECT COUNT(*) as n FROM document_status")
+        total_documents = cursor.fetchone()['n'] or 0
+
+        # Inbox file count — Upload no puede ser 0 si hay archivos en inbox
+        import os
+        inbox_count = 0
+        inbox_dir = os.getenv("INBOX_DIR", "/app/inbox")
+        if os.path.isdir(inbox_dir):
+            inbox_count = sum(
+                1 for f in os.listdir(inbox_dir)
+                if f != "processed" and os.path.isfile(os.path.join(inbox_dir, f))
+            )
+
         stages_analysis = []
         
-        # OCR Stage
+        # Errores por processing_stage para cada etapa (document_status.status='error')
+        cursor.execute("""
+            SELECT COUNT(*) as c FROM document_status
+            WHERE status = %s AND (processing_stage IS NULL OR processing_stage = %s)
+        """, (DocStatus.ERROR, Stage.OCR))
+        ocr_errors = cursor.fetchone()['c'] or 0
+        cursor.execute("SELECT COUNT(*) as c FROM document_status WHERE status = %s AND processing_stage = %s", (DocStatus.ERROR, Stage.CHUNKING))
+        ch_errors = cursor.fetchone()['c'] or 0
+        cursor.execute("SELECT COUNT(*) as c FROM document_status WHERE status = %s AND processing_stage = %s", (DocStatus.ERROR, Stage.INDEXING))
+        idx_errors = cursor.fetchone()['c'] or 0
+        cursor.execute("SELECT COUNT(*) as c FROM document_status WHERE status = %s AND processing_stage = %s", (DocStatus.ERROR, Stage.UPLOAD))
+        upload_errors = cursor.fetchone()['c'] or 0
+        
+        # Upload Stage (REQ-014.1) — upload_pending, upload_processing, upload_done, paused
+        cursor.execute("""
+            SELECT 
+                COUNT(*) FILTER (WHERE status = %s) as pending,
+                COUNT(*) FILTER (WHERE status = %s) as processing,
+                COUNT(*) FILTER (WHERE status = %s) as completed,
+                COUNT(*) FILTER (WHERE status = %s) as paused
+            FROM document_status
+        """, (DocStatus.UPLOAD_PENDING, DocStatus.UPLOAD_PROCESSING, DocStatus.UPLOAD_DONE, DocStatus.PAUSED))
+        upload_data = cursor.fetchone()
+        upload_pending = upload_data['pending'] or 0
+        upload_processing = upload_data['processing'] or 0
+        upload_completed = upload_data['completed'] or 0
+        upload_paused = upload_data['paused'] or 0
+        upload_total = upload_pending + upload_processing + upload_completed + upload_paused
+        # Upload total: max(inbox, DB) — nunca 0 si hay archivos en inbox o en DB
+        upload_total_docs = max(upload_total, total_documents, inbox_count)
+        # Archivos en inbox sin fila en DB = pendientes de ingesta
+        upload_pending = upload_pending + max(0, inbox_count - upload_total)
+        stages_analysis.append({
+            "name": "Upload",
+            "total_documents": upload_total_docs,
+            "pending_tasks": upload_pending,
+            "processing_tasks": upload_processing,
+            "completed_tasks": upload_completed,
+            "error_tasks": upload_errors,
+            "paused_tasks": upload_paused,
+            "ready_for_next": upload_completed,
+            "blockers": []
+        })
+        
+        # OCR Stage — processing_queue + document_status (fallback para docs sin fila en queue)
         cursor.execute("""
             SELECT 
                 COUNT(*) FILTER (WHERE status = 'pending') as pending,
@@ -5380,11 +5829,21 @@ async def get_dashboard_analysis(
         """)
         ocr_queue = cursor.fetchone()
         
+        # Fuente de verdad para "completados": document_status (docs con ocr_done o más allá)
+        cursor.execute("""
+            SELECT COUNT(*) as n FROM document_status
+            WHERE status IN (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            DocStatus.OCR_DONE, DocStatus.CHUNKING_PENDING, DocStatus.CHUNKING_PROCESSING, DocStatus.CHUNKING_DONE,
+            DocStatus.INDEXING_PENDING, DocStatus.INDEXING_PROCESSING, DocStatus.INDEXING_DONE,
+            DocStatus.INSIGHTS_PENDING, DocStatus.INSIGHTS_PROCESSING, DocStatus.INSIGHTS_DONE, DocStatus.COMPLETED
+        ))
+        ocr_done_from_docs = cursor.fetchone()['n'] or 0
+        
         cursor.execute("""
             SELECT COUNT(*) as count
             FROM document_status
             WHERE status = %s
-            AND processing_stage = 'ocr'
             AND ocr_text IS NOT NULL
             AND LENGTH(ocr_text) > 0
             AND NOT EXISTS (
@@ -5397,23 +5856,32 @@ async def get_dashboard_analysis(
         ocr_ready_for_chunking = cursor.fetchone()['count']
         
         ocr_blockers = []
-        if ocr_ready_for_chunking == 0:
+        # Solo bloquear si Chunking necesita input pero OCR no produce (bloqueo real)
+        cursor.execute("SELECT COUNT(*) FILTER (WHERE status IN ('pending','processing')) as n FROM processing_queue WHERE task_type = 'chunking'")
+        ch_needs_input = (cursor.fetchone()['n'] or 0) > 0
+        if ch_needs_input and ocr_ready_for_chunking == 0:
             ocr_blockers.append({
                 "reason": "No hay documentos con status='ocr_done' y texto OCR válido",
                 "count": 0,
                 "solution": "Esperando que documentos completen OCR correctamente"
             })
         
+        ocr_processing = ocr_queue['processing'] or 0
+        ocr_completed = max(ocr_queue['completed'] or 0, ocr_done_from_docs)
+        # Pending = cola real (no total-completed que incluye errores como "pendientes")
+        ocr_pending = ocr_queue['pending'] or 0
         stages_analysis.append({
             "name": "OCR",
-            "pending_tasks": ocr_queue['pending'] or 0,
-            "processing_tasks": ocr_queue['processing'] or 0,
-            "completed_tasks": ocr_queue['completed'] or 0,
+            "total_documents": total_documents,
+            "pending_tasks": ocr_pending,
+            "processing_tasks": ocr_processing,
+            "completed_tasks": ocr_completed,
+            "error_tasks": ocr_errors,
             "ready_for_next": ocr_ready_for_chunking,
             "blockers": ocr_blockers
         })
         
-        # Chunking Stage
+        # Chunking Stage — document_status como fallback para completed
         cursor.execute("""
             SELECT 
                 COUNT(*) FILTER (WHERE status = 'pending') as pending,
@@ -5423,12 +5891,19 @@ async def get_dashboard_analysis(
             WHERE task_type = 'chunking'
         """)
         chunking_queue = cursor.fetchone()
+        cursor.execute("""
+            SELECT COUNT(*) as n FROM document_status
+            WHERE status IN (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            DocStatus.CHUNKING_DONE, DocStatus.INDEXING_PENDING, DocStatus.INDEXING_PROCESSING, DocStatus.INDEXING_DONE,
+            DocStatus.INSIGHTS_PENDING, DocStatus.INSIGHTS_PROCESSING, DocStatus.INSIGHTS_DONE, DocStatus.COMPLETED
+        ))
+        chunking_done_from_docs = cursor.fetchone()['n'] or 0
         
         cursor.execute("""
             SELECT COUNT(*) as count
             FROM document_status
-            WHERE processing_stage = 'chunking'
-            AND status = %s
+            WHERE status = %s
             AND NOT EXISTS (
                 SELECT 1 FROM processing_queue pq
                 WHERE pq.document_id = document_status.document_id
@@ -5439,23 +5914,38 @@ async def get_dashboard_analysis(
         chunking_ready_for_indexing = cursor.fetchone()['count']
         
         chunking_blockers = []
-        if chunking_ready_for_indexing == 0:
+        # Solo bloquear si Indexing necesita input pero Chunking no produce (bloqueo real)
+        cursor.execute("SELECT COUNT(*) FILTER (WHERE status IN ('pending','processing')) as n FROM processing_queue WHERE task_type = 'indexing'")
+        idx_needs_input = (cursor.fetchone()['n'] or 0) > 0
+        if idx_needs_input and chunking_ready_for_indexing == 0:
             chunking_blockers.append({
                 "reason": "No hay documentos con chunking_done",
                 "count": 0,
                 "solution": "Esperando que documentos completen chunking"
             })
         
+        ch_completed = max(chunking_queue['completed'] or 0, chunking_done_from_docs)
+        # Pending = cola real (no total-completed que incluye errores como "pendientes")
+        ch_pending = chunking_queue['pending'] or 0
+        cursor.execute("SELECT COALESCE(SUM(num_chunks), 0) as n FROM document_status WHERE num_chunks > 0")
+        chunks_total = int(cursor.fetchone()['n'] or 0)
+        cursor.execute("SELECT COUNT(*) as n FROM news_items")
+        news_count = int(cursor.fetchone()['n'] or 0)
         stages_analysis.append({
             "name": "Chunking",
-            "pending_tasks": chunking_queue['pending'] or 0,
+            "granularity": "document",
+            "total_documents": total_documents,
+            "pending_tasks": ch_pending,
             "processing_tasks": chunking_queue['processing'] or 0,
-            "completed_tasks": chunking_queue['completed'] or 0,
+            "completed_tasks": ch_completed,
+            "error_tasks": ch_errors,
             "ready_for_next": chunking_ready_for_indexing,
-            "blockers": chunking_blockers
+            "blockers": chunking_blockers,
+            "total_chunks": chunks_total,
+            "news_items_count": news_count,
         })
         
-        # Indexing Stage
+        # Indexing Stage — document_status como fallback para completed
         cursor.execute("""
             SELECT 
                 COUNT(*) FILTER (WHERE status = 'pending') as pending,
@@ -5465,53 +5955,122 @@ async def get_dashboard_analysis(
             WHERE task_type = 'indexing'
         """)
         indexing_queue = cursor.fetchone()
+        cursor.execute("""
+            SELECT COUNT(*) as n FROM document_status
+            WHERE status IN (%s, %s, %s, %s, %s)
+        """, (
+            DocStatus.INDEXING_DONE, DocStatus.INSIGHTS_PENDING, DocStatus.INSIGHTS_PROCESSING,
+            DocStatus.INSIGHTS_DONE, DocStatus.COMPLETED
+        ))
+        indexing_done_from_docs = cursor.fetchone()['n'] or 0
         
         indexing_blockers = []
-        if (indexing_queue['pending'] or 0) == 0:
-            indexing_blockers.append({
-                "reason": "No hay documentos con chunking_done listos para indexing",
-                "count": 0,
-                "solution": "Esperando que documentos completen chunking"
-            })
+        # No añadir falso positivo: indexing con 0 pending significa que está al día, no bloqueado
         
+        idx_completed = max(indexing_queue['completed'] or 0, indexing_done_from_docs)
+        # Pending = cola real (no total-completed que incluye docs en error como "pendientes")
+        idx_pending = indexing_queue['pending'] or 0
         stages_analysis.append({
             "name": "Indexing",
-            "pending_tasks": indexing_queue['pending'] or 0,
+            "granularity": "document",
+            "total_documents": total_documents,
+            "pending_tasks": idx_pending,
             "processing_tasks": indexing_queue['processing'] or 0,
-            "completed_tasks": indexing_queue['completed'] or 0,
+            "completed_tasks": idx_completed,
+            "error_tasks": idx_errors,
             "ready_for_next": 0,
-            "blockers": indexing_blockers
+            "blockers": indexing_blockers,
+            "total_chunks": chunks_total,
+            "news_items_count": news_count,
         })
         
-        # Insights Stage
+        # Insights Stage — granularidad: news_item (1 doc → N news → N insights)
+        # ID compuesto: (document_id, news_item_id); fuente: news_item_insights
+        # JOIN news_items: solo insights de news_items válidos (cadena doc→news→insight)
         cursor.execute("""
             SELECT 
-                COUNT(*) FILTER (WHERE status = 'pending') as pending,
-                COUNT(*) FILTER (WHERE status = 'processing') as processing,
-                COUNT(*) FILTER (WHERE status = 'completed') as completed
-            FROM processing_queue
-            WHERE task_type = 'insights'
+                COUNT(*) FILTER (WHERE nii.status IN ('pending', 'queued')) as pending,
+                COUNT(*) FILTER (WHERE nii.status = 'generating') as processing,
+                COUNT(*) FILTER (WHERE nii.status = 'done') as completed,
+                COUNT(*) FILTER (WHERE nii.status = 'error') as errors,
+                COUNT(*) as total
+            FROM news_item_insights nii
+            INNER JOIN news_items ni ON ni.news_item_id = nii.news_item_id
         """)
-        insights_queue = cursor.fetchone()
-        
+        insights_data = cursor.fetchone()
+        total_insights = insights_data['total'] or 0
+        ins_pending = insights_data['pending'] or 0
+        ins_processing = insights_data['processing'] or 0
+        ins_completed = insights_data['completed'] or 0
+        # Vista documento: docs con todos los insights hechos vs docs con pendientes
         cursor.execute("""
-            SELECT COUNT(*) as count
-            FROM news_item_insights
-            WHERE status NOT IN ('done', 'generating')
+            SELECT 
+                COUNT(DISTINCT nii.document_id) FILTER (
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM news_item_insights n2 
+                        WHERE n2.document_id = nii.document_id 
+                        AND n2.status NOT IN ('done', 'error')
+                    )
+                ) as docs_all_done,
+                COUNT(DISTINCT nii.document_id) FILTER (
+                    WHERE EXISTS (
+                        SELECT 1 FROM news_item_insights n2 
+                        WHERE n2.document_id = nii.document_id 
+                        AND n2.status IN ('pending', 'queued', 'generating')
+                    )
+                ) as docs_with_pending
+            FROM news_item_insights nii
+            INNER JOIN news_items ni ON ni.news_item_id = nii.news_item_id
         """)
-        insights_pending = cursor.fetchone()['count']
-        
+        ins_docs = cursor.fetchone()
+        ins_errors = insights_data['errors'] or 0
         stages_analysis.append({
             "name": "Insights",
-            "pending_tasks": insights_queue['pending'] or 0,
-            "processing_tasks": insights_queue['processing'] or 0,
-            "completed_tasks": insights_queue['completed'] or 0,
-            "ready_for_next": insights_pending,
+            "granularity": "news_item",
+            "total_documents": total_insights,
+            "pending_tasks": ins_pending,
+            "processing_tasks": ins_processing,
+            "completed_tasks": ins_completed,
+            "error_tasks": ins_errors,
+            "ready_for_next": ins_pending + ins_processing,
+            "docs_with_all_insights_done": ins_docs['docs_all_done'] or 0,
+            "docs_with_pending_insights": ins_docs['docs_with_pending'] or 0,
+            "blockers": []
+        })
+
+        # Indexing Insights Stage — insights done but not yet in Qdrant
+        cursor.execute("""
+            SELECT
+                COUNT(*) FILTER (WHERE nii.status = 'done' AND nii.indexed_in_qdrant_at IS NULL) as pending,
+                COUNT(*) FILTER (WHERE nii.status = 'indexing') as processing,
+                COUNT(*) FILTER (WHERE nii.indexed_in_qdrant_at IS NOT NULL) as completed,
+                COUNT(*) FILTER (WHERE (nii.status = 'done' OR nii.status = 'indexing') AND nii.content IS NOT NULL) as total
+            FROM news_item_insights nii
+            INNER JOIN news_items ni ON ni.news_item_id = nii.news_item_id
+            WHERE nii.content IS NOT NULL AND nii.status IN ('done', 'indexing')
+        """)
+        idx_ins_data = cursor.fetchone()
+        idx_ins_pending = idx_ins_data['pending'] or 0
+        idx_ins_processing = idx_ins_data['processing'] or 0
+        idx_ins_completed = idx_ins_data['completed'] or 0
+        idx_ins_total = idx_ins_data['total'] or 0
+        # Indexing Insights: insights en error no aplican (son de stage Insights); errores de indexación no tienen status propio
+        idx_ins_errors = 0
+        stages_analysis.append({
+            "name": "Indexing Insights",
+            "granularity": "news_item",
+            "total_documents": idx_ins_total,
+            "pending_tasks": idx_ins_pending,
+            "processing_tasks": idx_ins_processing,
+            "completed_tasks": idx_ins_completed,
+            "error_tasks": idx_ins_errors,
+            "ready_for_next": idx_ins_pending + idx_ins_processing,
             "blockers": []
         })
         
         # ===== 3. WORKERS ANALYSIS =====
         # Active workers with execution time
+        # Para insights: document_id="insight_{id}" → JOIN document_status falla; usar news_item_insights
         cursor.execute("""
             SELECT 
                 wt.worker_id,
@@ -5521,7 +6080,12 @@ async def get_dashboard_analysis(
                 wt.status,
                 wt.started_at,
                 EXTRACT(EPOCH FROM (NOW() - wt.started_at)) / 60 as minutes_running,
-                ds.filename
+                COALESCE(ds.filename, 
+                    CASE WHEN wt.task_type IN ('insights', 'indexing_insights') THEN
+                        (SELECT COALESCE(nii.filename, nii.title) FROM news_item_insights nii 
+                         WHERE nii.news_item_id = REPLACE(wt.document_id, 'insight_', '') LIMIT 1)
+                    END
+                ) as filename
             FROM worker_tasks wt
             LEFT JOIN document_status ds ON ds.document_id = wt.document_id
             WHERE wt.status IN ('assigned', 'started')
@@ -5535,13 +6099,17 @@ async def get_dashboard_analysis(
         for row in active_workers_raw:
             minutes = row['minutes_running'] or 0
             is_stuck = minutes > 20
+            fn = row['filename']
+            if not fn and row['task_type'] in ('insights', 'indexing_insights') and row['document_id']:
+                # Fallback si subquery no matcheó
+                fn = row['document_id']
             
             worker_data = {
                 "worker_id": row['worker_id'],
                 "worker_type": row['worker_type'],
                 "task_type": row['task_type'],
                 "document_id": row['document_id'],
-                "filename": row['filename'],
+                "filename": fn,
                 "status": row['status'],
                 "started_at": row['started_at'].isoformat() if row['started_at'] else None,
                 "execution_time_minutes": round(minutes, 1),
@@ -5715,7 +6283,7 @@ async def start_workers():
             )
             generic_worker_pool.start()
             logger.info(f"✅ Generic worker pool started with {total_workers} workers")
-            logger.info("   Workers can handle: OCR, Chunking, Indexing, Insights")
+            logger.info("   Workers can handle: OCR, Chunking, Indexing, Insights, Indexing Insights")
         elif generic_worker_pool and generic_worker_pool.running:
             logger.info(f"ℹ️ Worker pool already running with {generic_worker_pool.pool_size} workers")
         
@@ -5724,7 +6292,7 @@ async def start_workers():
             "message": "Generic worker pool started successfully",
             "pool_active": generic_worker_pool is not None and generic_worker_pool.running,
             "pool_size": generic_worker_pool.pool_size if generic_worker_pool else 0,
-            "supported_tasks": ["ocr", "chunking", "indexing", "insights"]
+            "supported_tasks": ["ocr", "chunking", "indexing", "insights", "indexing_insights"]
         }
     except Exception as e:
         logger.error(f"❌ Error starting worker pool: {e}")

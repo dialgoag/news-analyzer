@@ -110,6 +110,15 @@
   color:#64748b;
 }
 
+.error-actions-retry-all {
+  margin-bottom:16px;
+}
+
+.error-actions-retry-all .retry-all-button {
+  font-size:1rem;
+  padding:10px 20px;
+}
+
 .error-actions {
   margin-top:12px;
 }

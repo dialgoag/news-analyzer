@@ -26,10 +26,12 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Lock to serialize OCR task claims - prevents race condition where multiple workers
-# pass can_assign_ocr() before any commits, exceeding OCR_PARALLEL_WORKERS
+# Lock to serialize task claims - prevents race condition where multiple workers
+# pass can_assign_*() before any commits, exceeding *_PARALLEL_WORKERS
 _ocr_claim_lock = Lock()
 _insights_claim_lock = Lock()
+_indexing_claim_lock = Lock()
+_indexing_insights_claim_lock = Lock()
 
 
 class GenericWorkerPool:
@@ -125,6 +127,13 @@ class GenericWorkerPool:
                 # PostgreSQL returns dict row
                 result = cursor.fetchone()
                 current_workers['insights'] = result['count'] if result else 0
+
+                cursor.execute("""
+                    SELECT COUNT(*) FROM worker_tasks
+                    WHERE task_type = 'indexing_insights' AND status IN ('assigned', 'started')
+                """)
+                result = cursor.fetchone()
+                current_workers['indexing_insights'] = result['count'] if result else 0
                 
                 # Check pending tasks (this determines priority)
                 cursor.execute("""
@@ -143,22 +152,36 @@ class GenericWorkerPool:
                 """)
                 result = cursor.fetchone()
                 pending_tasks['insights'] = result['count'] if result else 0
+
+                cursor.execute("""
+                    SELECT COUNT(*) FROM news_item_insights
+                    WHERE status = 'done' AND content IS NOT NULL AND indexed_in_qdrant_at IS NULL
+                """)
+                result = cursor.fetchone()
+                pending_tasks['indexing_insights'] = result['count'] if result else 0
                 
-                # Priority order: COMPLETE PIPELINE (reverse order)
-                priority_order = ['insights', 'indexing', 'chunking', 'ocr']
+                # Priority order: COMPLETE PIPELINE (indexing_insights after insights)
+                priority_order = ['indexing_insights', 'insights', 'indexing', 'chunking', 'ocr']
                 
                 # Minimum workers per stage (only if pending > 0)
                 min_workers_per_stage = 2
-                # OCR limit: max concurrent OCR workers (prevents Tika saturation)
-                ocr_parallel_limit = int(os.getenv("OCR_PARALLEL_WORKERS", "5"))
-                # Insights limit: max concurrent insights workers (prevents OpenAI 429)
-                insights_parallel_limit = int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "3"))
+                # OCR/Insights/Indexing limits: from env (e.g. INSIGHTS_PARALLEL_WORKERS=8), fallback to pool_size
+                ocr_parallel_limit = int(os.getenv("OCR_PARALLEL_WORKERS", str(self.pool_size)))
+                insights_parallel_limit = int(os.getenv("INSIGHTS_PARALLEL_WORKERS", str(self.pool_size)))
+                indexing_parallel_limit = int(os.getenv("INDEXING_PARALLEL_WORKERS", "8"))
+                indexing_insights_parallel_limit = int(os.getenv("INDEXING_INSIGHTS_PARALLEL_WORKERS", "8"))
                 
                 def can_assign_ocr():
                     return current_workers.get('ocr', 0) < ocr_parallel_limit
                 
                 def can_assign_insights():
                     return current_workers.get('insights', 0) < insights_parallel_limit
+                
+                def can_assign_indexing():
+                    return current_workers.get('indexing', 0) < indexing_parallel_limit
+
+                def can_assign_indexing_insights():
+                    return current_workers.get('indexing_insights', 0) < indexing_insights_parallel_limit
                 
                 selected_task_type = None
                 
@@ -169,6 +192,10 @@ class GenericWorkerPool:
                     if task_type_check == 'ocr' and not can_assign_ocr():
                         continue
                     if task_type_check == 'insights' and not can_assign_insights():
+                        continue
+                    if task_type_check == 'indexing' and not can_assign_indexing():
+                        continue
+                    if task_type_check == 'indexing_insights' and not can_assign_indexing_insights():
                         continue
                     if pending > 0 and current < min_workers_per_stage:
                         selected_task_type = task_type_check
@@ -184,6 +211,10 @@ class GenericWorkerPool:
                             continue
                         if task_type_check == 'insights' and not can_assign_insights():
                             continue
+                        if task_type_check == 'indexing' and not can_assign_indexing():
+                            continue
+                        if task_type_check == 'indexing_insights' and not can_assign_indexing_insights():
+                            continue
                         if pending > max_pending:
                             max_pending = pending
                             selected_task_type = task_type_check
@@ -195,8 +226,11 @@ class GenericWorkerPool:
                 if selected_task_type in ['ocr', 'chunking', 'indexing']:
                     pipeline_task = None
                     ocr_lock_held = selected_task_type == 'ocr'
+                    indexing_lock_held = selected_task_type == 'indexing'
                     if ocr_lock_held:
                         _ocr_claim_lock.acquire()
+                    if indexing_lock_held:
+                        _indexing_claim_lock.acquire()
                     try:
                         if ocr_lock_held:
                             cursor.execute("""
@@ -206,6 +240,16 @@ class GenericWorkerPool:
                             result = cursor.fetchone()
                             count = result['count'] if result else 0
                             if count >= ocr_parallel_limit:
+                                selected_task_type = None
+                                task_found = False
+                        if indexing_lock_held:
+                            cursor.execute("""
+                                SELECT COUNT(*) FROM processing_queue
+                                WHERE status = 'processing' AND task_type = 'indexing'
+                            """)
+                            result = cursor.fetchone()
+                            count = result['count'] if result else 0
+                            if count >= indexing_parallel_limit:
                                 selected_task_type = None
                                 task_found = False
                         if selected_task_type in ['ocr', 'chunking', 'indexing']:
@@ -224,16 +268,30 @@ class GenericWorkerPool:
                     finally:
                         if ocr_lock_held:
                             _ocr_claim_lock.release()
+                        if indexing_lock_held:
+                            _indexing_claim_lock.release()
                     
                     if pipeline_task:
-                        task_type = pipeline_task['task_type']
-                        task_data = {
-                            'document_id': pipeline_task['document_id'],
-                            'filename': pipeline_task['filename'],
-                        }
-                        task_found = True
-                        conn.commit()
-                        logger.info(f"{worker_id}: Claimed {task_type} task for {task_data['filename']} (Priority: complete pipeline)")
+                        try:
+                            now_iso = datetime.utcnow().isoformat()
+                            cursor.execute("""
+                                INSERT INTO worker_tasks (worker_id, worker_type, document_id, task_type, status, assigned_at, error_message, completed_at)
+                                VALUES (%s, %s, %s, %s, 'assigned', %s, NULL, NULL)
+                                ON CONFLICT (worker_id, document_id, task_type) DO UPDATE SET
+                                    status = 'assigned', assigned_at = EXCLUDED.assigned_at,
+                                    error_message = NULL, completed_at = NULL, started_at = NULL
+                            """, (worker_id, pipeline_task['task_type'].upper(), pipeline_task['document_id'], pipeline_task['task_type'], now_iso))
+                            conn.commit()
+                            task_type = pipeline_task['task_type']
+                            task_data = {
+                                'document_id': pipeline_task['document_id'],
+                                'filename': pipeline_task['filename'],
+                            }
+                            task_found = True
+                            logger.info(f"{worker_id}: Claimed {task_type} task for {task_data['filename']} (Priority: complete pipeline)")
+                        except Exception as wt_err:
+                            conn.rollback()
+                            logger.warning(f"{worker_id}: {pipeline_task['task_type']} claim rolled back (worker_tasks insert failed): {wt_err}")
                 
                 # 2. Claim insights task (with concurrency lock, like OCR)
                 elif selected_task_type == 'insights':
@@ -263,18 +321,89 @@ class GenericWorkerPool:
                             insights_task = cursor.fetchone()
                             
                             if insights_task:
-                                task_type = 'insights'
-                                task_data = {
-                                    'news_item_id': insights_task['news_item_id'],
-                                    'document_id': insights_task['document_id'],
-                                    'filename': insights_task['filename'],
-                                    'title': insights_task['title'],
-                                }
-                                task_found = True
-                                conn.commit()
-                                logger.info(f"{worker_id}: Claimed insights task for {task_data.get('title') or task_data['filename']} (Priority: complete pipeline)")
+                                news_item_id = insights_task['news_item_id']
+                                assign_doc_id = f"insight_{news_item_id}"
+                                try:
+                                    now_iso = datetime.utcnow().isoformat()
+                                    cursor.execute("""
+                                        INSERT INTO worker_tasks (worker_id, worker_type, document_id, task_type, status, assigned_at, error_message, completed_at)
+                                        VALUES (%s, %s, %s, 'insights', 'assigned', %s, NULL, NULL)
+                                        ON CONFLICT (worker_id, document_id, task_type) DO UPDATE SET
+                                            status = 'assigned', assigned_at = EXCLUDED.assigned_at,
+                                            error_message = NULL, completed_at = NULL, started_at = NULL
+                                    """, (worker_id, 'INSIGHTS', assign_doc_id, now_iso))
+                                    conn.commit()
+                                    task_type = 'insights'
+                                    task_data = {
+                                        'news_item_id': news_item_id,
+                                        'document_id': insights_task['document_id'],
+                                        'filename': insights_task['filename'],
+                                        'title': insights_task['title'],
+                                    }
+                                    task_found = True
+                                    logger.info(f"{worker_id}: Claimed insights task for {task_data.get('title') or task_data['filename']} (Priority: complete pipeline)")
+                                except Exception as wt_err:
+                                    conn.rollback()
+                                    logger.warning(f"{worker_id}: insights claim rolled back (worker_tasks insert failed): {wt_err}")
                     finally:
                         _insights_claim_lock.release()
+
+                # 3. Claim indexing_insights task (insights done but not yet in Qdrant)
+                # ATOMIC: claim (UPDATE) + worker_tasks (INSERT) in same transaction — no orphaned insights
+                elif selected_task_type == 'indexing_insights':
+                    _indexing_insights_claim_lock.acquire()
+                    try:
+                        cursor.execute("""
+                            SELECT COUNT(*) FROM worker_tasks
+                            WHERE task_type = 'indexing_insights' AND status IN ('assigned', 'started')
+                        """)
+                        result = cursor.fetchone()
+                        count = result['count'] if result else 0
+                        if count >= indexing_insights_parallel_limit:
+                            selected_task_type = None
+                            task_found = False
+                        else:
+                            # Claim + insert in ONE transaction (same conn)
+                            cursor.execute("""
+                                UPDATE news_item_insights
+                                SET status = 'indexing', updated_at = NOW()
+                                WHERE news_item_id = (
+                                    SELECT news_item_id FROM news_item_insights
+                                    WHERE status = 'done' AND content IS NOT NULL AND indexed_in_qdrant_at IS NULL
+                                    ORDER BY news_item_id ASC
+                                    LIMIT 1
+                                    FOR UPDATE SKIP LOCKED
+                                )
+                                RETURNING news_item_id, document_id, filename, title, content
+                            """)
+                            row = cursor.fetchone()
+                            if row:
+                                row = dict(row)
+                                assign_doc_id = f"insight_{row['news_item_id']}"
+                                now_iso = datetime.utcnow().isoformat()
+                                cursor.execute("""
+                                    INSERT INTO worker_tasks (worker_id, worker_type, document_id, task_type, status, assigned_at, error_message, completed_at)
+                                    VALUES (%s, %s, %s, 'indexing_insights', 'assigned', %s, NULL, NULL)
+                                    ON CONFLICT (worker_id, document_id, task_type) DO UPDATE SET
+                                        status = 'assigned', assigned_at = EXCLUDED.assigned_at,
+                                        error_message = NULL, completed_at = NULL, started_at = NULL
+                                """, (worker_id, 'INDEXING_INSIGHTS', assign_doc_id, now_iso))
+                                conn.commit()
+                                task_type = 'indexing_insights'
+                                task_data = {
+                                    'news_item_id': row['news_item_id'],
+                                    'document_id': row['document_id'],
+                                    'filename': row['filename'] or '',
+                                    'title': row.get('title') or '',
+                                    'content': row['content'],
+                                }
+                                task_found = True
+                                logger.info(f"{worker_id}: Claimed indexing_insights for {row['news_item_id']}")
+                    except Exception as e:
+                        conn.rollback()
+                        logger.warning(f"{worker_id}: indexing_insights claim failed: {e}")
+                    finally:
+                        _indexing_insights_claim_lock.release()
                 
                 conn.close()
                 

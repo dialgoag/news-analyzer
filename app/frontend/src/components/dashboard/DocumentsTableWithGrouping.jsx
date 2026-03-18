@@ -15,6 +15,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import axios from 'axios';
 import { useDashboardFilters } from '../hooks/useDashboardFilters.jsx';
+import { API_TIMEOUT_MS } from '../../config/apiConfig';
 import {
   groupDocumentsByMetaGroup,
   aggregateGroupMetrics,
@@ -58,7 +59,7 @@ export function DocumentsTable({ API_URL, token, refreshTrigger }) {
           `${API_URL}/api/documents/status`,
           {
             headers: { Authorization: `Bearer ${token}` },
-            timeout: 15000
+            timeout: API_TIMEOUT_MS
           }
         );
         setDocuments(response.data || []);

@@ -49,9 +49,12 @@
   font-size:1rem;
 }
 
-.stat-value.completed {
-  color:#10b981;
-}
+.stat-value.pending { color:#f59e0b; }
+.stat-value.processing { color:#3b82f6; }
+.stat-value.completed { color:#10b981; }
+.stat-value.error { color:#ef4444; }
+.stat-value.paused { color:#94a3b8; }
+.stat-hint { font-size:0.8rem; opacity:0.9; }
 
 .blockers-section {
   margin-top:12px;

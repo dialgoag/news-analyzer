@@ -7,6 +7,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
+import { API_TIMEOUT_MS, API_TIMEOUT_ACTION_MS } from '../../config/apiConfig';
 import './ErrorAnalysisPanel.css';
 
 export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
@@ -32,7 +33,7 @@ export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
         setLoading(true);
         const response = await axios.get(`${API_URL}/api/dashboard/analysis`, {
           headers: { Authorization: `Bearer ${token}` },
-          timeout: 20000
+          timeout: API_TIMEOUT_MS
         });
         setAnalysis(response.data);
         setError(null);
@@ -51,32 +52,41 @@ export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
     return () => clearInterval(interval);
   }, [API_URL, token, refreshTrigger, analysis]);
 
-  const handleCleanErrors = async (errorGroup) => {
-    if (!confirm(`¿Limpiar y reprocesar ${errorGroup.count} documento(s) con error "${errorGroup.error_message}"?`)) {
+  const handleRetryAll = async () => {
+    if (!confirm(`¿Reintentar todos los ${errors.total_errors} documento(s) con error?`)) {
       return;
     }
+    await doRetry();
+  };
 
+  const handleRetryGroup = async (errorGroup) => {
+    if (!confirm(`¿Reintentar ${errorGroup.count} documento(s) con error "${errorGroup.error_message}"?`)) {
+      return;
+    }
+    await doRetry(errorGroup.document_ids);
+  };
+
+  const doRetry = async (documentIds = null) => {
     setCleaning(true);
     try {
-      // Use existing retry endpoint
+      const body = (documentIds && Array.isArray(documentIds) && documentIds.length > 0)
+        ? { document_ids: documentIds } : {};
       const response = await axios.post(
         `${API_URL}/api/workers/retry-errors`,
-        {},
+        body,
         {
-          headers: { Authorization: `Bearer ${token}` },
-          timeout: 30000
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: API_TIMEOUT_ACTION_MS
         }
       );
-
       alert(`✅ ${response.data.message}\nReintentados: ${response.data.retried_count}`);
-      
-      // Refresh analysis after cleaning
-      setTimeout(() => {
-        window.location.reload();
-      }, 1000);
+      setTimeout(() => window.location.reload(), 1000);
     } catch (err) {
-      console.error('Error cleaning errors:', err);
-      alert(`❌ Error al limpiar errores: ${err.response?.data?.detail || err.message}`);
+      console.error('Error retrying:', err);
+      alert(`❌ Error al reintentar: ${err.response?.data?.detail || err.message}`);
     } finally {
       setCleaning(false);
     }
@@ -129,6 +139,16 @@ export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
           ✅ No hay errores en el sistema
         </div>
       ) : (
+        <>
+        <div className="error-actions-retry-all">
+          <button
+            onClick={handleRetryAll}
+            disabled={cleaning}
+            className="clean-button retry-all-button"
+          >
+            {cleaning ? '⏳ Reintentando...' : '🔄 Reintentar todos los errores'}
+          </button>
+        </div>
         <div className="error-groups">
           {errors.groups.map((errorGroup, index) => {
             const isShutdownError = errorGroup.error_message.includes('Shutdown ordenado');
@@ -161,7 +181,7 @@ export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
                     <details>
                       <summary>Ver documentos afectados ({errorGroup.document_ids.length})</summary>
                       <ul>
-                        {errorGroup.filenames.slice(0, 10).map((filename, idx) => (
+                        {(errorGroup.filenames || []).slice(0, 10).map((filename, idx) => (
                           <li key={idx} title={errorGroup.document_ids[idx]}>
                             {filename || errorGroup.document_ids[idx]}
                           </li>
@@ -176,14 +196,14 @@ export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
                   </div>
                 )}
 
-                {errorGroup.can_auto_fix && (
+                {(errorGroup.can_auto_fix || !isShutdownError) && (
                   <div className="error-actions">
                     <button
-                      onClick={() => handleCleanErrors(errorGroup)}
+                      onClick={() => handleRetryGroup(errorGroup)}
                       disabled={cleaning}
                       className="clean-button"
                     >
-                      {cleaning ? '⏳ Limpiando...' : '🔄 Limpiar y Reprocesar'}
+                      {cleaning ? '⏳ Reintentando...' : '🔄 Reintentar este grupo'}
                     </button>
                   </div>
                 )}
@@ -197,6 +217,7 @@ export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
             );
           })}
         </div>
+        </>
       )}
     </div>
   );

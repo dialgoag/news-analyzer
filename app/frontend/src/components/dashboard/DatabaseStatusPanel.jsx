@@ -8,13 +8,14 @@
 
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import { API_TIMEOUT_MS } from '../../config/apiConfig';
 import './DatabaseStatusPanel.css';
 
-export function DatabaseStatusPanel({ API_URL, token, refreshTrigger }) {
+export function DatabaseStatusPanel({ API_URL, token, refreshTrigger, embedded = false }) {
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [collapsed, setCollapsed] = useState(true); // Collapsed by default
+  const [collapsed, setCollapsed] = useState(true);
 
   useEffect(() => {
     const fetchAnalysis = async () => {
@@ -23,7 +24,7 @@ export function DatabaseStatusPanel({ API_URL, token, refreshTrigger }) {
         setLoading(true);
         const response = await axios.get(`${API_URL}/api/dashboard/analysis`, {
           headers: { Authorization: `Bearer ${token}` },
-          timeout: 20000
+          timeout: API_TIMEOUT_MS
         });
         setAnalysis(response.data);
         setError(null);
@@ -51,28 +52,31 @@ export function DatabaseStatusPanel({ API_URL, token, refreshTrigger }) {
   const { processing_queue, worker_tasks, inconsistencies } = analysis.database;
   const hasIssues = (processing_queue?.orphaned_tasks || 0) > 0 || 
                     (inconsistencies && inconsistencies.length > 0);
+  const showContent = embedded || !collapsed;
 
   return (
-    <div className="database-status-panel">
-      <div 
-        className="panel-header collapsible"
-        onClick={() => setCollapsed(!collapsed)}
-      >
-        <div className="header-content">
-          <h3>💾 Estado de Base de Datos</h3>
-          {hasIssues && (
-            <span className="issues-badge">
-              ⚠️ {processing_queue?.orphaned_tasks || 0} tareas huérfanas
-              {inconsistencies && inconsistencies.length > 0 && ` • ${inconsistencies.length} inconsistencias`}
-            </span>
-          )}
+    <div className={`database-status-panel ${embedded ? 'embedded' : ''}`}>
+      {!embedded && (
+        <div 
+          className="panel-header collapsible"
+          onClick={() => setCollapsed(!collapsed)}
+        >
+          <div className="header-content">
+            <h3>💾 Estado de Base de Datos</h3>
+            {hasIssues && (
+              <span className="issues-badge">
+                ⚠️ {processing_queue?.orphaned_tasks || 0} tareas huérfanas
+                {inconsistencies && inconsistencies.length > 0 && ` • ${inconsistencies.length} inconsistencias`}
+              </span>
+            )}
+          </div>
+          <button className="collapse-button">
+            {collapsed ? '▼' : '▲'}
+          </button>
         </div>
-        <button className="collapse-button">
-          {collapsed ? '▼' : '▲'}
-        </button>
-      </div>
+      )}
 
-      {!collapsed && (
+      {showContent && (
         <div className="panel-content">
           {/* Processing Queue Status */}
           <div className="status-section">

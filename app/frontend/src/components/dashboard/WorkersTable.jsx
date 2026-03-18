@@ -9,6 +9,7 @@ import React, { useEffect, useState, useMemo, useRef } from 'react';
 import * as d3 from 'd3';
 import axios from 'axios';
 import { useDashboardFilters } from '../hooks/useDashboardFilters.jsx';
+import { API_TIMEOUT_MS, API_TIMEOUT_ACTION_MS } from '../../config/apiConfig';
 import './WorkersTable.css';
 
 export function WorkersTable({ API_URL, token, refreshTrigger }) {
@@ -32,11 +33,11 @@ export function WorkersTable({ API_URL, token, refreshTrigger }) {
         const [workersResponse, analysisResponse] = await Promise.allSettled([
           axios.get(`${API_URL}/api/workers/status`, {
             headers: { Authorization: `Bearer ${token}` },
-            timeout: 15000
+            timeout: API_TIMEOUT_MS
           }),
           axios.get(`${API_URL}/api/dashboard/analysis`, {
             headers: { Authorization: `Bearer ${token}` },
-            timeout: 15000
+            timeout: API_TIMEOUT_MS
           })
         ]);
 
@@ -308,7 +309,7 @@ export function WorkersTable({ API_URL, token, refreshTrigger }) {
         {},
         {
           headers: { Authorization: `Bearer ${token}` },
-          timeout: 10000
+          timeout: API_TIMEOUT_ACTION_MS
         }
       );
 
@@ -320,8 +321,10 @@ export function WorkersTable({ API_URL, token, refreshTrigger }) {
       }, 1000);
       
     } catch (err) {
+      const detail = err.response?.data?.detail;
+      const msg = typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.join('; ') : JSON.stringify(detail ?? err.message);
       console.error('Error retrying worker:', err);
-      alert(`❌ Error al reintentar: ${err.response?.data?.detail || err.message}`);
+      alert(`❌ Error al reintentar: ${msg}`);
     } finally {
       setRetrying(prev => {
         const next = new Set(prev);
@@ -353,7 +356,7 @@ export function WorkersTable({ API_URL, token, refreshTrigger }) {
         {},
         {
           headers: { Authorization: `Bearer ${token}` },
-          timeout: 30000
+          timeout: API_TIMEOUT_ACTION_MS
         }
       );
 
@@ -437,7 +440,7 @@ export function WorkersTable({ API_URL, token, refreshTrigger }) {
             >
               <option value="all">Todos</option>
               <option value="active">Activos</option>
-              <option value="stuck">Stuck (>20min)</option>
+              <option value="stuck">Stuck ({'>'}20min)</option>
               <option value="real-errors">Errores Reales</option>
               <option value="shutdown-errors">Errores Shutdown</option>
             </select>
