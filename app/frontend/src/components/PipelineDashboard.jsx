@@ -1,25 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import { DashboardProvider } from './hooks/useDashboardFilters.jsx';
-import DashboardFilters from './dashboard/DashboardFilters';
-import PipelineSankeyChartWithZoom from './dashboard/PipelineSankeyChartWithZoom'; // NEW: With semantic zoom
-import ErrorAnalysisPanel from './dashboard/ErrorAnalysisPanel'; // NEW: Error analysis panel
-import PipelineAnalysisPanel from './dashboard/PipelineAnalysisPanel'; // NEW: Pipeline analysis panel
-import StuckWorkersPanel from './dashboard/StuckWorkersPanel'; // NEW: Stuck workers panel
-import DatabaseStatusPanel from './dashboard/DatabaseStatusPanel'; // NEW: Database status panel
+import { API_TIMEOUT_MS } from '../config/apiConfig';
+import PipelineSankeyChartWithZoom from './dashboard/PipelineSankeyChartWithZoom';
+import { CollapsibleSection } from './dashboard/CollapsibleSection';
+import ErrorAnalysisPanel from './dashboard/ErrorAnalysisPanel';
+import PipelineAnalysisPanel from './dashboard/PipelineAnalysisPanel';
+import StuckWorkersPanel from './dashboard/StuckWorkersPanel';
+import DatabaseStatusPanel from './dashboard/DatabaseStatusPanel';
 import WorkersTable from './dashboard/WorkersTable';
-import DocumentsTableWithGrouping from './dashboard/DocumentsTableWithGrouping'; // NEW: With grouping
+import DocumentsTableWithGrouping from './dashboard/DocumentsTableWithGrouping';
 import './PipelineDashboard.css';
-
-// Stage colors (constant shared across components)
-const stageColors = {
-  upload: '#f59e0b',
-  ocr: '#3b82f6',
-  chunking: '#8b5cf6',
-  indexing: '#ec4899',
-  insights: '#10b981',
-  completed: '#6b7280'
-};
 
 export function PipelineDashboard({ API_URL, token, refreshTrigger }) {
   const [data, setData] = useState(null);
@@ -27,42 +18,39 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Fetch pipeline data + documents list
-  useEffect(() => {
-    const fetchPipelineData = async () => {
-      if (!token) return;
+  const fetchPipelineData = useCallback(async () => {
+    if (!token) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const summaryResponse = await axios.get(`${API_URL}/api/dashboard/summary`, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: API_TIMEOUT_MS
+      });
+      setData(summaryResponse.data);
       try {
-        // Fetch summary
-        const summaryResponse = await axios.get(`${API_URL}/api/dashboard/summary`, {
+        const docsResponse = await axios.get(`${API_URL}/api/documents`, {
           headers: { Authorization: `Bearer ${token}` },
-          timeout: 20000
+          timeout: API_TIMEOUT_MS
         });
-        setData(summaryResponse.data);
-        
-        try {
-          const docsResponse = await axios.get(`${API_URL}/api/documents`, {
-            headers: { Authorization: `Bearer ${token}` },
-            timeout: 20000
-          });
-          setDocuments(docsResponse.data?.documents || []);
-        } catch (docErr) {
-          console.warn('Could not fetch documents list:', docErr);
-        }
-        
-        setError(null);
-      } catch (err) {
-        console.error('Error fetching pipeline data:', err);
-        setError(err.message || 'Error de conexión');
-        // Keep existing data (don't clear on error)
-      } finally {
-        setLoading(false);
+        setDocuments(docsResponse.data?.documents || []);
+      } catch (docErr) {
+        console.warn('Could not fetch documents list:', docErr);
       }
-    };
+      setError(null);
+    } catch (err) {
+      console.error('Error fetching pipeline data:', err);
+      setError(err.message || 'Error de conexión');
+    } finally {
+      setLoading(false);
+    }
+  }, [API_URL, token]);
 
+  useEffect(() => {
     fetchPipelineData();
     const interval = setInterval(fetchPipelineData, 20000);
     return () => clearInterval(interval);
-  }, [API_URL, token, refreshTrigger]);
+  }, [fetchPipelineData, refreshTrigger]);
 
   if (loading && !data) {
     return <div className="pipeline-container"><p>Loading pipeline data...</p></div>;
@@ -77,9 +65,30 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger }) {
           color: '#856404',
           padding: '12px 16px',
           borderRadius: '4px',
-          margin: '20px'
+          margin: '20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px'
         }}>
-          ⚠️ Error cargando dashboard: {error}
+          <div>⚠️ Error cargando dashboard: {error}</div>
+          <div style={{ fontSize: '12px', color: '#666' }}>
+            Para entornos lentos, aumenta VITE_API_TIMEOUT_MS (ej. 120000).
+          </div>
+          <button
+            onClick={() => fetchPipelineData()}
+            style={{
+              alignSelf: 'flex-start',
+              padding: '8px 16px',
+              background: '#f59e0b',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontWeight: '600'
+            }}
+          >
+            🔄 Reintentar
+          </button>
         </div>
       </div>
     );
@@ -101,49 +110,52 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger }) {
   return (
     <DashboardProvider>
       <div className="pipeline-container">
-        <div className="pipeline-header">
-          <h2>📊 Dashboard Interactivo del Pipeline</h2>
-          <p className="pipeline-subtitle">Visualizaciones coordinadas con filtros en tiempo real</p>
-          
-          {error && (
-            <div className="error-banner" style={{
+        {error && (
+          <div
+            className="error-banner pipeline-dashboard-error-banner"
+            style={{
               background: '#fff3cd',
               border: '1px solid #ffc107',
               color: '#856404',
-              padding: '8px 12px',
+              padding: '6px 10px',
               borderRadius: '4px',
-              fontSize: '12px',
-              marginTop: '8px'
-            }}>
-              ⚠️ {error} - Mostrando últimos datos disponibles
-            </div>
-          )}
+              fontSize: '11px',
+              flexShrink: 0
+            }}
+          >
+            ⚠️ {error} — mostrando últimos datos (refresh 20s)
+          </div>
+        )}
+
+        <div className="pipeline-dashboard-aux">
+          <CollapsibleSection title="Errores" icon="⚠️" defaultCollapsed={false}>
+            <ErrorAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Análisis de Pipeline" icon="🔄" defaultCollapsed={false}>
+            <PipelineAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Workers Stuck" icon="⏱️" defaultCollapsed>
+            <StuckWorkersPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Estado de Base de Datos" icon="💾" defaultCollapsed>
+            <DatabaseStatusPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} embedded />
+          </CollapsibleSection>
         </div>
 
-        {/* Global Filters */}
-        <DashboardFilters />
-
-        {/* Error Analysis Panel - NEW */}
-        <ErrorAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
-
-        {/* Pipeline Analysis Panel - NEW */}
-        <PipelineAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
-
-        {/* Stuck Workers Panel - NEW (only shows if there are stuck workers) */}
-        <StuckWorkersPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
-
-        {/* Database Status Panel - NEW (collapsible) */}
-        <DatabaseStatusPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
-
-        {/* Coordinated Visualizations */}
         <div className="visualizations-grid">
-          {/* Sankey Flow Diagram with Semantic Zoom - Individual document lines (LEFT) */}
-          <PipelineSankeyChartWithZoom data={data} documents={documents} />
-
-          {/* Interactive Tables (RIGHT) */}
-          <div className="tables-grid">
-            <WorkersTable API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
-            <DocumentsTableWithGrouping API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+          <CollapsibleSection title="Flujo (Sankey)" icon="📊" defaultCollapsed>
+            <PipelineSankeyChartWithZoom data={data} documents={documents} />
+          </CollapsibleSection>
+          <div className="tables-grid-collapsible">
+            <CollapsibleSection title="Workers" icon="👷" defaultCollapsed={false}>
+              <WorkersTable API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+            </CollapsibleSection>
+            <CollapsibleSection title="Documentos" icon="📄" defaultCollapsed={false}>
+              <DocumentsTableWithGrouping API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+            </CollapsibleSection>
           </div>
         </div>
       </div>

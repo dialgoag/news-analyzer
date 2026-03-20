@@ -19,6 +19,52 @@ DB_PASSWORD = os.getenv("DATABASE_PASSWORD", os.getenv("POSTGRES_PASSWORD", "rag
 DB_CONNECTION_STRING = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 MIGRATIONS_DIR = os.getenv("MIGRATIONS_DIR", "/app/migrations")
 
+
+def _patch_yoyo_for_idempotent_schema():
+    """
+    Patch yoyo backend to avoid PostgreSQL log errors on startup:
+    - yoyo_lock: use CREATE TABLE IF NOT EXISTS (avoids "relation already exists")
+    - yoyo_tmp_*: use DROP TABLE IF EXISTS (avoids "table does not exist" after rollback)
+    """
+    from yoyo.backends import base as yoyo_base
+    from yoyo import utils
+
+    def patched_create_lock_table(self):
+        create_sql = (
+            "CREATE TABLE IF NOT EXISTS {0.lock_table_quoted} ("
+            "{quoted.locked} INT DEFAULT 1, "
+            "{quoted.ctime} TIMESTAMP,"
+            "{quoted.pid} INT NOT NULL,"
+            "PRIMARY KEY ({quoted.locked}))"
+        )
+        try:
+            with self.transaction():
+                self.execute(self.format_sql(create_sql))
+        except self.DatabaseError:
+            pass
+
+    def patched_check_transactional_ddl(self):
+        table_name = "yoyo_tmp_{}".format(utils.get_random_string(10))
+        table_name_quoted = self.quote_identifier(table_name)
+        sql = self.format_sql(
+            self.create_test_table_sql, table_name_quoted=table_name_quoted
+        )
+        try:
+            with self.transaction(rollback_on_exit=True):
+                self.execute(sql)
+        except self.DatabaseError:
+            return False
+        try:
+            with self.transaction():
+                self.execute(f"DROP TABLE IF EXISTS {table_name_quoted}")
+        except self.DatabaseError:
+            return True
+        return False
+
+    yoyo_base.DatabaseBackend.create_lock_table = patched_create_lock_table
+    yoyo_base.DatabaseBackend._check_transactional_ddl = patched_check_transactional_ddl
+
+
 def run_migrations():
     """
     Run all pending migrations using Yoyo Python API.
@@ -35,7 +81,9 @@ def run_migrations():
     except ImportError as e:
         logger.critical(f"❌ yoyo-migrations not installed: {e}")
         return False
-    
+
+    _patch_yoyo_for_idempotent_schema()
+
     try:
         # Ensure migrations directory exists
         os.makedirs(MIGRATIONS_DIR, exist_ok=True)

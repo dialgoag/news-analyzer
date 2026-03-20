@@ -1,16 +1,71 @@
 """
-Embeddings Service - Sentence-Transformers
+Embeddings Service - Sentence-Transformers or Perplexity API
 Generates embeddings for texts (queries and documents)
 """
 
+import base64
 import logging
+import os
 import time
 from typing import List, Union
 import numpy as np
+import requests
 from sentence_transformers import SentenceTransformer
 import torch
 
 logger = logging.getLogger(__name__)
+
+
+class PerplexityEmbeddingsService:
+    """
+    Embeddings via Perplexity API (https://docs.perplexity.ai/docs/embeddings/quickstart).
+    Models: pplx-embed-v1-0.6b (1024d), pplx-embed-v1-4b (2560d).
+    Use dimensions=1024 for compatibility with existing Qdrant collections.
+    """
+
+    def __init__(self, model: str = "pplx-embed-v1-4b", api_key: str = None, dimensions: int = 1024):
+        self.model = model
+        self.api_key = api_key or os.getenv("PERPLEXITY_API_KEY", "")
+        self.dimensions = dimensions
+        self.embedding_dim = dimensions
+        self._session = requests.Session()
+        self._session.headers.update({
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        })
+        logger.info(f"✅ Perplexity Embeddings (model={model}, dim={dimensions})")
+
+    def embed_text(self, text: str, is_query: bool = False) -> List[float]:
+        result = self.embed_texts([text], is_query=is_query)
+        return result[0] if result else []
+
+    def embed_texts(self, texts: List[str], batch_size: int = None, is_query: bool = False) -> List[List[float]]:
+        batch_size = batch_size or 32
+        all_embeddings = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            payload = {
+                "input": batch,
+                "model": self.model,
+                "dimensions": self.dimensions,
+                "encoding_format": "base64_int8",
+            }
+            resp = self._session.post(
+                "https://api.perplexity.ai/v1/embeddings",
+                json=payload,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            for obj in sorted(data.get("data", []), key=lambda x: x["index"]):
+                b64 = obj.get("embedding", "")
+                arr = np.frombuffer(base64.b64decode(b64), dtype=np.int8)
+                vec = arr.astype(np.float32) / 127.0
+                all_embeddings.append(vec.tolist())
+        return all_embeddings
+
+    def get_embedding_dimension(self) -> int:
+        return self.embedding_dim
 
 
 class EmbeddingsService:
@@ -70,7 +125,7 @@ class EmbeddingsService:
             "lang": "multilingual",
             "dim": 1024,
             "gpu_batch_size": 4,  # Conservative for large model
-            "cpu_batch_size": 2
+            "cpu_batch_size": 4   # 2→4: ~2x faster indexing on CPU (was bottleneck)
         },
         "intfloat/e5-large-v2": {
             "description": "E5 Large v2, high performance multilingual, 1.3GB",
@@ -95,15 +150,19 @@ class EmbeddingsService:
     def __init__(
         self,
         model_name: str = "BAAI/bge-m3",
-        device: str = "cuda" if torch.cuda.is_available() else "cpu"
+        device: str = None,
     ):
         """
         Initialize Embeddings Service
 
         Args:
             model_name: Sentence-Transformers model name
-            device: 'cuda' or 'cpu'
+            device: 'cuda' or 'cpu'. None = auto (EMBEDDING_DEVICE env or cuda if available)
         """
+        import os
+        env_device = os.getenv("EMBEDDING_DEVICE", "").lower()
+        if device is None:
+            device = env_device if env_device in ("cuda", "cpu") else ("cuda" if torch.cuda.is_available() else "cpu")
         self.model_name = model_name
         self.device = device
         self.original_device = device  # Remember original device for retry
@@ -112,6 +171,15 @@ class EmbeddingsService:
 
         if model_name not in self.MODELS:
             raise ValueError(f"Unknown model: {model_name}. Available: {list(self.MODELS.keys())}")
+
+        # Env override for batch size (indexing bottleneck)
+        import os
+        env_cpu = os.getenv("EMBEDDING_BATCH_SIZE_CPU")
+        env_gpu = os.getenv("EMBEDDING_BATCH_SIZE_GPU")
+        if env_cpu:
+            self.MODELS[model_name]["cpu_batch_size"] = max(1, min(int(env_cpu), 32))
+        if env_gpu:
+            self.MODELS[model_name]["gpu_batch_size"] = max(1, min(int(env_gpu), 64))
 
         logger.info(f"Loading embeddings model: {model_name} (device: {device})...")
 
@@ -168,19 +236,28 @@ class EmbeddingsService:
         return False
     
     
-    def embed_text(self, text: str) -> List[float]:
+    def _instruction_prefix(self, text: str, is_query: bool) -> str:
+        """Add instruction prefix for BGE/E5 models (improves retrieval quality)."""
+        if not text or not text.strip():
+            return text
+        name = self.model_name.lower()
+        if "bge" in name:
+            return f"Represent this sentence for retrieving relevant passages: {text}"
+        if "e5" in name or "intfloat" in name:
+            prefix = "query: " if is_query else "passage: "
+            return f"{prefix}{text}"
+        return text
+
+    def embed_text(self, text: str, is_query: bool = False) -> List[float]:
         """
-        Generate embedding for single text
+        Generate embedding for single text.
 
         Args:
-            text: Text
-
-        Returns:
-            Embedding vector (list)
+            text: Text to embed
+            is_query: True for search queries, False for documents (BGE/E5 use different prefixes)
         """
-        # Try to restore GPU if we fell back to CPU
+        text = self._instruction_prefix(text, is_query)
         self._maybe_retry_gpu()
-
         try:
             embedding = self.model.encode(
                 text,
@@ -207,25 +284,20 @@ class EmbeddingsService:
         except Exception as e:
             logger.error(f"❌ Error embedding text: {str(e)}")
             raise
-    
-    
+
     def _fallback_to_cpu(self):
         """Reload model on CPU as fallback when CUDA fails"""
         if self.device != "cpu":
             logger.warning("🔄 Reloading model on CPU due to CUDA errors...")
             logger.warning("   (Will retry GPU in 60 seconds)")
-
-            # Completely free GPU memory
             del self.model
             self._clear_gpu_memory()
-
-            # Reload model on CPU
             self.model = SentenceTransformer(self.model_name, device="cpu")
             self.device = "cpu"
             self.last_fallback_time = time.time()
             logger.info("✅ Model reloaded on CPU successfully")
 
-    def embed_texts(self, texts: List[str], batch_size: int = None) -> List[List[float]]:
+    def embed_texts(self, texts: List[str], batch_size: int = None, is_query: bool = False) -> List[List[float]]:
         """
         Generate embeddings for multiple texts
 
@@ -243,14 +315,13 @@ class EmbeddingsService:
         if batch_size is None:
             batch_size = self.gpu_batch_size if self.device == "cuda" else self.cpu_batch_size
 
+        texts = [self._instruction_prefix(t, is_query) for t in texts]
         logger.info(f"📝 Embedding {len(texts)} texts (device: {self.device}, batch: {batch_size})")
 
         try:
-            # Clear GPU memory before processing
             if self.device == "cuda":
                 self._clear_gpu_memory()
                 self._log_gpu_memory("before embedding")
-
             embeddings = self.model.encode(
                 texts,
                 batch_size=batch_size,

@@ -7,9 +7,13 @@ RUN npm ci
 
 COPY . .
 
-# Accept build argument and set as environment variable
+# Accept build arguments (timeouts parametrizables para entornos lentos)
 ARG VITE_API_URL=http://localhost:8000
+ARG VITE_API_TIMEOUT_MS=60000
+ARG VITE_API_TIMEOUT_ACTION_MS=90000
 ENV VITE_API_URL=${VITE_API_URL}
+ENV VITE_API_TIMEOUT_MS=${VITE_API_TIMEOUT_MS}
+ENV VITE_API_TIMEOUT_ACTION_MS=${VITE_API_TIMEOUT_ACTION_MS}
 
 RUN npm run build
 

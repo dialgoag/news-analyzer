@@ -11,11 +11,13 @@
 }
 
 .pipeline-container {
-  padding:12px;
+  padding:8px 10px 10px;
   background:#0f172a;
   color:#f1f5f9;
-  min-height:100vh;
-  overflow-y:auto;
+  height:100%;
+  max-height:100%;
+  min-height:0;
+  overflow:hidden;
   display:flex;
   flex-direction:column;
   box-sizing:border-box;
@@ -34,6 +36,28 @@
   color:#f1f5f9;
 }
 
+.pipeline-dashboard-error-banner {
+  margin-bottom: 6px;
+}
+
+.pipeline-dashboard-aux {
+  flex: 0 1 auto;
+  max-height: min(320px, 38vh);
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.pipeline-dashboard-aux::-webkit-scrollbar {
+  width: 6px;
+}
+
+.pipeline-dashboard-aux::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 3px;
+}
+
 .pipeline-subtitle {
   margin:0;
   font-size:.75rem;
@@ -43,9 +67,9 @@
 
 .visualizations-grid {
   display:grid;
-  grid-template-columns:45% 55%;
-  grid-template-rows:minmax(600px,1fr);
-  gap:10px;
+  grid-template-columns:42% 58%;
+  grid-template-rows:minmax(0,1fr);
+  gap:8px;
   flex:1;
   min-height:0;
   overflow:hidden;
@@ -76,5 +100,18 @@
 .tables-grid>* {
   min-height:0;
   height:100%;
+  overflow:hidden;
+}
+
+.tables-grid-collapsible {
+  display:grid;
+  grid-template-rows:1fr 1fr;
+  gap:10px;
+  min-height:0;
+  overflow:hidden;
+}
+
+.tables-grid-collapsible>* {
+  min-height:0;
   overflow:hidden;
 }

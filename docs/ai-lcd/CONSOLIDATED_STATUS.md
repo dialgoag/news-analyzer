@@ -1,8 +1,8 @@
-# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-18
+# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-19
 
-> **Versión definitiva**: Fix #94 Errores de Insights en análisis y retry.
+> **Versión definitiva**: Fix #95 File naming con hash prefix + extensión en symlinks.
 
-**Última actualización**: 2026-03-18  
+**Última actualización**: 2026-03-19  
 **Prioridad**: REQ-014 (UX Dashboard) — ver FRONTEND_DASHBOARD_API.md
 
 ---
@@ -10,8 +10,31 @@
 ## Aplicar cambios
 
 ```bash
-cd app && docker compose up -d --build backend frontend
+cd app && docker compose up -d --build backend
 ```
+
+### 95. Fix: File naming con hash prefix + extensión en symlinks ✅
+**Fecha**: 2026-03-19
+**Ubicación**: `backend/file_ingestion_service.py` líneas 168-186, `app.py` líneas 61, 1843-1847, 2646-2648, 2937-2950, 3901-3913
+**Problema**: 
+1. Archivos con mismo nombre sobrescribían versiones anteriores en `/app/inbox/processed/`
+2. Symlinks sin extensión `.pdf` en `/app/uploads/` causaban error OCR "Only PDF files are supported"
+3. Symlinks viejos apuntaban a contenido incorrecto tras sobrescritura
+**Solución**:
+- **Processed**: Guardar como `{short_hash}_{filename}` (8 chars SHA256 + nombre original)
+- **Uploads**: Symlink como `{full_sha}.pdf` (SHA completo + extensión)
+- **Migration**: Script `migrate_file_naming.py` migró 7 symlinks legacy + 258 targets actualizados
+- **Backward compatible**: `resolve_file_path` intenta `.pdf` primero, luego legacy
+**Impacto**: No más sobrescrituras; OCR funcional; archivos únicos por contenido
+**⚠️ NO rompe**: OCR pipeline ✅, Deduplicación ✅, Upload ✅, Dashboard ✅
+
+**Verificación**:
+- [x] Migración completada: 258 symlinks con `.pdf`, 292 archivos con prefijo hash
+- [x] Archivo problemático (`f3d5faf6_28-03-26-ABC.pdf`) procesado: 302K chars OCR, 187 chunks
+- [x] `resolve_file_path` funciona correctamente
+- [x] Logs sin errores "Only PDF files are supported" ni "File not found" (solo 429 rate limit OpenAI)
+
+---
 
 ### 94. Errores de Insights en Análisis y Retry ✅
 **Fecha**: 2026-03-18
@@ -3005,4 +3028,34 @@ docker logs rag-ocr-service --tail 20 2>&1
 - [x] Frontend reconstruido y desplegado
 - [x] Backend endpoint `/api/dashboard/analysis` funcional (testeado)
 - [x] Graceful shutdown endpoint funcional (testeado)
+
+### 58. Frontend Dashboard: layout viewport + tablas visibles ✅
+**Fecha**: 2026-03-20
+**Ubicación**: `PipelineDashboard.jsx/css`, `DashboardView.jsx`, `CollapsibleSection.css`, `DocumentsTable*.css`, `DocumentsTableWithGrouping.jsx`, `WorkersTable.jsx/css`
+**Problema**: `pipeline-container` usaba `min-height: 100vh` dentro de `main` flex; los paneles superiores empujaban la grilla Sankey/tablas fuera de vista; títulos y hints duplicaban encabezado del shell.
+**Solución**: Contenedor `height:100%` + `min-height:0`; franja superior (`pipeline-dashboard-aux`) con `max-height: min(320px, 38vh)` y scroll interno; grilla `minmax(0,1fr)`; Sankey colapsado por defecto; toolbar único en `DashboardView`; encabezados de Workers/Documentos compactos (filtro en línea, tabla densa, gráfico workers más pequeño).
+**Impacto**: La zona de tablas ocupa el espacio vertical disponible con scroll correcto dentro de cada panel.
+**⚠️ NO rompe**: Providers/filtros del dashboard ✅, APIs ✅, colapsables ✅
+**Verificación**:
+- [x] `npm run build` frontend OK
+
+### 59. Docs: convención “producción local” + despliegue Docker ✅
+**Fecha**: 2026-03-20
+**Ubicación**: `app/docs/DOCKER.md` §0, `docs/ai-lcd/03-operations/ENVIRONMENT_CONFIGURATION.md` (nota inicial)
+**Problema**: No quedaba explícito que “producción” en este entorno es el stack Docker local ni que desplegar = rebuild + sustituir contenedores.
+**Solución**: Documentado §0 en DOCKER.md (down → build → up; volúmenes no se borran con `down` por defecto); enlace desde ENVIRONMENT_CONFIGURATION.
+**Impacto**: Cualquier agente o dev sabe cómo publicar cambios en el entorno Docker local.
+**⚠️ NO rompe**: Compose, datos en volúmenes (sin cambiar comandos por defecto)
+**Verificación**:
+- [x] Rutas de doc coherentes
+
+### 60. Makefile: atajos `make deploy` / rebuild frontend-backend ✅
+**Fecha**: 2026-03-20 (actualizado: redeploy-front/back, run-all, run-env)
+**Ubicación**: `Makefile` (raíz), `app/docs/DOCKER.md` §0 (tabla Makefile)
+**Problema**: Despliegue local repetía los mismos comandos `docker compose` a mano.
+**Solución**: `Makefile` con `deploy`, `deploy-quick`, `redeploy-front`, `redeploy-back` (`--no-cache` + `--force-recreate`), `run-all`/`up`, `run-env` (solo postgres, ocr-service, qdrant, ollama), `rebuild-*` con caché, `down`, `ps`, `logs SERVICE=…`.
+**Impacto**: Un comando para el flujo documentado en §59.
+**⚠️ NO rompe**: Compose; respeta `COMPOSE_FILE` en `app/.env`
+**Verificación**:
+- [x] `make help` ejecuta
 

@@ -1,15 +1,19 @@
 .collapsible-section {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   border: 1px solid #334155;
-  border-radius: 6px;
+  border-radius: 5px;
   overflow: hidden;
+}
+
+.collapsible-section.collapsed {
+  margin-bottom: 4px;
 }
 
 .collapsible-section-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 6px 10px;
   background: #1e293b;
   cursor: pointer;
   user-select: none;
@@ -27,7 +31,7 @@
 .section-title {
   flex: 1;
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: 0.8125rem;
 }
 
 .section-badge {
@@ -36,9 +40,13 @@
 }
 
 .collapsible-section-content {
-  padding: 12px;
+  padding: 8px 10px;
   background: #0f172a;
   min-height: 0;
+}
+
+.pipeline-dashboard-aux .collapsible-section-content {
+  padding: 8px;
 }
 
 /* When inside visualizations-grid or tables-grid-collapsible, fill the cell */

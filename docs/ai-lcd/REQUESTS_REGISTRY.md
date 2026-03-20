@@ -6,6 +6,8 @@
 > **Total peticiones**: 18  
 > **Completadas**: 16 | Pendientes: 2 | Rechazadas: 0
 
+> **Pendientes técnicos** (mejoras, fixes): ver `PENDING_BACKLOG.md` (fuente única).
+
 ---
 
 ## 📊 Resumen Rápido

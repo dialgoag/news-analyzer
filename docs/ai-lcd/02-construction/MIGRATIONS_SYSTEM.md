@@ -57,10 +57,13 @@ Las migraciones se encuentran en `/backend/migrations/` y están organizadas por
   - `notifications`: Bandeja de notificaciones in-app
   - `notification_reads`: Tracking de lecturas por usuario
 
-### 008: Consolidación de Datos Legacy
-- **Archivo**: `008_consolidate_legacy_data.py`
-- **Dominio**: Data Migration & Legacy Support
-- **Contenido**: Migra datos de `rag_users.db` y `documents.db` a `rag_enterprise.db`
+### 008–014: Varias (normalización, insights, performance)
+- **011**: Log de performance OCR
+- **012**: Normaliza `document_status` a esquema único (DocStatus)
+- **013**: Añade `llm_source` a `news_item_insights`
+- **014**: Añade `indexed_in_qdrant_at` a `news_item_insights` (Indexing Insights etapa)
+
+**Fuente**: `app/backend/migrations/` — listar con `ls migrations/*.py` (excluir `.disabled`)
 
 ## Cómo Funcionan las Migraciones
 
@@ -124,7 +127,7 @@ steps = [
 Si una migración falla:
 
 1. **Investigar log**: El backend muestra exactamente cuál migración falló
-2. **Revisar SQL**: Verifica que la SQL sea válida para SQLite
+2. **Revisar SQL**: Verifica que la SQL sea válida para PostgreSQL
 3. **Fijar migración**: Corriges el archivo `.py`
 4. **Reiniciar**: La siguiente vez el sistema reintentará automáticamente
 
@@ -139,15 +142,11 @@ Si por alguna razón necesitas recuperar datos:
 ## Consideraciones de Performance
 
 - **Migraciones rápidas**: Usa índices desde el inicio
-- **Evita ALTER TABLE**: SQLite es lento con ALTER, mejor CREATE nueva tabla si es necesario
+- **ALTER TABLE**: PostgreSQL soporta ADD COLUMN IF NOT EXISTS; usar para compatibilidad
 - **Batch inserts**: Para migración 008, los INSERTs son IGNORE para no fallar con duplicados
 
-## Próximas Mejoras
+## Referencias
 
-Futuras migraciones pueden agregar:
-- Migración 009: Preferencias de usuario
-- Migración 010: Auditoría de cambios
-- Migración 011: Caché distribuido
-- Etc.
-
-Cada una será independiente y se ejecutará automáticamente al iniciar la app.
+- **Ejecutor**: `app/backend/migration_runner.py` — invocado desde `database.py` al cargar
+- **Directorio**: `MIGRATIONS_DIR` (default `/app/migrations` en Docker)
+- **Status**: `CONSOLIDATED_STATUS.md` §88 (migración 014 para Indexing Insights)

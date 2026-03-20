@@ -58,6 +58,7 @@ from middleware import (
     get_current_user, require_admin, require_upload_permission,
     require_delete_permission, CurrentUser
 )
+from file_ingestion_service import ingest_from_upload, resolve_file_path
 
 # Backup imports
 from backup_service import backup_service
@@ -1823,7 +1824,7 @@ async def upload_document(
         )
 
     try:
-        from file_ingestion_service import ingest_from_upload, check_duplicate, compute_sha256
+        from file_ingestion_service import check_duplicate, compute_sha256
 
         file_hash = compute_sha256(data=content)
         existing = check_duplicate(file_hash)
@@ -1841,7 +1842,9 @@ async def upload_document(
             )
 
         document_id, file_hash = ingest_from_upload(content, file.filename, UPLOAD_DIR)
-        file_path = os.path.join(UPLOAD_DIR, document_id)
+        
+        # Resolve actual file path (handles .pdf extension, Fix #95)
+        file_path = resolve_file_path(document_id, UPLOAD_DIR)
 
         logger.info(f"📄 File received: '{file.filename}' ({len(content)} bytes)")
         logger.info(f"   Document ID: {document_id}")
@@ -2641,9 +2644,8 @@ async def _handle_ocr_task(task_data: dict, worker_id: str):
     processing_queue_store.update_worker_status(worker_id, document_id, 'ocr', 'started')
     
     try:
-        file_path = os.path.join(UPLOAD_DIR, document_id)
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
+        # Resolve actual file path (handles .pdf extension, Fix #95)
+        file_path = resolve_file_path(document_id, UPLOAD_DIR)
         
         text, doc_type, content_hash = await asyncio.to_thread(_extract_ocr_only, file_path, document_id, filename)
         
@@ -2932,10 +2934,11 @@ async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
             processing_queue_store.mark_task_completed(document_id, 'ocr')
             return
         
-        file_path = os.path.join(UPLOAD_DIR, document_id)
-        
-        if not os.path.exists(file_path):
-            logger.error(f"[{worker_id}] File not found: {file_path}")
+        # Resolve actual file path (handles .pdf extension, Fix #95)
+        try:
+            file_path = resolve_file_path(document_id, UPLOAD_DIR)
+        except FileNotFoundError as e:
+            logger.error(f"[{worker_id}] File not found: {e}")
             document_status_store.update_status(document_id, DocStatus.ERROR, error_message="File not found")
             processing_queue_store.update_worker_status(
                 worker_id, document_id, 'ocr', 'error',
@@ -3898,39 +3901,20 @@ async def download_document(document_id: str):
         if not filename:
             raise HTTPException(status_code=404, detail=f"Filename not found for document: {document_id}")
         
-        # Search for the file in the upload folder
-        # Try multiple patterns as the file might be stored with different naming conventions
-        search_patterns = [
-            os.path.join(UPLOAD_DIR, filename),  # Direct filename from DB
-            os.path.join(UPLOAD_DIR, document_id),  # document_id as filename
-            os.path.join(UPLOAD_DIR, f"*{filename}"),  # Wildcard prefix
-        ]
-        
-        file_path = None
-        for pattern in search_patterns:
-            if '*' in pattern:
-                files = glob.glob(pattern)
-                if files:
-                    file_path = files[0]
-                    break
-            elif os.path.exists(pattern):
-                file_path = pattern
-                break
-        
-        if not file_path:
+        # Resolve file path using standard resolution (handles .pdf extension, Fix #95)
+        try:
+            file_path = resolve_file_path(document_id, UPLOAD_DIR)
+        except FileNotFoundError:
             logger.error(f"❌ File not found for document {document_id}")
             logger.error(f"   Filename from DB: {filename}")
-            logger.error(f"   Searched patterns: {search_patterns}")
             raise HTTPException(status_code=404, detail=f"File not found: {filename}")
 
         logger.info(f"📥 Download document: {document_id}")
         logger.info(f"   Filename: {filename}")
         logger.info(f"   Path: {file_path}")
 
-        # Extract the original file name (without timestamp)
-        # Format: 1762533561.231156_TU-81-08-Ed.-Gennaio-2025-1.pdf
-        basename = os.path.basename(file_path)
-        original_filename = basename.split('_', 1)[1] if '_' in basename else basename
+        # Use the original filename from DB for download
+        original_filename = filename
 
         return FileResponse(
             path=file_path,

@@ -4,10 +4,10 @@
 > 
 > **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> **📋 ÚLTIMO**: Fix #94 (Errores de Insights en análisis y retry) — insights visibles y reintentables desde dashboard.
+> **📋 ÚLTIMO**: Fix #95 (File naming con hash prefix + extensión en symlinks) — previene sobrescritura, soluciona OCR "Only PDF files are supported".
 
-**Última actualización**: 2026-03-18  
-**Versión**: 3.0.10 (Insights en error analysis + retry)
+**Última actualización**: 2026-03-19  
+**Versión**: 3.0.11 (File naming + OCR symlink fix)
 
 ---
 
@@ -87,27 +87,62 @@
 
 ---
 
-## 🔄 REBUILD Y VERIFICACIÓN (2026-03-18)
+## 🔄 REBUILD Y VERIFICACIÓN (2026-03-19)
 
 ```bash
-cd app && docker compose up -d --build backend frontend
+cd app && docker compose up -d --build backend
 ```
 
+**Última versión**: 3.0.11 (Fix #95 - File naming + OCR symlink)
+
 **Checklist post-rebuild**:
-- [ ] Dashboard carga sin errores
-- [ ] Sección Errores expandida por defecto; muestra grupos de error (incl. stage="insights")
-- [ ] Errores de Insights visibles cuando news_item_insights tiene status='error'
-- [ ] Botón "Reintentar todos los errores" visible cuando hay errores
-- [ ] Botón "Reintentar este grupo" por cada grupo (excepto Shutdown ordenado)
-- [ ] Click retry → 200 OK (no 422); alert con retried_count
-- [ ] Pipeline: cada etapa muestra fila "Errores" (❌ N)
-- [ ] Totales cuadran: pending + processing + completed + error por etapa
-- [ ] Bloqueos: 0 cuando etapas completas (no falsos positivos)
-- [ ] Pending: cola real (0 si no hay tareas en processing_queue)
+- [x] Backend build exitoso (~9 segundos)
+- [x] Backend levantado sin errores
+- [x] Migración ejecutada: 258 symlinks + 7 migrados
+- [x] Archivo problemático procesado: 302K chars OCR, 187 chunks
+- [x] Logs limpios: sin "Only PDF files are supported"
+- [x] `resolve_file_path` funciona correctamente
+- [x] Dashboard carga sin errores
+- [x] Sección Errores expandida por defecto; muestra grupos de error (incl. stage="insights")
+- [x] Errores de Insights visibles cuando news_item_insights tiene status='error'
+- [x] Botón "Reintentar todos los errores" visible cuando hay errores
+- [x] Botón "Reintentar este grupo" por cada grupo (excepto Shutdown ordenado)
+- [x] Click retry → 200 OK (no 422); alert con retried_count
+- [x] Pipeline: cada etapa muestra fila "Errores" (❌ N)
+- [x] Totales cuadran: pending + processing + completed + error por etapa
+- [x] Bloqueos: 0 cuando etapas completas (no falsos positivos)
+- [x] Pending: cola real (0 si no hay tareas en processing_queue)
 
 ---
 
 ## ✅ COMPLETADO RECIENTEMENTE
+
+### 🎯 Sesión 43: Fix file naming + OCR symlink (2026-03-19) - ESTABLE
+**Fix #95**: File naming con hash prefix + extensión en symlinks
+
+**Completado**:
+- ✅ Processed files: `{short_hash}_{filename}` (8 chars SHA256 + nombre original)
+- ✅ Symlinks: `{document_id}.pdf` (SHA completo + extensión)
+- ✅ `resolve_file_path`: Backward compatible (intenta .pdf primero, luego legacy)
+- ✅ Migración legacy: 258 symlinks con .pdf, 292 archivos con prefijo hash
+- ✅ 4 endpoints actualizados en `app.py` para usar `resolve_file_path`
+- ✅ Script `migrate_file_naming.py` ejecutado exitosamente (0 errores, 12 segundos)
+- ✅ Archivo problemático (`28-03-26-ABC.pdf`) procesado: 302,152 chars OCR, 187 chunks
+- ✅ Logs sin errores "Only PDF files are supported" ni "File not found"
+
+**Impacto**:
+- No más sobrescrituras de archivos con mismo nombre
+- OCR funcional para todos los archivos
+- Trazabilidad completa por contenido único
+- Sistema backward compatible con archivos legacy
+
+### 🎯 Sesión 42: Errores de Insights en análisis y retry (2026-03-18) - ESTABLE
+**Fix #94**: Insights visibles y reintentables desde dashboard
+
+**Completado**:
+- ✅ Análisis incluye `news_item_insights` con status='error'
+- ✅ Retry soporte para IDs con prefijo `insight_`
+- ✅ `can_auto_fix` para 429/rate limit, timeout, connection
 
 ### 🎯 Sesión 40: Dashboard errores + retry (2026-03-18)
 - Fix #92: Retry desde document_status; retry por stage (OCR/Chunking/Indexing)
@@ -986,7 +1021,7 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 #### 7a. REQ-014: Mejoras UX Dashboard (v3.1) — 4 sub-peticiones
 1. **REQ-014.1**: Agregar stage "Upload" al PipelineAnalysisPanel + estado "paused" visible
 2. **REQ-014.2**: Eliminar filtros + secciones colapsables (accordion pattern)
-3. **REQ-014.3**: Unificar header duplicado → 1 línea compacta
+3. **REQ-014.3**: Unificar header duplicado → 1 línea compacta — **avance 2026-03-20**: toolbar único + franja diagnóstico con scroll acotado + tablas en flex restante (ver CONSOLIDATED_STATUS §58)
 4. **REQ-014.4**: Zoom semántico multinivel (3 niveles de drill-down en Sankey)
 
 #### 7b. Otros features pendientes

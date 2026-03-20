@@ -16,7 +16,6 @@ import logging
 import os
 import re
 import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, Dict
 
@@ -34,8 +33,9 @@ ALLOWED_EXTENSIONS = {
 processing_queue_store = ProcessingQueueStore()
 
 
-def _generate_document_id(filename: str) -> str:
-    return f"{datetime.now().timestamp()}_{filename}"
+def _generate_document_id(filename: str, file_hash: str) -> str:
+    """document_id por hash: evita colisión cuando dos archivos tienen el mismo nombre."""
+    return file_hash
 
 
 def _parse_news_date(filename: str) -> Optional[str]:
@@ -117,7 +117,7 @@ def ingest_from_upload(
     """
     Ingest a file uploaded via the API.
 
-    Writes content directly to uploads/{document_id}.
+    Writes content directly to uploads/{document_id}.pdf.
     Returns (document_id, file_hash).
     Raises ValueError on duplicate.
     """
@@ -130,8 +130,11 @@ def ingest_from_upload(
             f"(doc_id={existing['document_id']})"
         )
 
-    document_id = _generate_document_id(filename)
-    file_path = os.path.join(upload_dir, document_id)
+    document_id = _generate_document_id(filename, file_hash)
+    
+    # Add .pdf extension to symlink (Fix #95)
+    file_ext = Path(filename).suffix or '.pdf'
+    file_path = os.path.join(upload_dir, f"{document_id}{file_ext}")
 
     with open(file_path, "wb") as f:
         f.write(content)
@@ -157,32 +160,40 @@ def ingest_from_inbox(
     """
     Ingest a file from the inbox folder.
 
-    Moves original to processed/, creates symlink in uploads/{document_id}.
+    Moves original to processed/{short_hash}_{filename}, creates symlink in uploads/{document_id}.pdf.
     Returns document_id on success, None if duplicate or error.
+    
+    Fix #95: Prevents overwriting files with same name but different content.
     """
     file_hash = compute_sha256(file_path=inbox_path)
+    short_hash = file_hash[:8]  # First 8 chars for identification
 
     existing = check_duplicate(file_hash)
     if existing:
         os.makedirs(processed_dir, exist_ok=True)
-        dest = os.path.join(processed_dir, filename)
+        # Even duplicates use hash prefix (Fix #95)
+        dest = os.path.join(processed_dir, f"{short_hash}_{filename}")
         try:
             shutil.move(inbox_path, dest)
         except OSError as e:
             logger.warning(f"Could not move duplicate {filename}: {e}")
         logger.info(
-            f"📦 Inbox: Duplicate {filename} → processed/ "
+            f"📦 Inbox: Duplicate {filename} → processed/{short_hash}_{filename} "
             f"(matches {existing['filename']})"
         )
         return None
 
-    document_id = _generate_document_id(filename)
+    document_id = _generate_document_id(filename, file_hash)
 
     os.makedirs(processed_dir, exist_ok=True)
-    processed_path = os.path.join(processed_dir, filename)
+    
+    # Store in processed with hash prefix to prevent overwrites (Fix #95)
+    processed_path = os.path.join(processed_dir, f"{short_hash}_{filename}")
     shutil.move(inbox_path, processed_path)
 
-    symlink_path = os.path.join(upload_dir, document_id)
+    # Create symlink with .pdf extension (Fix #95)
+    file_ext = Path(filename).suffix or '.pdf'
+    symlink_path = os.path.join(upload_dir, f"{document_id}{file_ext}")
     os.symlink(os.path.abspath(processed_path), symlink_path)
 
     _register_and_enqueue(
@@ -203,9 +214,23 @@ def resolve_file_path(document_id: str, upload_dir: str) -> str:
     Resolve the real file path for a document_id.
     Works for both direct files and symlinks.
     Returns the path (following symlinks) or raises FileNotFoundError.
+    
+    Fix #95: Tries with extension first (new format), falls back to without extension (legacy).
     """
-    path = os.path.join(upload_dir, document_id)
-    real = os.path.realpath(path)
-    if not os.path.exists(real):
-        raise FileNotFoundError(f"File not found: {path} (resolved: {real})")
-    return real
+    # Try with .pdf extension first (new format, Fix #95)
+    path_with_ext = os.path.join(upload_dir, f"{document_id}.pdf")
+    if os.path.exists(path_with_ext):
+        real = os.path.realpath(path_with_ext)
+        if os.path.exists(real):
+            return real
+    
+    # Fall back to legacy format (without extension)
+    path_legacy = os.path.join(upload_dir, document_id)
+    real_legacy = os.path.realpath(path_legacy)
+    if os.path.exists(real_legacy):
+        return real_legacy
+    
+    # Neither found
+    raise FileNotFoundError(
+        f"File not found: {path_with_ext} or {path_legacy}"
+    )

@@ -181,20 +181,18 @@ export function DocumentsTable({ API_URL, token, refreshTrigger }) {
   }
 
   return (
-    <div className="documents-table-container">
-      <div className="documents-table-header">
-        <h3>📄 Documentos en Proceso (Vista Agrupada)</h3>
-        <p className="documents-hint">
-          💡 Click en grupo para expandir/colapsar • Click en documento para filtrar
-        </p>
-        
-        {error && (
-          <div className="error-banner">
+    <div
+      className="documents-table-container"
+      title="Grupo: expandir/colapsar · Fila: filtrar con el dashboard"
+    >
+      {error && (
+        <div className="documents-table-header documents-table-header--compact">
+          <div className="error-banner documents-table-inline-error">
             ⚠️ {error}
-            {documents.length > 0 && ' - Mostrando últimos datos disponibles'}
+            {documents.length > 0 && ' — últimos datos'}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="documents-table-wrapper">
         <table className="documents-table documents-table-grouped">

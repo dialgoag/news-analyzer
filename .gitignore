@@ -36,6 +36,9 @@ data/
 volumes/
 local-data/
 
+# App runtime temp (OCR intermediates, etc.)
+app/temp/
+
 # Uploads and database (runtime data)
 uploads/
 *.db

@@ -2,10 +2,27 @@
 
 > Análisis profundo de noticias en PDF con interfaz web multi-usuario
 
-**Última actualización**: 2026-03-05 (Sistema de Peticiones implementado)  
+**Última actualización**: 2026-03-19 (Fix #95 - File naming + OCR symlink)  
 **Fase AI-DLC**: Construcción  
 **Audiencia**: Desarrolladores, futuras sesiones de trabajo  
-**Build Optimization**: ✅ Imagen base implementada (3-5x más rápido)
+**Versión**: 3.0.11 - Sistema estable y verificado ✅
+
+---
+
+## 🔥 ÚLTIMO FIX: #95 - File Naming + OCR Symlink (2026-03-19)
+
+> **Problema**: Archivos con mismo nombre se sobrescribían; OCR rechazaba symlinks sin extensión `.pdf`  
+> **Solución**: Hash prefix (8 chars) + extensión `.pdf` en symlinks  
+> **Resultado**: 0 sobrescrituras, OCR 100% funcional, 265 archivos migrados sin downtime
+
+**Documentación completa**: `02-construction/FIX_095_FILE_NAMING.md`
+
+**Verificado**:
+- ✅ 258 symlinks con extensión `.pdf`
+- ✅ 292 archivos en processed con prefijo hash
+- ✅ Archivo problemático (`28-03-26-ABC.pdf`) procesado: 302K chars OCR, 187 chunks
+- ✅ Logs limpios: sin "Only PDF files are supported"
+- ✅ Backward compatible: archivos legacy funcionando
 
 ---
 
@@ -21,8 +38,8 @@
 
 **Documentos clave**:
 - `REQUESTS_REGISTRY.md` - Rastreo de todas las peticiones (REQ-XXX)
+- `PENDING_BACKLOG.md` - **Fuente única** de pendientes técnicos (PEND-XXX)
 - `PLAN_AND_NEXT_STEP.md § 7` - Versiones consolidadas (v1.0, v1.1, v1.2)
-- `CHANGELOG_SISTEMA_PETICIONES.md` - Detalle de cambios
 
 ---
 

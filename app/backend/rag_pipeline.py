@@ -5,6 +5,7 @@ Orchestrates: Retrieval + LLM Generation with Source Attribution
 
 import json
 import logging
+import os
 import random
 import time
 from typing import List, Tuple, Dict, Optional
@@ -160,18 +161,20 @@ class RateLimitError(Exception):
 
 
 class OpenAIChatClient:
-    """OpenAI-compatible API client. Works with OpenAI, Azure, and compatible APIs."""
+    """OpenAI-compatible API client. Works with OpenAI, Azure, Perplexity, and compatible APIs."""
 
-    QUICK_RETRIES = 1
-    QUICK_RETRY_BASE_WAIT = 2.0
+    QUICK_RETRIES = int(os.getenv("LLM_429_QUICK_RETRIES", "3"))
+    QUICK_RETRY_BASE_WAIT = float(os.getenv("LLM_429_BASE_WAIT", "5.0"))
 
     def __init__(self, model: str, api_key: str, temperature: float = 0.0,
-                 timeout: int = 120, base_url: str = "https://api.openai.com/v1"):
+                 timeout: int = 120, base_url: str = "https://api.openai.com/v1",
+                 chat_path: str = "chat/completions"):
         self.model = model
         self.api_key = api_key
         self.temperature = temperature
         self.timeout = timeout
         self.base_url = base_url.rstrip("/")
+        self.chat_path = chat_path.lstrip("/")
         self._session = _requests.Session()
         self._session.headers.update({
             "Authorization": f"Bearer {self.api_key}",
@@ -182,10 +185,10 @@ class OpenAIChatClient:
         return self.invoke(prompt)
 
     def invoke(self, prompt: str) -> str:
-        last_exc = None
+        retry_after = 0.0
         for attempt in range(1 + self.QUICK_RETRIES):
             resp = self._session.post(
-                f"{self.base_url}/chat/completions",
+                f"{self.base_url}/{self.chat_path}",
                 json={
                     "model": self.model,
                     "messages": [{"role": "user", "content": prompt}],
@@ -197,17 +200,22 @@ class OpenAIChatClient:
                 resp.raise_for_status()
                 return resp.json()["choices"][0]["message"]["content"]
 
+            # 429: use Retry-After header if present, else exponential backoff
             retry_after = float(resp.headers.get("Retry-After", 0))
-            last_exc = resp
+            if retry_after <= 0:
+                retry_after = self.QUICK_RETRY_BASE_WAIT * (2 ** attempt) + random.uniform(0, 2)
+            else:
+                retry_after = min(retry_after, 120)  # cap at 2 min
             if attempt < self.QUICK_RETRIES:
-                wait = self.QUICK_RETRY_BASE_WAIT * (2 ** attempt) + random.uniform(0, 1)
                 logger.warning(
-                    f"OpenAI 429 — quick retry {attempt + 1}/{self.QUICK_RETRIES} in {wait:.1f}s"
+                    f"LLM 429 — retry {attempt + 1}/{self.QUICK_RETRIES} in {retry_after:.1f}s"
                 )
-                time.sleep(wait)
+                time.sleep(retry_after)
+            else:
+                break
 
         raise RateLimitError(
-            f"OpenAI 429 after {1 + self.QUICK_RETRIES} attempts",
+            f"LLM 429 after {1 + self.QUICK_RETRIES} attempts",
             retry_after=retry_after,
         )
 
@@ -282,8 +290,21 @@ class RAGPipeline:
                 model=self.llm_model,
                 api_key=openai_api_key,
                 temperature=0.0,
+                base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
             )
             logger.info(f"🔑 Using OpenAI API (model: {llm_model})")
+        elif llm_provider == "perplexity":
+            perplexity_key = os.getenv("PERPLEXITY_API_KEY", openai_api_key)
+            if not perplexity_key:
+                raise ValueError("PERPLEXITY_API_KEY is required when LLM_PROVIDER=perplexity")
+            self.llm = OpenAIChatClient(
+                model=self.llm_model or "sonar-pro",
+                api_key=perplexity_key,
+                temperature=0.0,
+                base_url="https://api.perplexity.ai",
+                chat_path="v1/sonar",
+            )
+            logger.info(f"🔍 Using Perplexity API (model: {llm_model or 'sonar-pro'})")
         else:
             self.llm = OllamaChatDirect(
                 model=self.llm_model,
@@ -296,10 +317,75 @@ class RAGPipeline:
             template=self._get_prompt_template(),
             input_variables=["context", "question"]
         )
-        
-        logger.info(f"✅ RAG Pipeline initialized (provider: {llm_provider}, model: {llm_model}, threshold: {relevance_threshold})")
-    
-    
+
+        # Build LLM chain for fallback (primary + fallbacks on 429)
+        self.llm_chain = self._build_llm_chain(
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            ollama_base_url=ollama_base_url,
+            openai_api_key=openai_api_key,
+        )
+        logger.info(f"✅ RAG Pipeline initialized (provider: {llm_provider}, model: {llm_model}, fallbacks: {[n for n, _ in self.llm_chain[1:]]})")
+
+    def _build_llm_chain(
+        self,
+        llm_provider: str,
+        llm_model: str,
+        ollama_base_url: str,
+        openai_api_key: str,
+    ) -> List[Tuple[str, object]]:
+        """Build [(provider_name, llm_instance), ...] for primary + fallbacks."""
+        chain = []
+        fallback_str = os.getenv("LLM_FALLBACK_PROVIDERS", "").strip().lower()
+        fallbacks = [p.strip() for p in fallback_str.split(",") if p.strip()] if fallback_str else []
+
+        def add_openai():
+            if openai_api_key:
+                chain.append(("openai", OpenAIChatClient(
+                    model=llm_model,
+                    api_key=openai_api_key,
+                    temperature=0.0,
+                    base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
+                )))
+
+        def add_perplexity():
+            key = os.getenv("PERPLEXITY_API_KEY", openai_api_key)
+            if key:
+                pplx_model = os.getenv("PERPLEXITY_MODEL", "sonar-pro")
+                chain.append(("perplexity", OpenAIChatClient(
+                    model=pplx_model,
+                    api_key=key,
+                    temperature=0.0,
+                    base_url="https://api.perplexity.ai",
+                    chat_path="v1/sonar",
+                )))
+
+        def add_ollama():
+            chain.append(("ollama", OllamaChatDirect(
+                model=llm_model,
+                base_url=ollama_base_url,
+                temperature=0.0,
+            )))
+
+        # Primary
+        if llm_provider == "openai":
+            add_openai()
+        elif llm_provider == "perplexity":
+            add_perplexity()
+        else:
+            add_ollama()
+
+        # Fallbacks (only add if not already primary)
+        for fb in fallbacks:
+            if fb == "openai" and not any(n == "openai" for n, _ in chain):
+                add_openai()
+            elif fb == "perplexity" and not any(n == "perplexity" for n, _ in chain):
+                add_perplexity()
+            elif fb == "ollama" and not any(n == "ollama" for n, _ in chain):
+                add_ollama()
+
+        return chain if chain else [(llm_provider, self.llm)]
+
     def _get_prompt_template(self) -> str:
         """Optimized template for better extraction and accuracy"""
         return """You are a precise research assistant. Your task is to find and extract specific information from the provided documents.
@@ -442,7 +528,8 @@ ANSWER (be specific, quote facts from documents):"""
             raise
 
     def index_chunk_records(self, records: List[Dict]):
-        """Index already-built chunk records (each record must include 'text' and source metadata)."""
+        """Index already-built chunk records (each record must include 'text' and source metadata).
+        For large docs (>100 chunks), processes in batches to avoid timeout."""
         try:
             if not records:
                 return
@@ -450,12 +537,19 @@ ANSWER (be specific, quote facts from documents):"""
             if not any(texts):
                 logger.warning("⚠️  index_chunk_records: all texts empty")
                 return
-            logger.info(f"📇 Indexing {len(records)} chunk record(s)")
-            embeddings = self.embeddings_service.embed_texts(texts)
-            if not embeddings:
-                logger.error("❌ Embedding service returned empty list!")
-                return
-            self.qdrant_connector.insert_vectors(vectors=embeddings, metadatas=records)
+            import os
+            batch_limit = int(os.getenv("INDEXING_BATCH_SIZE", "100"))  # Smaller = less timeout risk
+            total = len(records)
+            logger.info(f"📇 Indexing {total} chunk record(s)" + (f" (batches of {batch_limit})" if total > batch_limit else ""))
+            for start in range(0, total, batch_limit):
+                batch = records[start:start + batch_limit]
+                batch_texts = [r.get("text", "") for r in batch]
+                embeddings = self.embeddings_service.embed_texts(batch_texts)
+                if not embeddings:
+                    raise RuntimeError("Embedding service returned empty list")
+                self.qdrant_connector.insert_vectors(vectors=embeddings, metadatas=batch)
+                if total > batch_limit:
+                    logger.info(f"   ✓ Batch {start // batch_limit + 1}: {len(batch)} chunks")
             logger.info("✅ Chunk records indexed")
         except Exception as e:
             logger.error(f"❌ index_chunk_records error: {str(e)}")
@@ -488,7 +582,7 @@ ANSWER (be specific, quote facts from documents):"""
             
             # 1. Retrieval from Qdrant
             logger.debug("  1/3 Retrieval from Qdrant...")
-            query_embedding = self.embeddings_service.embed_text(query)
+            query_embedding = self.embeddings_service.embed_text(query, is_query=True)
 
             if query_embedding is None:
                 logger.error("❌ Query embedding is None!")
@@ -646,13 +740,18 @@ WEEKLY REPORT (Markdown):"""
 
     def generate_insights_from_context(self, context: str, filename: str) -> str:
         """Generate per-document insights/summary (markdown). Used for reporte por archivo."""
-        prompt = f"""You are a news analyst. Based on the following document excerpts from the file "{filename}", produce a short insights report in Markdown.
+        prompt = f"""You are a news analyst. Based on the following document excerpts from "{filename}", produce a structured insights report in Markdown.
 
-REQUIREMENTS:
-- Summarize the main themes and key points.
-- Note any clear editorial stance or posture when evident.
-- Keep it concise with clear sections (e.g. ## Temas, ## Resumen, ## Postura).
-- Write in the same language as the source. Use only information from the context; do not invent facts.
+EXTRACT AND INCLUDE (use only information from the context; do not invent):
+
+1. **Tema**: Main topic or theme of the news.
+2. **Autor**: Who wrote it (if identifiable).
+3. **Periódico/Fuente**: Newspaper or source (if identifiable).
+4. **Postura**: Editorial stance or posture (neutral, critical, supportive, etc.).
+5. **Resumen**: Brief summary of the content.
+6. **Contexto IA**: What the AI can infer — verificado o no, relevante o no, sesgada o hechos.
+
+Write in the same language as the source.
 
 DOCUMENT EXCERPTS:
 ---
@@ -661,6 +760,43 @@ DOCUMENT EXCERPTS:
 
 INSIGHTS REPORT (Markdown):"""
         return self.llm(prompt)
+
+    def generate_insights_with_fallback(self, context: str, label: str) -> Tuple[str, str]:
+        """Generate insights trying each LLM in chain. On 429, try next. Returns (content, llm_source)."""
+        prompt = f"""You are a news analyst. Based on the following document excerpts from "{label}", produce a structured insights report in Markdown.
+
+EXTRACT AND INCLUDE (use only information from the context; do not invent):
+
+1. **Tema**: Main topic or theme of the news.
+2. **Autor**: Who wrote it (if identifiable).
+3. **Periódico/Fuente**: Newspaper or source (if identifiable).
+4. **Postura**: Editorial stance or posture (neutral, critical, supportive, etc.).
+5. **Resumen**: Brief summary of the content.
+6. **Contexto IA**: What the AI can infer from the text — indicate:
+   - Verificado o no (facts that can be verified vs. opinions/claims)
+   - Relevante o no (relevance of the information)
+   - Sesgada o hechos (biased narrative vs. factual reporting)
+
+Write in the same language as the source. Use only information from the context.
+
+DOCUMENT EXCERPTS:
+---
+{context[:80000]}
+---
+
+INSIGHTS REPORT (Markdown):"""
+        last_error = None
+        for name, llm in self.llm_chain:
+            try:
+                content = llm(prompt)
+                return (content, name)
+            except RateLimitError as e:
+                last_error = e
+                logger.warning(f"LLM {name} 429, trying fallback: {e}")
+            except Exception as e:
+                last_error = e
+                logger.warning(f"LLM {name} failed: {e}, trying fallback")
+        raise last_error or RuntimeError("No LLM in chain")
 
     def reindex_all_documents(self):
         """Reindex all documents (if needed)"""

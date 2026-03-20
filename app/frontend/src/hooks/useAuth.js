@@ -28,6 +28,20 @@ export function useAuth(API_URL) {
     }
   }, []);
 
+  // 401 from any API → logout (token expired or backend restarted with new JWT secret)
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setIsAuthenticated(false);
+      setUser(null);
+      setToken(null);
+      setLoginForm({ username: '', password: '' });
+      localStorage.removeItem('rag_auth_token');
+      localStorage.removeItem('rag_auth_user');
+    };
+    window.addEventListener('auth:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('auth:unauthorized', onUnauthorized);
+  }, []);
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoggingIn(true);

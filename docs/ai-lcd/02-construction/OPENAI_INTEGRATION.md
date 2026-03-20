@@ -68,7 +68,7 @@ class OpenAIChatClient:
 **Cambio**: Leer nuevas variables de entorno y pasar al pipeline.
 
 Nuevas variables:
-- `LLM_PROVIDER`: `"openai"` o `"ollama"` (default: `"ollama"`)
+- `LLM_PROVIDER`: `"openai"`, `"perplexity"` o `"ollama"` (default: `"ollama"`)
 - `OPENAI_API_KEY`: API key de OpenAI (requerido si provider es openai)
 - `OPENAI_MODEL`: Modelo de OpenAI (default: `"gpt-4o"`)
 
@@ -94,13 +94,43 @@ Startup
   └── Crear RAGPipeline(llm=client_seleccionado)
 ```
 
-## 5. Compatibilidad
+## 5. Perplexity (alternativa a OpenAI)
+
+Si sufres 429 con OpenAI, puedes usar Perplexity como alternativa:
+
+```
+LLM_PROVIDER=perplexity
+PERPLEXITY_API_KEY=pplx-...
+PERPLEXITY_MODEL=sonar-pro   # o sonar, sonar-reasoning-pro
+```
+
+Modelos: `sonar`, `sonar-pro`, `sonar-reasoning-pro`, `sonar-deep-research`.
+Límites por tier: 50–4,000 req/min según gasto acumulado.
+
+## 6. Insights: OpenAI por defecto, Perplexity fallback
+
+- `LLM_PROVIDER=openai` (default) — Insights con GPT
+- `LLM_FALLBACK_PROVIDERS=perplexity` (default) — Si OpenAI devuelve 429, usa Perplexity
+- Los LLM vía API son **solo para Insights**; embeddings siguen siendo HuggingFace local (o Perplexity si `EMBEDDING_PROVIDER=perplexity`)
+
+## 7. Manejo de 429 (Rate Limit)
+
+Variables para ajustar reintentos ante 429:
+- `LLM_429_QUICK_RETRIES`: reintentos rápidos en el cliente (default: 3)
+- `LLM_429_BASE_WAIT`: espera base en segundos (default: 5)
+- `INSIGHTS_THROTTLE_SECONDS`: espera entre reintentos en workers (default: 60)
+- `INSIGHTS_MAX_RETRIES`: máx. reintentos por insight (default: 5)
+
+El cliente usa `Retry-After` del header cuando OpenAI lo envía.
+
+## 8. Compatibilidad
 
 La modificación es **aditiva**: el comportamiento por defecto (Ollama) no cambia.
-Solo se activa OpenAI si `LLM_PROVIDER=openai` está explícitamente configurado.
+Solo se activa OpenAI/Perplexity si `LLM_PROVIDER` está explícitamente configurado.
 
 ---
 
 | Fecha | Versión | Cambios | Autor |
 |-------|---------|---------|-------|
 | 2026-03-02 | 1.0 | Diseño de la integración (pre-implementación) | AI-DLC |
+| 2026-03-16 | 1.1 | Perplexity, mejor manejo 429, Retry-After | AI-DLC |

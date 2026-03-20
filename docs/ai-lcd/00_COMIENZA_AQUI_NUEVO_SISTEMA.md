@@ -148,6 +148,7 @@ PLAN_AND_NEXT_STEP.md § Versiones ← Consolido aquí
 ```
 ¿Quiero saber...?              Dónde buscar?
 ─────────────────────────────────────────────────
+"¿Qué está pendiente?"          PENDING_BACKLOG.md (técnico) + REQUESTS_REGISTRY (REQ-014)
 "¿Se pidió esto antes?"         REQUESTS_REGISTRY.md
 "¿Por qué se hizo Fix #8?"      REQUESTS_REGISTRY.md § REQ-002
 "¿Qué está estable?"            PLAN_AND_NEXT_STEP.md § 7

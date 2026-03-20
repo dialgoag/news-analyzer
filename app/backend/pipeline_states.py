@@ -85,18 +85,13 @@ class DocStatus:
     def is_processable(cls, status: str) -> bool:
         return status in cls.ACTIVE_STATES
 
-    # Migration map: old status -> new status
+    # Deprecated: migration 012 normalizes DB. Single schema only. Not used at runtime.
     MIGRATION_MAP = {
         "pending": "upload_pending",
         "queued": "upload_pending",
         "processing": "ocr_processing",
-        "ocr_done": "ocr_done",
         "chunked": "chunking_done",
-        "chunking_done": "chunking_done",
         "indexed": "indexing_done",
-        "completed": "completed",
-        "error": "error",
-        "paused": "paused",
     }
 
 
@@ -118,8 +113,9 @@ class TaskType:
     CHUNKING = "chunking"
     INDEXING = "indexing"
     INSIGHTS = "insights"
+    INDEXING_INSIGHTS = "indexing_insights"
 
-    ALL = [OCR, CHUNKING, INDEXING, INSIGHTS]
+    ALL = [OCR, CHUNKING, INDEXING, INSIGHTS, INDEXING_INSIGHTS]
 
 
 class QueueStatus:
@@ -146,10 +142,11 @@ class InsightStatus:
     PENDING = "pending"
     QUEUED = "queued"
     GENERATING = "generating"
+    INDEXING = "indexing"  # Being indexed in Qdrant (after LLM done)
     DONE = "done"
     ERROR = "error"
 
-    IN_PROGRESS = {PENDING, QUEUED, GENERATING}
+    IN_PROGRESS = {PENDING, QUEUED, GENERATING, INDEXING}
 
 
 class PipelineTransitions:

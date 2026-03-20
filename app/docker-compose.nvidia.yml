@@ -8,6 +8,7 @@ services:
     environment:
       OCR_ENGINE: ${OCR_ENGINE:-tika}
       CUDA_VISIBLE_DEVICES: "0"
+      EMBEDDING_DEVICE: cuda
     deploy:
       resources:
         reservations:

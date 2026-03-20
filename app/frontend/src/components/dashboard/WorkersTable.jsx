@@ -197,9 +197,9 @@ export function WorkersTable({ API_URL, token, refreshTrigger }) {
   useEffect(() => {
     if (!chartRef.current || Object.keys(workersByType).length === 0) return;
 
-    const width = 300;
-    const height = 150;
-    const margin = { top: 10, right: 10, bottom: 30, left: 60 };
+    const width = 232;
+    const height = 92;
+    const margin = { top: 6, right: 6, bottom: 22, left: 44 };
 
     d3.select(chartRef.current).selectAll("*").remove();
 
@@ -401,73 +401,58 @@ export function WorkersTable({ API_URL, token, refreshTrigger }) {
   }
 
   return (
-    <div className="workers-table-container">
-      <div className="workers-table-header">
-        <div>
-          <h3>🔧 Workers Status</h3>
-          <p className="workers-hint">💡 Click en fila para filtrar visualizaciones</p>
-          
-          {error && (
-            <div style={{
-              background: '#fff3cd',
-              border: '1px solid #ffc107',
-              color: '#856404',
-              padding: '6px 12px',
-              borderRadius: '4px',
-              fontSize: '11px',
-              marginTop: '6px'
-            }}>
-              ⚠️ {error}
-              {workers.length > 0 && ' - Mostrando últimos datos disponibles'}
-            </div>
-          )}
+    <div className="workers-table-container" title="Click en fila para filtrar el dashboard">
+      {error && (
+        <div
+          className="workers-fetch-error-banner"
+          style={{
+            background: '#fff3cd',
+            border: '1px solid #ffc107',
+            color: '#856404',
+            padding: '4px 8px',
+            borderRadius: '4px',
+            fontSize: '10px',
+            marginBottom: '6px',
+            flexShrink: 0
+          }}
+        >
+          ⚠️ {error}
+          {workers.length > 0 && ' — últimos datos'}
+        </div>
+      )}
 
-          {/* NEW: Error filter dropdown */}
-          <div style={{ marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <label style={{ fontSize: '11px', color: '#94a3b8' }}>Filtro:</label>
-            <select
-              value={errorFilter}
-              onChange={(e) => setErrorFilter(e.target.value)}
-              style={{
-                padding: '4px 8px',
-                background: '#1e293b',
-                border: '1px solid #334155',
-                borderRadius: '4px',
-                color: '#f1f5f9',
-                fontSize: '11px',
-                cursor: 'pointer'
-              }}
-            >
-              <option value="all">Todos</option>
-              <option value="active">Activos</option>
-              <option value="stuck">Stuck ({'>'}20min)</option>
-              <option value="real-errors">Errores Reales</option>
-              <option value="shutdown-errors">Errores Shutdown</option>
-            </select>
-          </div>
-
+      <div className="workers-table-toolbar">
+        <div className="workers-table-toolbar-controls">
+          <label htmlFor="workers-error-filter" className="workers-filter-label">
+            Filtro
+          </label>
+          <select
+            id="workers-error-filter"
+            value={errorFilter}
+            onChange={(e) => setErrorFilter(e.target.value)}
+            className="workers-filter-select"
+          >
+            <option value="all">Todos</option>
+            <option value="active">Activos</option>
+            <option value="stuck">Stuck (&gt;20min)</option>
+            <option value="real-errors">Errores reales</option>
+            <option value="shutdown-errors">Shutdown</option>
+          </select>
           {workers.filter(w => w.status === 'error' && w.document_id).length > 0 && (
             <button
+              type="button"
               onClick={handleRetryAllErrors}
               disabled={retrying.size > 0}
-              style={{
-                marginTop: '8px',
-                padding: '6px 12px',
-                background: retrying.size > 0 ? '#6b7280' : '#4caf50',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: retrying.size > 0 ? 'not-allowed' : 'pointer',
-                fontSize: '11px',
-                fontWeight: '600'
-              }}
+              className="workers-retry-all-btn"
             >
-              {retrying.size > 0 ? '⏳ Reintentando...' : `🔄 Reintentar todos los errores (${workers.filter(w => w.status === 'error' && w.document_id).length})`}
+              {retrying.size > 0
+                ? '⏳…'
+                : `🔄 (${workers.filter(w => w.status === 'error' && w.document_id).length})`}
             </button>
           )}
         </div>
         <div className="workers-summary-chart">
-          <svg ref={chartRef}></svg>
+          <svg ref={chartRef} />
         </div>
       </div>
 

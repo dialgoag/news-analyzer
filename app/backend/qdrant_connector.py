@@ -6,7 +6,7 @@ Manages: insert, search, delete, collections
 import logging
 from typing import List, Dict, Optional
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, MatchAny
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -21,9 +21,9 @@ class QdrantConnector:
     """
     
     COLLECTION_NAME = "rag_documents"
-    VECTOR_SIZE = 1024  # BAAI/bge-m3
+    VECTOR_SIZE = 1024  # BAAI/bge-m3 default
     
-    def __init__(self, host: str = "localhost", port: int = 6333, api_key: str = None):
+    def __init__(self, host: str = "localhost", port: int = 6333, api_key: str = None, vector_size: int = None):
         """
         Initialize connector
 
@@ -31,10 +31,12 @@ class QdrantConnector:
             host: Qdrant host
             port: Qdrant port
             api_key: Qdrant API key (optional)
+            vector_size: Embedding dimension (from embeddings_service). Default 1024.
         """
         self.host = host
         self.port = port
         self.api_key = api_key
+        self.VECTOR_SIZE = vector_size if vector_size is not None else self.VECTOR_SIZE
         self.client = None
         self.connected = False
     
@@ -44,10 +46,12 @@ class QdrantConnector:
         try:
             logger.info(f"Connecting to Qdrant: {self.host}:{self.port}...")
             
+            import os
+            timeout_sec = int(os.getenv("QDRANT_TIMEOUT_SEC", "1200"))  # 20 min for large indexing
             client_params = {
                 "host": self.host,
                 "port": self.port,
-                "timeout": 600,
+                "timeout": timeout_sec,
                 "https": False  # Force HTTP for local Qdrant
             }
             if self.api_key:
@@ -208,7 +212,7 @@ class QdrantConnector:
     
     
     def delete_document(self, document_id: str):
-        """Delete document from collection"""
+        """Delete document from collection (chunks + insights with that document_id)"""
         try:
             if not self.client:
                 raise RuntimeError("Collection not initialized")
@@ -233,6 +237,54 @@ class QdrantConnector:
         except Exception as e:
             logger.error(f"✗ Delete error: {str(e)}")
             raise
+
+    def delete_insight_by_news_item(self, news_item_id: str):
+        """Delete insight vectors for a news_item (before re-insert to avoid duplicates)."""
+        try:
+            if not self.client:
+                raise RuntimeError("Collection not initialized")
+            self.client.delete(
+                collection_name=self.COLLECTION_NAME,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(key="content_type", match=MatchValue(value="insight")),
+                        FieldCondition(key="news_item_id", match=MatchValue(value=news_item_id)),
+                    ]
+                )
+            )
+            logger.debug(f"✓ Deleted existing insight vectors for news_item: {news_item_id}")
+        except Exception as e:
+            logger.warning(f"delete_insight_by_news_item: {e}")
+
+    def insert_insight_vector(
+        self,
+        vector: List[float],
+        news_item_id: str,
+        document_id: str,
+        filename: str,
+        text: str,
+        title: str = "",
+    ) -> str:
+        """Insert a single insight vector. Returns point id."""
+        if not self.client:
+            raise RuntimeError("Collection not initialized")
+        self.delete_insight_by_news_item(news_item_id)
+        point_id = str(uuid.uuid4())
+        payload = {
+            "content_type": "insight",
+            "news_item_id": news_item_id,
+            "document_id": document_id,
+            "filename": filename,
+            "text": text,
+            "title": title or "",
+        }
+        self.client.upsert(
+            collection_name=self.COLLECTION_NAME,
+            points=[PointStruct(id=point_id, vector=vector, payload=payload)],
+            wait=True,
+        )
+        logger.info(f"✓ Insight indexed: {news_item_id} ({filename})")
+        return point_id
     
     
     def get_indexed_documents(self) -> List[Dict]:
@@ -295,34 +347,37 @@ class QdrantConnector:
     
     def get_chunks_by_document_ids(self, document_ids: List[str], max_chunks: int = 2000) -> List[Dict]:
         """
-        Retrieve chunk payloads for the given document IDs (e.g. for daily report).
-        Scrolls in batches and filters in memory. Returns list of payloads with 'text', 'filename', 'document_id'.
+        Retrieve chunk payloads for the given document IDs.
+        Uses scroll_filter (server-side) instead of full scroll — O(k) not O(n).
         """
         if not document_ids or not self.client:
             return []
-        doc_id_set = set(document_ids)
+        ids_list = list(set(document_ids))
         all_payloads = []
         offset = None
         batch_size = 500
+        scroll_filter = Filter(must=[
+            FieldCondition(key="document_id", match=MatchAny(any=ids_list))
+        ])
         try:
             while len(all_payloads) < max_chunks:
                 points, next_offset = self.client.scroll(
                     collection_name=self.COLLECTION_NAME,
                     limit=batch_size,
                     offset=offset,
+                    scroll_filter=scroll_filter,
                     with_payload=True,
                     with_vectors=False,
                 )
                 for point in points:
                     payload = point.payload or {}
-                    if payload.get("document_id") in doc_id_set:
-                        all_payloads.append({
-                            "text": payload.get("text", ""),
-                            "filename": payload.get("filename", "unknown"),
-                            "document_id": payload.get("document_id", ""),
-                        })
-                        if len(all_payloads) >= max_chunks:
-                            break
+                    all_payloads.append({
+                        "text": payload.get("text", ""),
+                        "filename": payload.get("filename", "unknown"),
+                        "document_id": payload.get("document_id", ""),
+                    })
+                    if len(all_payloads) >= max_chunks:
+                        break
                 if next_offset is None or len(all_payloads) >= max_chunks:
                     break
                 offset = next_offset
@@ -335,35 +390,38 @@ class QdrantConnector:
     def get_chunks_by_news_item_ids(self, news_item_ids: List[str], max_chunks: int = 2000) -> List[Dict]:
         """
         Retrieve chunk payloads for the given news_item_ids.
-        Scrolls in batches and filters in memory. Returns list of payloads with 'text', 'filename', 'document_id', 'news_item_id', 'news_title'.
+        Uses scroll_filter (server-side) instead of full scroll — O(k) not O(n).
         """
         if not news_item_ids or not self.client:
             return []
-        item_id_set = set(news_item_ids)
+        ids_list = list(set(news_item_ids))
         all_payloads = []
         offset = None
         batch_size = 500
+        scroll_filter = Filter(must=[
+            FieldCondition(key="news_item_id", match=MatchAny(any=ids_list))
+        ])
         try:
             while len(all_payloads) < max_chunks:
                 points, next_offset = self.client.scroll(
                     collection_name=self.COLLECTION_NAME,
                     limit=batch_size,
                     offset=offset,
+                    scroll_filter=scroll_filter,
                     with_payload=True,
                     with_vectors=False,
                 )
                 for point in points:
                     payload = point.payload or {}
-                    if payload.get("news_item_id") in item_id_set:
-                        all_payloads.append({
-                            "text": payload.get("text", ""),
-                            "filename": payload.get("filename", "unknown"),
-                            "document_id": payload.get("document_id", ""),
-                            "news_item_id": payload.get("news_item_id", ""),
-                            "news_title": payload.get("news_title") or payload.get("news_title", None),
-                        })
-                        if len(all_payloads) >= max_chunks:
-                            break
+                    all_payloads.append({
+                        "text": payload.get("text", ""),
+                        "filename": payload.get("filename", "unknown"),
+                        "document_id": payload.get("document_id", ""),
+                        "news_item_id": payload.get("news_item_id", ""),
+                        "news_title": payload.get("news_title") or payload.get("news_title", None),
+                    })
+                    if len(all_payloads) >= max_chunks:
+                        break
                 if next_offset is None or len(all_payloads) >= max_chunks:
                     break
                 offset = next_offset

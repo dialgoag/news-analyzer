@@ -2,8 +2,77 @@
 
 > Decisiones, cambios importantes, y contexto entre sesiones
 
-**Última actualización**: 2026-03-18  
-**Sesión**: 42 (Errores de Insights en análisis y retry)
+**Última actualización**: 2026-03-19  
+**Sesión**: 43 (Fix file naming + OCR symlink extensión)
+
+---
+
+## Sesión 43: Fix file naming + OCR symlink extensión (2026-03-19)
+
+### Contexto
+Durante análisis de logs, se detectó que el archivo `28-03-26-ABC.pdf` (17MB) fallaba constantemente con error "Only PDF files are supported". Investigación reveló dos problemas fundamentales en el sistema de archivos:
+
+1. **Sobrescritura silenciosa**: Archivos con mismo nombre pero diferente contenido sobrescribían versiones anteriores en `/app/inbox/processed/`
+2. **Symlinks sin extensión**: `/app/uploads/{SHA256}` (sin `.pdf`) causaba rechazo del OCR service
+
+### Cambio 1: Hash prefix en processed files
+- **Problema**: Archivos con mismo nombre sobrescribían versiones anteriores en `/app/inbox/processed/`. Si subías `28-03-26-ABC.pdf` dos veces con diferente contenido, el segundo sobrescribía el primero, pero DB tenía 2 registros con diferentes SHA. Symlinks viejos apuntaban a contenido incorrecto.
+- **Decisión**: Guardar en processed como `{short_hash}_{filename}` donde short_hash son primeros 8 chars del SHA256. Ejemplo: `f3d5faf6_28-03-26-ABC.pdf`.
+- **Alternativas consideradas**: 
+  - Timestamp (no identifica contenido único)
+  - SHA completo (nombre de archivo demasiado largo, >64 chars)
+  - Solo filename original (el problema actual que causa sobrescritura)
+- **Justificación**: 8 chars de SHA256 = 4 billones de combinaciones, colisión prácticamente imposible en corpus de documentos
+- **Impacto**: Cada versión del archivo tiene nombre único; no hay sobrescritura; trazabilidad completa.
+
+### Cambio 2: Extensión .pdf en symlinks
+- **Problema**: Symlinks en `/app/uploads/` creados como `{document_id}` (sin extensión) causaban error OCR "Only PDF files are supported". El OCR service validaba `file.filename.lower().endswith('.pdf')` y rechazaba archivos sin extensión.
+- **Root cause**: `Path(file_path).name` extraía nombre del symlink sin extensión → OCR service rechazaba
+- **Decisión**: Crear symlinks como `{document_id}.pdf` (SHA completo + extensión). Ejemplo: `f3d5faf66627a6be1af93cc5d5127277fb8294b174594eb39132d96203a8e531.pdf`.
+- **Impacto**: OCR service acepta archivos; `Path(file_path).name` retorna nombre con `.pdf`; validación pasa.
+
+### Cambio 3: Backward compatibility con resolve_file_path
+- **Decisión**: Función `resolve_file_path(document_id, upload_dir)` intenta:
+  1. Primero: `{document_id}.pdf` (nuevo formato)
+  2. Fallback: `{document_id}` (formato legacy)
+  3. Raise FileNotFoundError si ninguno existe
+- **Impacto**: Archivos legacy siguen funcionando; nuevos archivos usan formato correcto; migración gradual sin ruptura.
+
+### Cambio 4: Migración de archivos legacy
+- **Script**: `migrate_file_naming.py` con dry-run mode para seguridad
+- **Proceso**:
+  1. **PASO 1**: Migrar processed files (agregar prefijo hash) - 0 migrados, 584 ya correctos
+  2. **PASO 2**: Actualizar symlink targets (apuntar a archivos con prefijo) - 258 actualizados
+  3. **PASO 3**: Migrar symlinks (agregar extensión .pdf) - 7 migrados, 251 ya correctos
+- **Resultados**:
+  - Total migrado: 7 symlinks + 258 targets
+  - Errores: 0
+  - Tiempo: 12 segundos
+  - Archivo problemático migrado: `f3d5faf66627a6be1af93cc5d5127277fb8294b174594eb39132d96203a8e531.pdf`
+- **Verificación post-migración**:
+  - Archivo procesado: 302,152 chars OCR, 187 chunks, indexado en Qdrant
+  - Logs limpios: sin "Only PDF files are supported", sin "File not found"
+  - Sistema funcional: 258 symlinks .pdf, 292 archivos con prefijo hash
+
+### Cambio 5: Deduplicación mantiene estructura
+- **Decisión**: Duplicados también usan `{short_hash}_{filename}` en processed para consistencia; symlinks siguen siendo únicos por SHA completo.
+- **Riesgo**: Bajo; solo afecta nuevos archivos; archivos existentes mantienen nombre viejo pero symlinks siguen funcionando.
+
+### Archivos modificados
+- `file_ingestion_service.py`: 
+  - `ingest_from_upload`: Guarda como `{document_id}.pdf`
+  - `ingest_from_inbox`: Guarda processed como `{short_hash}_{filename}`, symlink como `{document_id}.pdf`
+  - `resolve_file_path`: Backward compatible (intenta .pdf primero, luego legacy)
+- `app.py`: 
+  - Import `resolve_file_path`, `ingest_from_upload`
+  - 4 endpoints actualizados: upload handler, OCR task handler, OCR worker task, download endpoint
+- `migrate_file_naming.py`: Script de migración (ejecutado exitosamente, puede eliminarse)
+
+### Lecciones aprendidas
+1. **Validar filesystem early**: El error "Only PDF files are supported" ocultaba un problema de naming más profundo
+2. **Backward compatibility es crítico**: 258 archivos legacy requerían migración sin romper sistema en producción
+3. **Dry-run mode salva vidas**: Verificar migración antes de aplicarla previene desastres
+4. **Prefijo hash corto es óptimo**: 8 chars = suficiente unicidad + legibilidad + no excede límites filesystem
 
 ---
 
@@ -2527,6 +2596,37 @@ Usuario solicita 4 mejoras de UX para el dashboard. Se documentan como REQ-014 p
 - **Efecto**: Backend saturado, dashboard con timeouts y CORS errors
 - **Decisión**: Documentado como PRIORIDAD ALTA (Fix #55), no se arregla ahora para no retrasar el commit
 - **Próximo paso**: Implementar exponential backoff + limitar concurrencia a 3-5 workers
+
+---
+
+## 📅 2026-03-20 — Makefile para deploy local
+
+### Decisión
+- Raíz del repo: **`Makefile`** — `deploy`, `redeploy-front`, `redeploy-back`, `run-all`, `run-env` (infra sin backend/frontend), `deploy-quick`, `rebuild-*`, `logs SERVICE=…`.
+- Documentado en `app/docs/DOCKER.md` §0.
+
+---
+
+## 📅 2026-03-20 — Docs: producción local = Docker en la máquina
+
+### Decisión
+- **“Producción”** en este proyecto: stack **Docker local** (localhost), salvo que otro doc nombre un servidor remoto.
+- **Desplegar** cambios ahí: `docker compose down` + `build` (servicios tocados) + `up -d`; sustituye contenedores; volúmenes persisten salvo flags explícitos.
+- **Ubicación**: `app/docs/DOCKER.md` §0 + nota en `ENVIRONMENT_CONFIGURATION.md`.
+
+---
+
+## 📅 2026-03-20 — Dashboard: espacio para tablas (REQ-014.3 parcial)
+
+### Cambio
+- Layout tipo “app shell”: el bloque de paneles de diagnóstico tiene altura máxima y scroll propio; la grilla Sankey + Workers + Documentos recibe el resto del viewport (`flex: 1`, `min-height: 0`).
+- Eliminado el segundo título “Pipeline Dashboard” dentro de `PipelineDashboard`; encabezado compacto solo en `DashboardView`.
+- Sankey arranca colapsado para dar prioridad visual a tablas (un click para abrir).
+
+### Decisión
+- **Por qué**: `100vh` en un hijo de flex rompía el reparto de altura; había que acotar la parte superior o todo el mundo competía por scroll de página.
+- **Alternativas**: Solo colapsar todo por defecto (peor para quien necesita Errores/Análisis siempre visibles); layout de pestañas (más trabajo).
+- **Riesgo**: BAJO (solo UI).
 
 ---
 

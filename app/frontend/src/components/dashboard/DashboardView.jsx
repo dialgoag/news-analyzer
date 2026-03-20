@@ -24,24 +24,26 @@ export function DashboardView({ API_URL, token }) {
   };
 
   return (
-    <main className="flex-1 flex flex-col overflow-hidden">
-      {/* Dashboard Header with manual refresh */}
-      <div className="px-6 py-3 border-b border-slate-700 flex items-center justify-between bg-slate-800/50">
-        <div>
-          <h1 className="text-xl font-bold text-white">📊 Pipeline Dashboard</h1>
-          <p className="text-sm text-slate-400">Real-time monitoring • Auto-refresh every 30s</p>
+    <main className="flex-1 flex flex-col overflow-hidden min-h-0">
+      {/* Single compact toolbar — detail lives inside panels */}
+      <div className="px-4 py-2 border-b border-slate-700 flex items-center justify-between gap-3 bg-slate-800/50 shrink-0">
+        <div className="flex items-baseline gap-2 min-w-0">
+          <h1 className="text-base font-semibold text-white truncate">Pipeline</h1>
+          <span className="text-xs text-slate-500 whitespace-nowrap hidden sm:inline">
+            datos ~20s · panel 30s
+          </span>
         </div>
         <button
           onClick={handleManualRefresh}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition flex items-center gap-2"
-          title="Manual refresh"
+          className="shrink-0 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-semibold transition flex items-center gap-1.5"
+          title="Refrescar ahora"
         >
-          🔄 Refresh
+          🔄 Refrescar
         </button>
       </div>
 
       {/* Full Width Pipeline Dashboard */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden min-h-0">
         <PipelineDashboard 
           API_URL={API_URL} 
           token={token} 

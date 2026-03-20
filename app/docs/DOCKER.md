@@ -2,7 +2,42 @@
 
 > Flujo unificado de Docker Compose para CPU (Mac/Linux) y GPU (NVIDIA/AMD)
 
-**Última actualización**: 2026-03-15
+**Última actualización**: 2026-03-20
+
+---
+
+## 0. Convención: “producción” local y qué es desplegar
+
+En este proyecto, **“producción”** suele significar el **stack Docker corriendo en tu máquina** (backend, frontend, bases de datos, etc. en `localhost`), no un servidor remoto—salvo que en otro doc se indique un entorno concreto.
+
+**Mandar cambios a esa producción local** = volver a **construir las imágenes** de los servicios que tocaste (sobre todo `frontend` y/o `backend`) y **sustituir los contenedores actuales**: pararlos y eliminarlos, luego levantar otros con las imágenes nuevas. En la práctica:
+
+1. `docker compose down` — baja y **elimina** los contenedores del compose (no borra volúmenes por defecto).
+2. `docker compose build …` — reconstruye solo lo necesario (o `--no-cache` si quieres build limpio).
+3. `docker compose up -d` — crea y arranca contenedores nuevos.
+
+Los **datos persistentes** (Postgres, Qdrant, uploads, etc.) viven en **volúmenes**; `docker compose down` **no** los destruye. Para borrar también datos habría que usar flags explícitos (`-v`) o `docker volume rm`—solo si sabes lo que haces.
+
+Ejemplo típico tras cambios de UI o API:
+
+```bash
+cd app
+docker compose down
+docker compose build --no-cache frontend backend
+docker compose up -d
+```
+
+**Atajo (raíz del repo)**: `Makefile` — `make help` lista todo. Resumen:
+
+| Objetivo | Comando |
+|----------|---------|
+| Despliegue completo (backend+frontend, sin caché) | `make deploy` |
+| Solo frontend (sin caché, recrea contenedor) | `make redeploy-front` |
+| Solo backend (sin caché, recrea contenedor) | `make redeploy-back` |
+| Levantar **todo** el stack | `make run-all` (o `make up`) |
+| Entorno **sin** backend ni frontend (Postgres, OCR, Qdrant, Ollama) | `make run-env` |
+
+Build con caché (más rápido): `make rebuild-frontend` / `make rebuild-backend`, o `cd app && docker compose build … && docker compose up -d …`.
 
 ---
 
@@ -73,6 +108,19 @@ cd app
 
 `build.sh` usa `GPU_TYPE` del `.env` o detecta `nvidia-smi` en Linux.
 
+### 3.5 Rebuild tras cambios en código (backend/frontend)
+
+Equivale a **desplegar en producción local**: ver **§0** (bajar contenedores, rebuild, subir de nuevo).
+
+```bash
+cd app
+docker compose down
+docker compose build --no-cache backend frontend
+docker compose up -d
+```
+
+Usar tras fixes de dashboard, API, etc. Ver `docs/ai-lcd/CONSOLIDATED_STATUS.md` para el historial de cambios.
+
 ---
 
 ## 4. Servicios
@@ -97,6 +145,7 @@ cd app
 | `VITE_API_URL` | `http://localhost:8000` | URL del backend para el frontend |
 | `BACKEND_PORT` | `8000` | Puerto del backend |
 | `FRONTEND_PORT` | `3000` | Puerto del frontend |
+| `EMBEDDING_DEVICE` | auto (cuda si disponible) | Forzar `cuda` o `cpu` para embeddings |
 
 Ver `.env.example` y `docs/ai-lcd/03-operations/ENVIRONMENT_CONFIGURATION.md` para el resto.
 
