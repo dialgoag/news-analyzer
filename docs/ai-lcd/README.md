@@ -2,14 +2,25 @@
 
 > Análisis profundo de noticias en PDF con interfaz web multi-usuario
 
-**Última actualización**: 2026-03-19 (Fix #95 - File naming + OCR symlink)  
+**Última actualización**: 2026-03-27 (Fix #96–97 + ops doc; #95 sigue vigente)  
 **Fase AI-DLC**: Construcción  
 **Audiencia**: Desarrolladores, futuras sesiones de trabajo  
-**Versión**: 3.0.11 - Sistema estable y verificado ✅
+**Versión**: 3.0.12 - Sistema estable y verificado ✅
 
 ---
 
-## 🔥 ÚLTIMO FIX: #95 - File Naming + OCR Symlink (2026-03-19)
+## 🔥 Reciente: #96–97 + operaciones (2026-03-27)
+
+- **#96**: Un solo worker activo por `(document_id, task_type)` — migración `015`, `assign_worker` con advisory lock (evita mismo archivo duplicado en workers por carrera).
+- **#97**: Login — validación `minLength` y mensajes para red/422/401.
+- **#98**: `POST /api/workers/shutdown` y `/api/workers/start` — solo **JWT rol admin** (`require_admin`).
+- **Ops**: `03-operations/ORDERLY_SHUTDOWN_AND_REBUILD.md` — shutdown API y rebuild backend/frontend (**fuente única**).
+
+Ver `CONSOLIDATED_STATUS.md` §96–98 y `SESSION_LOG.md` sesión 44.
+
+---
+
+## 🔥 Fix estable: #95 - File Naming + OCR Symlink (2026-03-19)
 
 > **Problema**: Archivos con mismo nombre se sobrescribían; OCR rechazaba symlinks sin extensión `.pdf`  
 > **Solución**: Hash prefix (8 chars) + extensión `.pdf` en symlinks  

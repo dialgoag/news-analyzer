@@ -2,9 +2,9 @@
 
 > **Propósito**: Rastrear TODAS las peticiones del usuario con trazabilidad completa
 > 
-> **Última actualización**: 2026-03-16  
-> **Total peticiones**: 18  
-> **Completadas**: 16 | Pendientes: 2 | Rechazadas: 0
+> **Última actualización**: 2026-03-27  
+> **Total peticiones**: 19  
+> **Completadas**: 17 | Pendientes: 2 | Rechazadas: 0
 
 > **Pendientes técnicos** (mejoras, fixes): ver `PENDING_BACKLOG.md` (fuente única).
 
@@ -32,10 +32,26 @@
 | **REQ-016** | 2026-03-15 | "BUG: Inbox File not found + Centralizar ingesta en servicio" | ✅ **COMPLETADA** | v3.0.2 | **#56, #57** |
 | **REQ-017** | 2026-03-16 | "BUG: 429 OpenAI Rate Limit — insights bloqueados" | ✅ **IMPLEMENTADA** | v3.0.3 | **#63** |
 | **REQ-018** | 2026-03-16 | "BUG: Crashed workers loop — recovery a None" | ✅ **COMPLETADA** | v3.0.3 | **#64** |
+| **REQ-019** | 2026-03-27 | "Doc AI-LCD + workers OCR duplicados + login + shutdown/rebuild" | ✅ **COMPLETADA** | v3.0.12 | **#96–#98** |
 
 ---
 
 ## 📌 PETICIONES DETALLADAS
+
+### **REQ-019: Documentación centralizada + fixes workers/login (2026-03-27)**
+
+**Estado**: ✅ COMPLETADA  
+**Fixes**: #96 (migración 015 + `assign_worker`), #97 (`useAuth` + `LoginView`), #98 (shutdown/start solo ADMIN JWT)
+
+**Alcance**:
+- Un solo `worker_task` activo por `(document_id, task_type)` para estados `assigned`/`started`.
+- Mensajes de login claros (422, red, URL API).
+- **Fuente única operativa**: `docs/ai-lcd/03-operations/ORDERLY_SHUTDOWN_AND_REBUILD.md`
+- Auditoría en `CONSOLIDATED_STATUS.md`, `SESSION_LOG.md` sesión 44, `PLAN_AND_NEXT_STEP.md`, `MIGRATIONS_SYSTEM.md` (015), `INDEX.md`.
+
+**No contradice**: REQ-003 (dedup por hash); REQ-004 (scheduler); fix #93 (ON CONFLICT worker_id).
+
+---
 
 ### **REQ-001: "Hacer OCR más rápido (event-driven)"**
 

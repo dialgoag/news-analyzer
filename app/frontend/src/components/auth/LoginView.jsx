@@ -48,7 +48,9 @@ export function LoginView({
               onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
               disabled={loggingIn}
               className="w-full px-4 py-3 bg-slate-700 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-              placeholder="Enter your username"
+              placeholder="Enter your username (min 3 characters)"
+              minLength={3}
+              maxLength={50}
               required
             />
           </div>
@@ -63,7 +65,8 @@ export function LoginView({
               onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
               disabled={loggingIn}
               className="w-full px-4 py-3 bg-slate-700 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-              placeholder="Enter your password"
+              placeholder="Enter your password (min 6 characters)"
+              minLength={6}
               required
             />
           </div>

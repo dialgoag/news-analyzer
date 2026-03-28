@@ -13,19 +13,19 @@
  * - Flows: Aggregated or individual lines
  */
 
-import React, { useEffect, useRef, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import * as d3 from 'd3';
 import { useDashboardFilters } from '../hooks/useDashboardFilters.jsx';
 import { 
   transformDocumentsForVisualization,
-  calculateStrokeWidth,
   generateTooltipHTML,
   groupDocumentsByStage 
 } from '../../services/documentDataService';
 import {
   groupDocumentsByMetaGroup,
   aggregateGroupMetrics,
-  GROUP_HIERARCHY
+  GROUP_HIERARCHY,
+  calculateCollapsedStrokeWidth
 } from '../../services/semanticZoomService';
 import './PipelineSankeyChart.css';
 import './SemanticZoom.css';
@@ -57,16 +57,56 @@ const mapStageToColumn = (doc) => {
 
 const ZOOM_LEVEL = { OVERVIEW: 0, BY_STAGE: 1, BY_DOCUMENT: 2 };
 
+const ZOOM_CONFIG = [
+  { level: ZOOM_LEVEL.OVERVIEW, label: 'Overview', hint: 'Activos vs No activos' },
+  { level: ZOOM_LEVEL.BY_STAGE, label: 'Etapa', hint: 'Docs por etapa' },
+  { level: ZOOM_LEVEL.BY_DOCUMENT, label: 'Documento', hint: 'Flujo individual' }
+];
+
+const METRIC_OPTIONS = {
+  documents: {
+    label: 'Documentos',
+    aggregateKey: 'count',
+    docValue: () => 1,
+    legend: 'Número de documentos',
+    maxHint: 'docs'
+  },
+  news: {
+    label: 'Noticias',
+    aggregateKey: 'totalNews',
+    docValue: (doc) => doc.news_count || 0,
+    legend: 'Noticias extraídas',
+    maxHint: 'news'
+  },
+  chunks: {
+    label: 'Chunks',
+    aggregateKey: 'totalChunks',
+    docValue: (doc) => doc.chunks_count || 0,
+    legend: 'Chunks generados',
+    maxHint: 'chunks'
+  },
+  insights: {
+    label: 'Insights',
+    aggregateKey: 'totalInsights',
+    docValue: (doc) => doc.insights_count || 0,
+    legend: 'Insights generados',
+    maxHint: 'insights'
+  }
+};
+
 export function PipelineSankeyChart({ data, documents = [] }) {
   const svgRef = useRef();
   const containerRef = useRef();
-  const { filters, updateFilter } = useDashboardFilters();
+  const { filters, updateFilter, clearFilter } = useDashboardFilters();
   const [hoveredDoc, setHoveredDoc] = useState(null);
   
   // Drill-down state (REQ-014.4)
   const [zoomLevel, setZoomLevel] = useState(ZOOM_LEVEL.OVERVIEW);
   const [selectedStage, setSelectedStage] = useState(null);
   const [selectedDoc, setSelectedDoc] = useState(null);
+  const [metricMode, setMetricMode] = useState('documents');
+  const [userAdjustedCollapse, setUserAdjustedCollapse] = useState(false);
+  const [inspectMode, setInspectMode] = useState(false);
   
   // Track which groups are collapsed (Set of group IDs: 'active', 'inactive')
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
@@ -76,13 +116,29 @@ export function PipelineSankeyChart({ data, documents = [] }) {
     transformDocumentsForVisualization(documents),
     [documents]
   );
+
+  useEffect(() => {
+    if (userAdjustedCollapse) return;
+    if (normalizedDocuments.length > 100) {
+      setCollapsedGroups(new Set(['active', 'inactive']));
+    } else if (collapsedGroups.size > 0) {
+      setCollapsedGroups(new Set());
+    }
+  }, [normalizedDocuments.length, userAdjustedCollapse, collapsedGroups]);
   
   // Group documents by current stage (always from full set for stage counts)
   const documentsByStage = useMemo(() => 
     groupDocumentsByStage(normalizedDocuments, mapStageToColumn),
     [normalizedDocuments]
   );
-  
+
+  const defaultStage = useMemo(() => {
+    const entries = Object.entries(documentsByStage || {});
+    if (!entries.length) return null;
+    const sorted = [...entries].sort((a, b) => (b[1]?.length || 0) - (a[1]?.length || 0));
+    return sorted[0]?.[0] || null;
+  }, [documentsByStage]);
+
   // Documents to display based on zoom level
   const displayedDocuments = useMemo(() => {
     if (zoomLevel === ZOOM_LEVEL.OVERVIEW) return normalizedDocuments;
@@ -100,8 +156,140 @@ export function PipelineSankeyChart({ data, documents = [] }) {
     groupDocumentsByMetaGroup(displayedDocuments, mapStageToColumn),
     [displayedDocuments]
   );
+
+  const groupedMetrics = useMemo(() => {
+    const result = {};
+    Object.entries(groupedDocuments).forEach(([groupId, docs]) => {
+      result[groupId] = {
+        docs,
+        metrics: aggregateGroupMetrics(docs)
+      };
+    });
+    return result;
+  }, [groupedDocuments]);
+  
+  const metricConfig = METRIC_OPTIONS[metricMode] || METRIC_OPTIONS.documents;
+
+  const docMetricMax = useMemo(() => {
+    if (!metricConfig?.docValue) return 1;
+    const values = normalizedDocuments
+      .map(metricConfig.docValue)
+      .filter((value) => typeof value === 'number' && value > 0);
+    return values.length ? Math.max(...values) : 1;
+  }, [normalizedDocuments, metricConfig]);
+
+  const aggregateMetricMax = useMemo(() => {
+    if (!metricConfig?.aggregateKey) return 1;
+    const metricsList = Object.values(groupedMetrics || {});
+    const values = metricsList.map(
+      (entry) => entry.metrics[metricConfig.aggregateKey] || 0
+    );
+    const maxValue = values.length ? Math.max(...values) : 1;
+    return maxValue || 1;
+  }, [groupedMetrics, metricConfig]);
   
   const [dimensions, setDimensions] = useState({ width: 900, height: 1200 });
+
+  const handleDocumentSelect = useCallback((doc) => {
+    if (!doc) return;
+    updateFilter('documentId', doc.document_id);
+    updateFilter('stage', mapStageToColumn(doc));
+  }, [updateFilter]);
+
+  const handleStageZoom = useCallback((stage) => {
+    if (!stage) return;
+    setZoomLevel(ZOOM_LEVEL.BY_STAGE);
+    setSelectedStage(stage);
+    setSelectedDoc(null);
+    updateFilter('stage', stage);
+    clearFilter('documentId');
+  }, [updateFilter, clearFilter]);
+
+  const handleGroupToggle = useCallback(() => {
+    setUserAdjustedCollapse(true);
+    setCollapsedGroups((prev) => {
+      const isCollapsed = prev.has('active') && prev.has('inactive');
+      return isCollapsed ? new Set() : new Set(['active', 'inactive']);
+    });
+  }, []);
+
+  const cleanupTooltips = useCallback(() => {
+    d3.selectAll('.sankey-tooltip').remove();
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Shift') {
+        setInspectMode(true);
+      }
+    };
+    const handleKeyUp = (event) => {
+      if (event.key === 'Shift') {
+        setInspectMode(false);
+        cleanupTooltips();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [cleanupTooltips]);
+
+  const handleZoomControl = (level) => {
+    if (level === ZOOM_LEVEL.OVERVIEW) {
+      setZoomLevel(ZOOM_LEVEL.OVERVIEW);
+      setSelectedStage(null);
+      setSelectedDoc(null);
+      clearFilter('stage');
+      clearFilter('documentId');
+      return;
+    }
+    if (level === ZOOM_LEVEL.BY_STAGE) {
+      if (selectedStage) {
+        setZoomLevel(ZOOM_LEVEL.BY_STAGE);
+        setSelectedDoc(null);
+        clearFilter('documentId');
+      } else if (defaultStage) {
+        handleStageZoom(defaultStage);
+      }
+      return;
+    }
+    if (level === ZOOM_LEVEL.BY_DOCUMENT && selectedDoc) {
+      setZoomLevel(ZOOM_LEVEL.BY_DOCUMENT);
+    }
+  };
+
+  useEffect(() => {
+    if (!filters.stage) {
+      if (zoomLevel === ZOOM_LEVEL.BY_STAGE && !selectedDoc) {
+        setZoomLevel(ZOOM_LEVEL.OVERVIEW);
+        setSelectedStage(null);
+      }
+      return;
+    }
+    if (filters.stage && zoomLevel === ZOOM_LEVEL.OVERVIEW) {
+      setZoomLevel(ZOOM_LEVEL.BY_STAGE);
+      setSelectedStage(filters.stage);
+    }
+  }, [filters.stage, zoomLevel, selectedDoc]);
+
+  useEffect(() => {
+    if (!filters.documentId) {
+      if (zoomLevel === ZOOM_LEVEL.BY_DOCUMENT) {
+        setZoomLevel(selectedStage ? ZOOM_LEVEL.BY_STAGE : ZOOM_LEVEL.OVERVIEW);
+        setSelectedDoc(null);
+      }
+      return;
+    }
+    const docMatch = normalizedDocuments.find((doc) => doc.document_id === filters.documentId);
+    if (docMatch) {
+      setSelectedDoc(docMatch);
+      setSelectedStage(mapStageToColumn(docMatch));
+      setZoomLevel(ZOOM_LEVEL.BY_DOCUMENT);
+    }
+  }, [filters.documentId, normalizedDocuments, zoomLevel, selectedStage]);
 
   // Update dimensions on resize
   useEffect(() => {
@@ -144,14 +332,14 @@ export function PipelineSankeyChart({ data, documents = [] }) {
     if (zoomLevel === ZOOM_LEVEL.BY_DOCUMENT && selectedDoc) {
       infoText = `💡 Click en "Overview" o nombre de etapa para volver`;
     } else if (zoomLevel === ZOOM_LEVEL.BY_STAGE && selectedStage) {
-      infoText = `💡 Click en documento para ver su flujo • Click en "Overview" para volver`;
+      infoText = `💡 Click en documento para ver su flujo • Mantén Shift para tooltips • Click en "Overview" para volver`;
     } else {
       const collapsedCount = collapsedGroups.size;
       infoText = collapsedCount === 0
-        ? `${normalizedDocuments.length} docs • Click en etapa para filtrar • Doble click en tags para colapsar`
+        ? `${normalizedDocuments.length} docs • Click en etapa para filtrar • Mantén Shift para ver detalles • Doble click en tags para colapsar`
         : collapsedCount === 2
-          ? `${normalizedDocuments.length} docs colapsados • Doble click en tags para expandir`
-          : `Vista mixta • Click en etapa para drill-down`;
+          ? `${normalizedDocuments.length} docs colapsados • Mantén Shift para ver detalles • Doble click en tags para expandir`
+          : `Vista mixta • Click en etapa para drill-down • Shift+hover muestra tooltips`;
     }
     
     g.append('text')
@@ -162,9 +350,21 @@ export function PipelineSankeyChart({ data, documents = [] }) {
       .attr('fill', '#94a3b8')
       .text(infoText);
 
+    const renderOptions = {
+      metricConfig,
+      docMetricMax,
+      aggregateMetricMax,
+      onDocumentSelect: handleDocumentSelect,
+      onStageSelected: handleStageZoom,
+      setUserAdjustedCollapse,
+      cleanupTooltips,
+      inspectMode,
+    };
+
     renderGroupedSankey(
       g, 
       groupedDocuments,
+      groupedMetrics,
       displayedDocuments,
       documentsByStage,
       innerWidth, 
@@ -173,16 +373,34 @@ export function PipelineSankeyChart({ data, documents = [] }) {
       setCollapsedGroups,
       hoveredDoc,
       setHoveredDoc,
-      updateFilter,
       zoomLevel,
       selectedStage,
       selectedDoc,
       setZoomLevel,
       setSelectedStage,
-      setSelectedDoc
+      setSelectedDoc,
+      renderOptions
     );
 
-  }, [data, normalizedDocuments, displayedDocuments, dimensions, hoveredDoc, collapsedGroups, updateFilter, groupedDocuments, documentsByStage, zoomLevel, selectedStage, selectedDoc]);
+  }, [
+    data,
+    normalizedDocuments,
+    displayedDocuments,
+    dimensions,
+    hoveredDoc,
+    collapsedGroups,
+    groupedDocuments,
+    groupedMetrics,
+    documentsByStage,
+    zoomLevel,
+    selectedStage,
+    selectedDoc,
+    metricConfig,
+    docMetricMax,
+    aggregateMetricMax,
+    handleDocumentSelect,
+    handleStageZoom
+  ]);
 
   const stageNames = { upload: 'Upload', ocr: 'OCR', chunking: 'Chunking', indexing: 'Indexing', insights: 'Insights', completed: 'Done' };
 
@@ -191,10 +409,23 @@ export function PipelineSankeyChart({ data, documents = [] }) {
       setZoomLevel(ZOOM_LEVEL.OVERVIEW);
       setSelectedStage(null);
       setSelectedDoc(null);
+      clearFilter('stage');
+      clearFilter('documentId');
     } else if (level === 1) {
       setZoomLevel(ZOOM_LEVEL.BY_STAGE);
       setSelectedDoc(null);
+      clearFilter('documentId');
     }
+  };
+
+  useEffect(() => {
+    return () => {
+      cleanupTooltips();
+    };
+  }, [cleanupTooltips]);
+
+  const handleMouseLeave = () => {
+    cleanupTooltips();
   };
 
   if (!normalizedDocuments || normalizedDocuments.length === 0) {
@@ -208,10 +439,49 @@ export function PipelineSankeyChart({ data, documents = [] }) {
     );
   }
 
+  const collapseAll = collapsedGroups.has('active') && collapsedGroups.has('inactive');
+  const isDocZoomAvailable = Boolean(selectedDoc);
+
   return (
-    <div className="sankey-container" ref={containerRef}>
+    <div className="sankey-container" ref={containerRef} onMouseLeave={handleMouseLeave}>
       <div className="sankey-header">
         <h3>📊 Flujo de Documentos</h3>
+        <div className="sankey-controls">
+          <div className="control-block">
+            <span className="control-label">Vista</span>
+            {ZOOM_CONFIG.map((option) => (
+              <button
+                key={option.level}
+                className={`control-pill ${zoomLevel === option.level ? 'active' : ''}`}
+                disabled={option.level === ZOOM_LEVEL.BY_DOCUMENT && !isDocZoomAvailable}
+                onClick={() => handleZoomControl(option.level)}
+                title={option.hint}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <div className="control-block">
+            <span className="control-label">Métrica</span>
+            {Object.entries(METRIC_OPTIONS).map(([key, option]) => (
+              <button
+                key={key}
+                className={`control-pill ${metricMode === key ? 'active' : ''}`}
+                onClick={() => setMetricMode(key)}
+                title={option.legend}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <button
+            className="control-pill secondary"
+            onClick={handleGroupToggle}
+            title="Alternar agrupación Activos/Inactivos"
+          >
+            {collapseAll ? 'Expandir grupos' : 'Agrupar Activos/Inactivos'}
+          </button>
+        </div>
         <div className="sankey-breadcrumb">
           <span
             className={`sankey-breadcrumb-item ${zoomLevel === ZOOM_LEVEL.OVERVIEW ? 'active' : 'clickable'}`}
@@ -240,9 +510,10 @@ export function PipelineSankeyChart({ data, documents = [] }) {
           )}
         </div>
         <p className="sankey-hint">
-          {zoomLevel === ZOOM_LEVEL.OVERVIEW && '💡 Click en etapa para filtrar • Doble click en tags para colapsar/expandir'}
-          {zoomLevel === ZOOM_LEVEL.BY_STAGE && '💡 Click en documento para ver su flujo'}
-          {zoomLevel === ZOOM_LEVEL.BY_DOCUMENT && '💡 Vista detalle de un documento'}
+          {zoomLevel === ZOOM_LEVEL.OVERVIEW && '💡 Click en etapa para filtrar • Doble click en tags para colapsar/expandir • Mantén Shift para ver detalles'}
+          {zoomLevel === ZOOM_LEVEL.BY_STAGE && '💡 Click en documento para ver su flujo • Mantén Shift para ver detalles'}
+          {zoomLevel === ZOOM_LEVEL.BY_DOCUMENT && '💡 Vista detalle de un documento (Shift muestra tooltips)'}
+          {` • Métrica: ${metricConfig.label} • Shift ${inspectMode ? 'ACTIVO' : 'inactivo'}`}
         </p>
       </div>
       <svg ref={svgRef} className="sankey-svg"></svg>
@@ -260,6 +531,7 @@ export default PipelineSankeyChart;
 function renderGroupedSankey(
   g,
   groupedDocuments,
+  groupedMetrics,
   displayedDocuments,
   documentsByStage,
   innerWidth,
@@ -268,14 +540,24 @@ function renderGroupedSankey(
   setCollapsedGroups,
   hoveredDoc,
   setHoveredDoc,
-  updateFilter,
   zoomLevel = 0,
   selectedStage = null,
   selectedDoc = null,
   setZoomLevel = () => {},
   setSelectedStage = () => {},
-  setSelectedDoc = () => {}
+  setSelectedDoc = () => {},
+  options = {}
 ) {
+  const {
+    metricConfig,
+    docMetricMax,
+    aggregateMetricMax,
+    onDocumentSelect,
+    onStageSelected,
+    setUserAdjustedCollapse,
+    cleanupTooltips = () => {},
+    inspectMode = false
+  } = options;
   const stages = ['upload', 'ocr', 'chunking', 'indexing', 'insights', 'completed'];
   const stageNames = {
     upload: 'Upload',
@@ -307,8 +589,12 @@ function renderGroupedSankey(
         })
         .on('click', function() {
           if (count > 0) {
-            setZoomLevel(1);
-            setSelectedStage(stage);
+            if (onStageSelected) {
+              onStageSelected(stage);
+            } else {
+              setZoomLevel(1);
+              setSelectedStage(stage);
+            }
           }
         });
     }
@@ -340,7 +626,25 @@ function renderGroupedSankey(
     const totalHeight = docs.length === 1 ? 0 : (docs.length - 1) * lineSpacing;
     const startY = (innerHeight - totalHeight) / 2;
     
-    renderIndividualFlows(g, docs, stages, columnX, startY, lineSpacing, hoveredDoc, setHoveredDoc, updateFilter, mapStageToColumn, zoomLevel === 1, setZoomLevel, setSelectedDoc);
+    renderIndividualFlows({
+      g,
+      docs,
+      stages,
+      columnX,
+      startY,
+      verticalSpacing: lineSpacing,
+      hoveredDoc,
+      setHoveredDoc,
+      mapStageToColumn,
+      enableDocClick: zoomLevel === 1,
+      setZoomLevel,
+      setSelectedDoc,
+      metricConfig,
+      docMetricMax,
+      onDocumentSelect,
+      cleanupTooltips,
+      inspectMode
+    });
     return;
   }
 
@@ -354,7 +658,7 @@ function renderGroupedSankey(
 
     const isCollapsed = collapsedGroups.has(groupId);
     const groupInfo = GROUP_HIERARCHY[groupId];
-    const metrics = aggregateGroupMetrics(groupDocs);
+    const metrics = groupedMetrics[groupId]?.metrics || aggregateGroupMetrics(groupDocs);
     
     const groupY = groupIdx * groupSpacing + 100;
 
@@ -362,6 +666,9 @@ function renderGroupedSankey(
       .attr('transform', `translate(-120, ${groupY})`)
       .style('cursor', 'pointer')
       .on('dblclick', function() {
+        if (setUserAdjustedCollapse) {
+          setUserAdjustedCollapse(true);
+        }
         setCollapsedGroups(prev => {
           const newSet = new Set(prev);
           if (newSet.has(groupId)) newSet.delete(groupId);
@@ -407,9 +714,36 @@ function renderGroupedSankey(
     }
 
     if (isCollapsed) {
-      renderAggregatedFlow(g, groupDocs, stages, columnX, groupY, groupInfo.color, mapStageToColumn);
+      renderAggregatedFlow({
+        g,
+        docs: groupDocs,
+        stages,
+        columnX,
+        groupY,
+        color: groupInfo.color,
+        mapStageToColumn,
+        metricConfig,
+        aggregateMetricMax,
+        groupMetrics: groupedMetrics[groupId]
+      });
     } else {
-      renderIndividualFlows(g, groupDocs, stages, columnX, groupY, 3, hoveredDoc, setHoveredDoc, updateFilter, mapStageToColumn, false, null, null);
+      renderIndividualFlows({
+        g,
+        docs: groupDocs,
+        stages,
+        columnX,
+        startY: groupY,
+        verticalSpacing: 3,
+        hoveredDoc,
+        setHoveredDoc,
+        mapStageToColumn,
+        enableDocClick: false,
+        metricConfig,
+        docMetricMax,
+        onDocumentSelect,
+        cleanupTooltips,
+        inspectMode
+      });
     }
 
     yOffset += isCollapsed ? 100 : (groupDocs.length * 3 + 150);
@@ -419,7 +753,18 @@ function renderGroupedSankey(
 /**
  * Render aggregated thick line for collapsed group
  */
-function renderAggregatedFlow(g, docs, stages, columnX, groupY, color, mapStageToColumn) {
+function renderAggregatedFlow({
+  g,
+  docs,
+  stages,
+  columnX,
+  groupY,
+  color,
+  mapStageToColumn,
+  metricConfig,
+  aggregateMetricMax,
+  groupMetrics
+}) {
   if (docs.length === 0) return;
 
   // Calculate max stage reached by any document in group
@@ -432,9 +777,12 @@ function renderAggregatedFlow(g, docs, stages, columnX, groupY, color, mapStageT
   for (let i = 0; i < maxStageIndex; i++) {
     const startX = columnX[i];
     const endX = columnX[i + 1];
-    
-    // Stroke width proportional to document count
-    const strokeWidth = Math.min(50, Math.max(5, docs.length / 5));
+    const metrics = groupMetrics?.metrics || aggregateGroupMetrics(docs);
+    const strokeWidth = calculateCollapsedStrokeWidth(
+      metrics,
+      metricConfig?.aggregateKey || 'count',
+      aggregateMetricMax || (metrics[metricConfig?.aggregateKey] || docs.length || 1)
+    );
 
     g.append('line')
       .attr('x1', 0) // Start from left (after tag)
@@ -462,7 +810,25 @@ function renderAggregatedFlow(g, docs, stages, columnX, groupY, color, mapStageT
  * @param {Function} setZoomLevel - Optional, for drill-down
  * @param {Function} setSelectedDoc - Optional, for drill-down
  */
-function renderIndividualFlows(g, docs, stages, columnX, startY, verticalSpacing, hoveredDoc, setHoveredDoc, updateFilter, mapStageToColumn, enableDocClick = false, setZoomLevel = null, setSelectedDoc = null) {
+function renderIndividualFlows({
+  g,
+  docs,
+  stages,
+  columnX,
+  startY,
+  verticalSpacing,
+  hoveredDoc,
+  setHoveredDoc,
+  mapStageToColumn,
+  enableDocClick = false,
+  setZoomLevel = null,
+  setSelectedDoc = null,
+  metricConfig,
+  docMetricMax,
+  onDocumentSelect,
+  cleanupTooltips = () => {},
+  inspectMode = false
+}) {
   const spacing = verticalSpacing ?? Math.max(3, 20 / docs.length);
 
   docs.forEach((doc, idx) => {
@@ -479,7 +845,9 @@ function renderIndividualFlows(g, docs, stages, columnX, startY, verticalSpacing
       const endX = columnX[i + 1];
       const endStage = stages[i + 1];
       
-      const strokeWidth = isHovered ? 2 : 1;
+      const metricValue = metricConfig?.docValue ? metricConfig.docValue(doc) : 1;
+      const baseWidth = getLineWidth(metricValue, docMetricMax);
+      const strokeWidth = isHovered ? baseWidth + 1 : baseWidth;
       const isActive = (doc.status && doc.status.endsWith('_processing')) && i === currentIndex - 1;
 
       const lineGroup = g.append('g');
@@ -504,8 +872,12 @@ function renderIndividualFlows(g, docs, stages, columnX, startY, verticalSpacing
       lineGroup
         .style('cursor', 'pointer')
         .on('mouseover', function(event) {
+          if (!inspectMode) {
+            return;
+          }
           setHoveredDoc(doc.document_id);
-          const tooltipHTML = generateTooltipHTML(doc, currentColumn, isActive);
+          cleanupTooltips();
+          const tooltipHTML = `${generateTooltipHTML(doc, currentColumn, isActive)}<hr style="margin:4px 0;border-color:#334155;"><small>Métrica ${metricConfig?.label || 'Documentos'}: ${Math.max(0, Math.round(metricValue))}</small>`;
           d3.select('body').append('div')
             .attr('class', 'sankey-tooltip')
             .style('position', 'absolute')
@@ -522,16 +894,25 @@ function renderIndividualFlows(g, docs, stages, columnX, startY, verticalSpacing
         })
         .on('mouseout', function() {
           setHoveredDoc(null);
-          d3.selectAll('.sankey-tooltip').remove();
+          cleanupTooltips();
         })
         .on('click', function() {
           if (enableDocClick && setZoomLevel && setSelectedDoc) {
             setZoomLevel(2);
             setSelectedDoc(doc);
-          } else {
-            updateFilter({ documentId: doc.document_id });
+          }
+          if (onDocumentSelect) {
+            onDocumentSelect(doc);
           }
         });
     }
   });
+}
+
+function getLineWidth(value, maxValue = 1) {
+  const safeMax = Math.max(maxValue, 1);
+  const normalized = Math.min(value / safeMax, 1);
+  const MIN_WIDTH = 1;
+  const MAX_WIDTH = 14;
+  return MIN_WIDTH + normalized * (MAX_WIDTH - MIN_WIDTH);
 }

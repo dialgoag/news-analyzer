@@ -155,9 +155,11 @@ class RateLimitError(Exception):
     """Raised when OpenAI returns 429 after quick retries are exhausted.
     This is NOT a real error — the item should be re-enqueued as pending."""
 
-    def __init__(self, message: str, retry_after: float = 0):
+    def __init__(self, message: str, retry_after: float = 0, rate_snapshot: Optional[Dict] = None, request_id: Optional[str] = None):
         super().__init__(message)
         self.retry_after = retry_after
+        self.rate_snapshot = rate_snapshot or {}
+        self.request_id = request_id
 
 
 class OpenAIChatClient:
@@ -165,6 +167,9 @@ class OpenAIChatClient:
 
     QUICK_RETRIES = int(os.getenv("LLM_429_QUICK_RETRIES", "3"))
     QUICK_RETRY_BASE_WAIT = float(os.getenv("LLM_429_BASE_WAIT", "5.0"))
+    WARN_REQUEST_THRESHOLD = int(os.getenv("LLM_RATELIMIT_WARN_REQUESTS", "5"))
+    WARN_TOKEN_THRESHOLD = int(os.getenv("LLM_RATELIMIT_WARN_TOKENS", "5000"))
+    LOG_SUCCESS_LIMITS = os.getenv("LLM_LOG_RATE_LIMIT_SUCCESS", "false").strip().lower() in ("1", "true", "yes")
 
     def __init__(self, model: str, api_key: str, temperature: float = 0.0,
                  timeout: int = 120, base_url: str = "https://api.openai.com/v1",
@@ -180,9 +185,66 @@ class OpenAIChatClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         })
+        self._last_limit_warning = 0.0
 
     def __call__(self, prompt: str) -> str:
         return self.invoke(prompt)
+
+    def _safe_int(self, value: Optional[str]) -> Optional[int]:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _rate_limit_snapshot(self, resp: _requests.Response) -> Optional[Dict]:
+        if not resp or not resp.headers:
+            return None
+        headers = resp.headers
+        snapshot = {
+            "limit_requests": self._safe_int(headers.get("x-ratelimit-limit-requests")),
+            "remaining_requests": self._safe_int(headers.get("x-ratelimit-remaining-requests")),
+            "reset_requests": headers.get("x-ratelimit-reset-requests"),
+            "limit_tokens": self._safe_int(headers.get("x-ratelimit-limit-tokens")),
+            "remaining_tokens": self._safe_int(headers.get("x-ratelimit-remaining-tokens")),
+            "reset_tokens": headers.get("x-ratelimit-reset-tokens"),
+            "request_id": headers.get("x-request-id"),
+        }
+        if all(value is None for value in snapshot.values()):
+            return None
+        return snapshot
+
+    def _log_rate_limit(self, snapshot: Optional[Dict], *, status: str, attempt: int = 0):
+        if not snapshot:
+            return
+        remaining_req = snapshot.get("remaining_requests")
+        remaining_tokens = snapshot.get("remaining_tokens")
+        should_warn = status == "429"
+        warn_reasons = []
+        if remaining_req is not None and remaining_req <= self.WARN_REQUEST_THRESHOLD:
+            should_warn = True
+            warn_reasons.append(f"requests≈{remaining_req}")
+        if remaining_tokens is not None and remaining_tokens <= self.WARN_TOKEN_THRESHOLD:
+            should_warn = True
+            warn_reasons.append(f"tokens≈{remaining_tokens}")
+
+        msg = (
+            f"LLM rate state ({status}) — "
+            f"req {remaining_req}/{snapshot.get('limit_requests')} "
+            f"tok {remaining_tokens}/{snapshot.get('limit_tokens')} "
+            f"reset_req={snapshot.get('reset_requests')} "
+            f"reset_tok={snapshot.get('reset_tokens')} "
+            f"req_id={snapshot.get('request_id') or 'n/a'} "
+            f"attempt={attempt}"
+        )
+
+        if should_warn:
+            now = time.time()
+            # Avoid spamming warnings if multiple workers hit the same threshold simultaneously.
+            if now - self._last_limit_warning > 5:
+                logger.warning(msg + (f" (near limit: {', '.join(warn_reasons)})" if warn_reasons else ""))
+                self._last_limit_warning = now
+        elif self.LOG_SUCCESS_LIMITS:
+            logger.info(msg)
 
     def invoke(self, prompt: str) -> str:
         retry_after = 0.0
@@ -196,11 +258,15 @@ class OpenAIChatClient:
                 },
                 timeout=self.timeout,
             )
+            snapshot = self._rate_limit_snapshot(resp)
+
             if resp.status_code != 429:
                 resp.raise_for_status()
+                self._log_rate_limit(snapshot, status="success", attempt=attempt)
                 return resp.json()["choices"][0]["message"]["content"]
 
             # 429: use Retry-After header if present, else exponential backoff
+            self._log_rate_limit(snapshot, status="429", attempt=attempt + 1)
             retry_after = float(resp.headers.get("Retry-After", 0))
             if retry_after <= 0:
                 retry_after = self.QUICK_RETRY_BASE_WAIT * (2 ** attempt) + random.uniform(0, 2)
@@ -217,6 +283,8 @@ class OpenAIChatClient:
         raise RateLimitError(
             f"LLM 429 after {1 + self.QUICK_RETRIES} attempts",
             retry_after=retry_after,
+            rate_snapshot=snapshot,
+            request_id=snapshot.get("request_id") if snapshot else None,
         )
 
 

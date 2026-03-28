@@ -2,8 +2,38 @@
 
 > Decisiones, cambios importantes, y contexto entre sesiones
 
-**Última actualización**: 2026-03-19  
-**Sesión**: 43 (Fix file naming + OCR symlink extensión)
+**Última actualización**: 2026-03-27  
+**Sesión**: 44 (Workers OCR únicos + Login UX + doc operativa AI-LCD)
+
+---
+
+## Sesión 44: Workers duplicados, login y centralización ops (2026-03-27)
+
+### Contexto
+- Dashboard mostró varios trabajos OCR con el **mismo nombre de archivo**; en BD había **dos** `worker_tasks` activos (`assigned`/`started`) para el **mismo** `document_id` y `task_type=ocr`.
+- Login: **422** (validación `LoginRequest`) y **ERR_EMPTY_RESPONSE** sin mensaje claro en UI.
+- Usuario pidió **documentar y centralizar** según estándares AI-LCD.
+
+### Decisión 1: Integridad “un worker activo por documento + tipo”
+- **Causa raíz**: `UNIQUE(worker_id, document_id, task_type)` no impide dos `worker_id` distintos; `SELECT FOR UPDATE` no bloquea si aún no existe fila (primera asignación concurrente).
+- **Solución**: Índice único parcial + `pg_advisory_xact_lock(document_id, task_type)` en `assign_worker` + manejo `UniqueViolation`. Migración **015** limpia duplicados históricos.
+- **Alternativa descartada**: Solo advisory lock sin índice (menos garantía ante bugs futuros).
+- **Riesgo**: Fila de worker marcada `error` en cleanup puede haber quedado con hilo viejo en memoria → reinicio backend si algo raro.
+
+### Decisión 2: Login frontend
+- **Solución**: `minLength` acorde a API; mensajes explícitos para fallo de red y 422/401.
+- **Riesgo**: Ninguno relevante.
+
+### Decisión 3: Documentación
+- **Fuente única** operativa: `03-operations/ORDERLY_SHUTDOWN_AND_REBUILD.md` (shutdown API, rebuild, OCR unhealthy).
+- **Auditoría**: Fix #96 y #97 en `CONSOLIDATED_STATUS.md`; registro esta sesión; `REQUESTS_REGISTRY.md` REQ-019; `INDEX.md` y `MIGRATIONS_SYSTEM.md` (015) actualizados.
+
+### Decisión 4: Seguridad workers (post-sesión)
+- **`POST /api/workers/shutdown`** y **`POST /api/workers/start`**: solo rol **`admin`** via `Depends(require_admin)`. Logs con `username` del invocador. SUPER_USER no basta (coherente con gestión de usuarios backup, etc.).
+
+### Archivos tocados (código ya en repo)
+- `app/backend/migrations/015_worker_tasks_one_active_per_doc_task.py`, `app/backend/database.py`
+- `app/frontend/src/hooks/useAuth.js`, `app/frontend/src/components/auth/LoginView.jsx`
 
 ---
 

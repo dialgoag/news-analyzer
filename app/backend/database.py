@@ -4,6 +4,7 @@ Database setup and models for authentication system
 
 import psycopg2
 import psycopg2.extras
+from psycopg2 import errors as pg_errors
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple
 from urllib.parse import quote_plus
@@ -649,8 +650,13 @@ class ProcessingQueueStore:
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
+            # Serialize assignment per (document_id, task_type). SELECT FOR UPDATE alone
+            # does not block when no row exists yet; two workers could both INSERT (see migration 015).
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s::text), hashtext(%s::text))",
+                (document_id, task_type),
+            )
             # Use SELECT FOR UPDATE to lock and check atomically
-            # This prevents race conditions when multiple schedulers run simultaneously
             cursor.execute("""
                 SELECT worker_id FROM worker_tasks
                 WHERE document_id = %s AND task_type = %s AND status IN ('assigned', 'started')
@@ -676,6 +682,15 @@ class ProcessingQueueStore:
             """, (worker_id, worker_type, document_id, task_type, now_iso))
             conn.commit()
             return True
+        except pg_errors.UniqueViolation:
+            conn.rollback()
+            logger.warning(
+                "assign_worker: active task already exists for %s (%s) — rejecting %s",
+                document_id,
+                task_type,
+                worker_id,
+            )
+            return False
         except Exception as e:
             conn.rollback()
             logger.error(f"Error assigning worker {worker_id} to {document_id}: {e}")

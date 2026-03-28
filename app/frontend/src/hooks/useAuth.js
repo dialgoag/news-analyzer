@@ -65,11 +65,31 @@ export function useAuth(API_URL) {
 
       console.log('✅ Login successful:', userData.username, 'role:', userData.role);
     } catch (err) {
-      console.error('Login error:', err);
+      const status = err.response?.status;
       const detail = err.response?.data?.detail;
-      const msg = Array.isArray(detail)
-        ? detail.map(d => d.msg || JSON.stringify(d)).join('. ')
-        : (typeof detail === 'string' ? detail : 'Login error');
+      console.error('Login error:', status ?? 'no-response', detail ?? err.message ?? err);
+
+      let msg = 'Login error';
+      if (!err.response) {
+        const isNetwork =
+          err.code === 'ERR_NETWORK' ||
+          /network|empty response|failed to fetch/i.test(String(err.message || ''));
+        msg = isNetwork
+          ? `Cannot reach the API (${API_URL}). Check that the backend is running and VITE_API_URL is correct.`
+          : String(err.message || msg);
+      } else if (status === 422 && Array.isArray(detail)) {
+        msg = detail
+          .map((d) => (typeof d === 'string' ? d : d.msg || JSON.stringify(d)))
+          .join('. ');
+      } else if (typeof detail === 'string') {
+        msg = detail;
+      } else if (status === 401) {
+        msg = typeof detail === 'string' ? detail : 'Incorrect username or password';
+      } else if (detail) {
+        msg = Array.isArray(detail)
+          ? detail.map((d) => (typeof d === 'string' ? d : d.msg || JSON.stringify(d))).join('. ')
+          : String(detail);
+      }
       setLoginError(msg);
     } finally {
       setLoggingIn(false);

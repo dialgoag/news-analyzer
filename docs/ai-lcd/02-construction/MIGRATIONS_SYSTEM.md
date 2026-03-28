@@ -63,6 +63,12 @@ Las migraciones se encuentran en `/backend/migrations/` y están organizadas por
 - **013**: Añade `llm_source` a `news_item_insights`
 - **014**: Añade `indexed_in_qdrant_at` a `news_item_insights` (Indexing Insights etapa)
 
+### 015: Worker tasks — un activo por documento y tipo
+- **Archivo**: `015_worker_tasks_one_active_per_doc_task.py`
+- **Dominio**: Event-Driven / semáforo `worker_tasks`
+- **Contenido**: Limpieza de duplicados `assigned`/`started`; índice único parcial `(document_id, task_type)` para esos estados. Código: `assign_worker` usa `pg_advisory_xact_lock` + manejo `UniqueViolation` (`database.py`).
+- **Status auditoría**: `CONSOLIDATED_STATUS.md` §96
+
 **Fuente**: `app/backend/migrations/` — listar con `ls migrations/*.py` (excluir `.disabled`)
 
 ## Cómo Funcionan las Migraciones
@@ -149,4 +155,4 @@ Si por alguna razón necesitas recuperar datos:
 
 - **Ejecutor**: `app/backend/migration_runner.py` — invocado desde `database.py` al cargar
 - **Directorio**: `MIGRATIONS_DIR` (default `/app/migrations` en Docker)
-- **Status**: `CONSOLIDATED_STATUS.md` §88 (migración 014 para Indexing Insights)
+- **Status**: `CONSOLIDATED_STATUS.md` §96 (015), §95 (file naming), histórico §88 (014)

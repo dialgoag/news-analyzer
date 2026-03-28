@@ -2,7 +2,7 @@
 
 > Problemas comunes y soluciones
 
-**Última actualización**: 2026-03-02
+**Última actualización**: 2026-03-27
 **Fase AI-DLC**: 03-operations
 **Audiencia**: Admin, Desarrolladores
 
@@ -84,8 +84,29 @@ docker compose logs -f ollama
 
 Si sigue fallando, reduce concurrencia en `.env`: `INGEST_PARALLEL_WORKERS=1` o `2`.
 
+### Login: 422 en `/api/auth/login`
+
+**Causa**: El modelo `LoginRequest` exige `username` con longitud mínima 3 y `password` mínima 6 (`auth_models.py`).
+
+**Solución**: Usar credenciales que cumplan esos mínimos; el formulario del frontend valida con `minLength`. Si el error persiste, revisar el cuerpo JSON (debe ser `{ "username", "password" }`).
+
+### Login: `ERR_EMPTY_RESPONSE` o “Cannot reach the API”
+
+**Causa**: Backend caído, puerto distinto, o `VITE_API_URL` del frontend no apunta al API real (p. ej. Docker vs localhost).
+
+**Solución**: `curl http://localhost:8000/health`; alinear `VITE_API_URL` en build del frontend con la URL accesible desde el navegador.
+
+### Dashboard: mismo nombre de archivo en varias filas OCR / Workers
+
+**Causa posible 1 (corregida en Fix #96)**: Dos `worker_tasks` activos para el mismo `document_id` y `task_type` (misma fuente de filename en JOIN). Aplicar migración **015** y código `assign_worker` actualizado.
+
+**Causa posible 2**: Varios **documentos distintos** con el **mismo** `filename` en `document_status` (contenido distinto; IDs distintos) — comportamiento esperado; distinguir por `document_id` o fecha en nombre.
+
+**Referencia**: `CONSOLIDATED_STATUS.md` §96; `ORDERLY_SHUTDOWN_AND_REBUILD.md`.
+
 ---
 
 | Fecha | Versión | Cambios | Autor |
 |-------|---------|---------|-------|
+| 2026-03-27 | 1.1 | Login, workers duplicados, enlaces ops | AI-LCD |
 | 2026-03-02 | 1.0 | Creación inicial | AI-DLC |

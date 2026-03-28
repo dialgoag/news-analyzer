@@ -2,7 +2,7 @@
 
 > Guía rápida para navegar la documentación consolidada del NewsAnalyzer-RAG
 
-**Última actualización**: 2026-03-17  
+**Última actualización**: 2026-03-27  
 **Documentación consolidada**: ✅ Yes
 
 **Principio**: Evitar redundancia — cada tema tiene una **fuente única**. Ej.: variables de entorno → `ENVIRONMENT_CONFIGURATION.md`; pipeline stages → `PIPELINE_GLOSARIO.md`.
@@ -43,10 +43,10 @@
 | Documento | Propósito | Última actualización |
 |-----------|----------|---------------------|
 | **README.md** | Overview ejecutivo | 2026-03-04 |
-| **CONSOLIDATED_STATUS.md** | Status definitivo integrado | 2026-03-17 |
-| **PLAN_AND_NEXT_STEP.md** | Plan + timeline + checklist | 2026-03-17 |
-| **SESSION_LOG.md** | Decisiones entre sesiones | 2026-03-17 |
-| **REQUESTS_REGISTRY.md** | Rastreo de peticiones + contradicciones | 2026-03-17 |
+| **CONSOLIDATED_STATUS.md** | Status definitivo integrado | 2026-03-27 |
+| **PLAN_AND_NEXT_STEP.md** | Plan + timeline + checklist | 2026-03-27 |
+| **SESSION_LOG.md** | Decisiones entre sesiones | 2026-03-27 |
+| **REQUESTS_REGISTRY.md** | Rastreo de peticiones + contradicciones | 2026-03-27 |
 | **PENDING_BACKLOG.md** | Pendientes con prioridad y dependencias | 2026-03-17 |
 | **00_COMIENZA_AQUI_NUEVO_SISTEMA.md** | Overview visual del nuevo sistema | 2026-03-05 ✨ NUEVO |
 | **COMO_USAR_WORKFLOW.md** | Guía paso a paso con ejemplo completo | 2026-03-05 ✨ NUEVO |
@@ -58,7 +58,7 @@
 | **EVENT_DRIVEN_ARCHITECTURE.md** | Blueprint: database semaphores | `ai-lcd/` |
 | **ARCHITECTURE_DETAILED.md** | Stack completo | `02-construction/` |
 | **DATA_FLOWS.md** | Upload → OCR → RAG → Response | `02-construction/` |
-| **MIGRATIONS_SYSTEM.md** | Yoyo, migraciones 001–014 | `02-construction/` |
+| **MIGRATIONS_SYSTEM.md** | Yoyo, migraciones 001–015 | `02-construction/` |
 
 ### ✅ Operaciones
 | Documento | Propósito | Ubicación |
@@ -66,6 +66,7 @@
 | **DEPLOYMENT_GUIDE.md** | Despliegue paso a paso | `03-operations/` |
 | **ENVIRONMENT_CONFIGURATION.md** | Variables de entorno | `03-operations/` |
 | **TROUBLESHOOTING_GUIDE.md** | Problemas y soluciones | `03-operations/` |
+| **ORDERLY_SHUTDOWN_AND_REBUILD.md** | Shutdown API + rebuild backend/frontend | `03-operations/` |
 | **DOCKER.md** | Docker Compose unificado (CPU/GPU) | `app/docs/` |
 | **PERFORMANCE_OPTIMIZATION.md** | Optimizaciones | `03-operations/` |
 
@@ -76,7 +77,7 @@
 ### ¿Dónde está...?
 
 **...el status actual?**
-→ `CONSOLIDATED_STATUS.md` (versión definitiva, 2026-03-17)
+→ `CONSOLIDATED_STATUS.md` (versión definitiva, 2026-03-27)
 
 **...la arquitectura event-driven?**
 → `EVENT_DRIVEN_ARCHITECTURE.md` (technical blueprint completo)
@@ -241,4 +242,4 @@ docker-compose exec backend python3 /app/verify_deduplication.py
 
 ---
 
-**Documentación consolidada y actualizada a 2026-03-17**
+**Documentación consolidada y actualizada a 2026-03-27**

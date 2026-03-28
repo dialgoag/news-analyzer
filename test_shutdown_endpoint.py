@@ -219,7 +219,7 @@ def main():
     print("\n" + "="*60)
     print("✅ Prueba completada")
     print("="*60)
-    print("\n💡 Para reiniciar los workers, usa: POST /api/workers/start")
+    print("\n💡 Para reiniciar los workers: POST /api/workers/start con Authorization: Bearer <token_admin>")
 
 if __name__ == "__main__":
     main()

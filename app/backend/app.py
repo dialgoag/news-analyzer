@@ -5785,11 +5785,10 @@ async def get_dashboard_analysis(
         upload_processing = upload_data['processing'] or 0
         upload_completed = upload_data['completed'] or 0
         upload_paused = upload_data['paused'] or 0
-        upload_total = upload_pending + upload_processing + upload_completed + upload_paused
-        # Upload total: max(inbox, DB) — nunca 0 si hay archivos en inbox o en DB
-        upload_total_docs = max(upload_total, total_documents, inbox_count)
+        upload_total = upload_pending + upload_processing + upload_completed + upload_paused + upload_errors
         # Archivos en inbox sin fila en DB = pendientes de ingesta
         upload_pending = upload_pending + max(0, inbox_count - upload_total)
+        upload_total_docs = upload_pending + upload_processing + upload_completed + upload_paused + upload_errors
         stages_analysis.append({
             "name": "Upload",
             "total_documents": upload_total_docs,
@@ -5799,6 +5798,7 @@ async def get_dashboard_analysis(
             "error_tasks": upload_errors,
             "paused_tasks": upload_paused,
             "ready_for_next": upload_completed,
+            "inbox_documents": inbox_count,
             "blockers": []
         })
         
@@ -5854,9 +5854,10 @@ async def get_dashboard_analysis(
         ocr_completed = max(ocr_queue['completed'] or 0, ocr_done_from_docs)
         # Pending = cola real (no total-completed que incluye errores como "pendientes")
         ocr_pending = ocr_queue['pending'] or 0
+        ocr_total_docs = ocr_pending + ocr_processing + ocr_completed + ocr_errors
         stages_analysis.append({
             "name": "OCR",
-            "total_documents": total_documents,
+            "total_documents": ocr_total_docs,
             "pending_tasks": ocr_pending,
             "processing_tasks": ocr_processing,
             "completed_tasks": ocr_completed,
@@ -5915,10 +5916,11 @@ async def get_dashboard_analysis(
         chunks_total = int(cursor.fetchone()['n'] or 0)
         cursor.execute("SELECT COUNT(*) as n FROM news_items")
         news_count = int(cursor.fetchone()['n'] or 0)
+        chunking_total_docs = ch_pending + (chunking_queue['processing'] or 0) + ch_completed + ch_errors
         stages_analysis.append({
             "name": "Chunking",
             "granularity": "document",
-            "total_documents": total_documents,
+            "total_documents": chunking_total_docs,
             "pending_tasks": ch_pending,
             "processing_tasks": chunking_queue['processing'] or 0,
             "completed_tasks": ch_completed,
@@ -5954,10 +5956,11 @@ async def get_dashboard_analysis(
         idx_completed = max(indexing_queue['completed'] or 0, indexing_done_from_docs)
         # Pending = cola real (no total-completed que incluye docs en error como "pendientes")
         idx_pending = indexing_queue['pending'] or 0
+        idx_total_docs = idx_pending + (indexing_queue['processing'] or 0) + idx_completed + idx_errors
         stages_analysis.append({
             "name": "Indexing",
             "granularity": "document",
-            "total_documents": total_documents,
+            "total_documents": idx_total_docs,
             "pending_tasks": idx_pending,
             "processing_tasks": indexing_queue['processing'] or 0,
             "completed_tasks": idx_completed,
@@ -6008,19 +6011,21 @@ async def get_dashboard_analysis(
         """)
         ins_docs = cursor.fetchone()
         ins_errors = insights_data['errors'] or 0
-        stages_analysis.append({
+        insights_total_docs = ins_pending + ins_processing + ins_completed + ins_errors
+        insights_stage = {
             "name": "Insights",
             "granularity": "news_item",
-            "total_documents": total_insights,
+            "total_documents": insights_total_docs,
             "pending_tasks": ins_pending,
             "processing_tasks": ins_processing,
             "completed_tasks": ins_completed,
             "error_tasks": ins_errors,
-            "ready_for_next": ins_pending + ins_processing,
+            "ready_for_next": 0,
             "docs_with_all_insights_done": ins_docs['docs_all_done'] or 0,
             "docs_with_pending_insights": ins_docs['docs_with_pending'] or 0,
             "blockers": []
-        })
+        }
+        stages_analysis.append(insights_stage)
 
         # Indexing Insights Stage — insights done but not yet in Qdrant
         cursor.execute("""
@@ -6040,17 +6045,21 @@ async def get_dashboard_analysis(
         idx_ins_total = idx_ins_data['total'] or 0
         # Indexing Insights: insights en error no aplican (son de stage Insights); errores de indexación no tienen status propio
         idx_ins_errors = 0
+        idx_ins_total_docs = idx_ins_pending + idx_ins_processing + idx_ins_completed + idx_ins_errors
         stages_analysis.append({
             "name": "Indexing Insights",
             "granularity": "news_item",
-            "total_documents": idx_ins_total,
+            "total_documents": idx_ins_total_docs,
             "pending_tasks": idx_ins_pending,
             "processing_tasks": idx_ins_processing,
             "completed_tasks": idx_ins_completed,
             "error_tasks": idx_ins_errors,
-            "ready_for_next": idx_ins_pending + idx_ins_processing,
+            "ready_for_next": 0,
             "blockers": []
         })
+
+        if insights_stage:
+            insights_stage["ready_for_next"] = idx_ins_pending
         
         # ===== 3. WORKERS ANALYSIS =====
         # Active workers with execution time
@@ -6236,13 +6245,16 @@ async def get_dashboard_analysis(
 
 
 @app.post("/api/workers/start")
-async def start_workers():
-    """Start the unified generic worker pool"""
+async def start_workers(current_user: CurrentUser = Depends(require_admin)):
+    """Start the unified generic worker pool (ADMIN only)."""
     global generic_worker_pool
     try:
         from worker_pool import GenericWorkerPool
         
-        logger.info("🚀 Starting unified generic worker pool...")
+        logger.info(
+            "🚀 Starting unified generic worker pool (requested by %s)...",
+            current_user.username,
+        )
         
         # Check if pool exists AND is running, otherwise recreate
         pool_needs_start = (
@@ -6285,9 +6297,9 @@ async def start_workers():
 
 
 @app.post("/api/workers/shutdown")
-async def shutdown_workers_gracefully():
+async def shutdown_workers_gracefully(current_user: CurrentUser = Depends(require_admin)):
     """
-    Shutdown ordenado de workers con rollback de tareas en proceso.
+    Shutdown ordenado de workers con rollback de tareas en proceso (ADMIN only).
     
     Este endpoint:
     1. Detiene todos los workers activos
@@ -6304,7 +6316,10 @@ async def shutdown_workers_gracefully():
     global generic_worker_pool
     
     try:
-        logger.info("🛑 Iniciando shutdown ordenado de workers...")
+        logger.info(
+            "🛑 Iniciando shutdown ordenado de workers (requested by %s)...",
+            current_user.username,
+        )
         
         # PASO 1: Detener todos los workers activos
         if generic_worker_pool and generic_worker_pool.running:

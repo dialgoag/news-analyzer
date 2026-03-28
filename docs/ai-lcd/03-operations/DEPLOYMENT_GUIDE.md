@@ -2,7 +2,7 @@
 
 > Guía paso a paso para desplegar el sistema
 
-**Última actualización**: 2026-03-15
+**Última actualización**: 2026-03-27
 **Fase AI-DLC**: 03-operations
 **Audiencia**: DevOps, Admin
 
@@ -65,6 +65,12 @@ docker compose logs backend | grep "Password:"
 # Frontend: http://localhost:3000
 # Backend API: http://localhost:8000
 ```
+
+## 2.5 Shutdown ordenado y rebuild (backend / frontend)
+
+Antes de **reconstruir** el backend (cambios de pipeline o migraciones), conviene un shutdown que revierta colas y libere `worker_tasks` activos:
+
+- **Guía única**: [ORDERLY_SHUTDOWN_AND_REBUILD.md](./ORDERLY_SHUTDOWN_AND_REBUILD.md) (`POST /api/workers/shutdown`, `docker compose build`, workaround si `ocr-service` está *unhealthy*).
 
 ## 3. Despliegue Producción (Servidor con Dominio)
 

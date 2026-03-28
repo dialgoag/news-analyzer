@@ -157,6 +157,11 @@ Cada respuesta de la API puede incluir cabeceras de rate limit:
 
 Se pueden leer en el backend para mostrar uso o para decidir cuándo reintentar tras un 429.
 
+> **Novedad**: el cliente `OpenAIChatClient` ahora registra automáticamente estas cabeceras
+> cuando estamos cerca del límite o recibimos un 429. Ajusta los umbrales con
+> `LLM_RATELIMIT_WARN_REQUESTS`, `LLM_RATELIMIT_WARN_TOKENS` y, si quieres siempre ver los
+> valores, habilita `LLM_LOG_RATE_LIMIT_SUCCESS=true`.
+
 ---
 
 ## 3. Export de uso (CSV)

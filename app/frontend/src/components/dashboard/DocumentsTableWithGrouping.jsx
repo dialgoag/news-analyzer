@@ -44,12 +44,21 @@ export function DocumentsTable({ API_URL, token, refreshTrigger }) {
     active: false,   // Start collapsed
     inactive: false  // Start collapsed
   });
+  const [userAdjustedGroups, setUserAdjustedGroups] = useState(false);
   
   // Auto-collapse based on document count
   const shouldCollapse = useMemo(() => 
     shouldAutoCollapse(documents.length, 20),
     [documents.length]
   );
+
+  useEffect(() => {
+    if (userAdjustedGroups) return;
+    setExpandedGroups({
+      active: !shouldCollapse,
+      inactive: !shouldCollapse
+    });
+  }, [shouldCollapse, userAdjustedGroups]);
 
   // Fetch documents data
   useEffect(() => {
@@ -127,6 +136,7 @@ export function DocumentsTable({ API_URL, token, refreshTrigger }) {
 
   // Toggle group expansion
   const toggleGroup = (groupId) => {
+    setUserAdjustedGroups(true);
     setExpandedGroups(prev => ({
       ...prev,
       [groupId]: !prev[groupId]
@@ -151,6 +161,7 @@ export function DocumentsTable({ API_URL, token, refreshTrigger }) {
     // Filter by all stages in that group
     const groupStages = GROUP_HIERARCHY[groupId].stages;
     updateFilter('stage', groupStages[0]); // Use first stage as representative
+    clearFilter('documentId');
   };
 
   const getStatusClass = (status) => {
@@ -221,7 +232,10 @@ export function DocumentsTable({ API_URL, token, refreshTrigger }) {
                   {/* GROUP HEADER ROW */}
                   <tr 
                     className={`group-row ${isExpanded ? 'expanded' : 'collapsed'}`}
-                    onClick={() => toggleGroup(groupId)}
+                    onClick={() => {
+                      toggleGroup(groupId);
+                      handleGroupClick(groupId);
+                    }}
                   >
                     <td className="expand-icon">
                       {isExpanded ? '▼' : '▶'}

@@ -4,10 +4,10 @@
 > 
 > **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> **📋 ÚLTIMO**: Fix #95 (File naming con hash prefix + extensión en symlinks) — previene sobrescritura, soluciona OCR "Only PDF files are supported".
+> **📋 ÚLTIMO**: Fix #96–97 (worker OCR único + login UX) + doc `ORDERLY_SHUTDOWN_AND_REBUILD.md`. Fix #95 naming sigue vigente.
 
-**Última actualización**: 2026-03-19  
-**Versión**: 3.0.11 (File naming + OCR symlink fix)
+**Última actualización**: 2026-03-27  
+**Versión**: 3.0.12 (Workers semaphore + login + ops doc)
 
 ---
 
@@ -87,13 +87,21 @@
 
 ---
 
-## 🔄 REBUILD Y VERIFICACIÓN (2026-03-19)
+## 🔄 REBUILD Y VERIFICACIÓN (2026-03-27)
 
 ```bash
-cd app && docker compose up -d --build backend
+# Opcional primero: shutdown ordenado (ver docs/ai-lcd/03-operations/ORDERLY_SHUTDOWN_AND_REBUILD.md)
+# Requiere token ADMIN (ej. export TOKEN=$(... login ... | jq -r .access_token))
+curl -sS -X POST http://localhost:8000/api/workers/shutdown \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN"
+
+cd app && docker compose build backend frontend && docker compose up -d backend frontend
 ```
 
-**Última versión**: 3.0.11 (Fix #95 - File naming + OCR symlink)
+**Última versión**: 3.0.12 (Fix #96–97 + migración 015)
+
+**Documentación operativa**: `docs/ai-lcd/03-operations/ORDERLY_SHUTDOWN_AND_REBUILD.md`
 
 **Checklist post-rebuild**:
 - [x] Backend build exitoso (~9 segundos)

@@ -47,6 +47,9 @@
 | `LLM_MODEL` | `mistral` | Modelo Ollama (solo si provider=ollama) |
 | `OLLAMA_HOST` | `ollama` | Host de Ollama |
 | `OLLAMA_PORT` | `11434` | Puerto de Ollama |
+| `LLM_RATELIMIT_WARN_REQUESTS` | `5` | Lanza warning cuando las peticiones disponibles caen por debajo de este valor |
+| `LLM_RATELIMIT_WARN_TOKENS` | `5000` | Lanza warning cuando los tokens restantes caen por debajo de este valor |
+| `LLM_LOG_RATE_LIMIT_SUCCESS` | `false` | Si `true`, registra cada respuesta con cabeceras de rate limit aunque no haya riesgo |
 
 ### Embeddings y RAG
 

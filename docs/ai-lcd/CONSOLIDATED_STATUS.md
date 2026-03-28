@@ -1,17 +1,57 @@
-# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-19
+# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-27
 
-> **Versión definitiva**: Fix #95 File naming con hash prefix + extensión en symlinks.
+> **Versión definitiva**: Fix #98 workers start/shutdown JWT ADMIN + #97 Login + #96 worker único; #95 naming vigente.
 
-**Última actualización**: 2026-03-19  
-**Prioridad**: REQ-014 (UX Dashboard) — ver FRONTEND_DASHBOARD_API.md
+**Última actualización**: 2026-03-27  
+**Prioridad**: REQ-019 — operaciones: `03-operations/ORDERLY_SHUTDOWN_AND_REBUILD.md`
 
 ---
 
 ## Aplicar cambios
 
 ```bash
-cd app && docker compose up -d --build backend
+cd app && docker compose build backend frontend && docker compose up -d backend frontend
 ```
+
+Opcional antes de rebuild backend: `POST /api/workers/shutdown` con **Bearer token rol ADMIN** (ver `03-operations/ORDERLY_SHUTDOWN_AND_REBUILD.md`).
+
+### 98. Workers start/shutdown: solo ADMIN (JWT Bearer) ✅
+**Fecha**: 2026-03-27  
+**Ubicación**: `backend/app.py` — `POST /api/workers/start`, `POST /api/workers/shutdown`  
+**Problema**: Endpoints operativos sin auth; cualquiera con acceso de red podía parar o arrancar el pool.  
+**Solución**: `Depends(require_admin)`; logs incluyen `username` quien invoca.  
+**Impacto**: Sin `Authorization` o Bearer mal formado → **403** (esquema HTTP Bearer); token inválido/expirado → **401**; rol no `admin` → **403** Nota: **SUPER_USER** no basta, solo **admin**.  
+**⚠️ NO rompe**: Arranque del pool en lifespan de la app ✅; scheduler interno ✅  
+
+**Verificación**:
+- [ ] `shutdown` / `start` con `Authorization: Bearer <token_admin>` → 200
+- [ ] Sin header / user no admin → 403; token inválido → 401
+
+### 97. Login: validación cliente + mensajes red / 422 / 401 ✅
+**Fecha**: 2026-03-27  
+**Ubicación**: `frontend/src/hooks/useAuth.js`, `frontend/src/components/auth/LoginView.jsx`  
+**Problema**: 422 por Pydantic (`username` min 3, `password` min 6) sin feedback claro; `ERR_EMPTY_RESPONSE` sin mensaje útil.  
+**Solución**: `minLength` / `maxLength` en inputs; mensajes si no hay `response` (API inalcanzable / `VITE_API_URL`); 422 y 401 parseados.  
+**Impacto**: Login más claro en local y Docker.  
+**⚠️ NO rompe**: Dashboard autenticado ✅  
+
+**Verificación**:
+- [ ] Login OK con credenciales válidas
+- [ ] Campos cortos bloqueados en cliente o mensaje API legible
+
+### 96. Un solo worker activo por documento + tipo de tarea (OCR duplicado) ✅
+**Fecha**: 2026-03-27  
+**Ubicación**: `backend/migrations/015_worker_tasks_one_active_per_doc_task.py`, `backend/database.py` (`assign_worker`)  
+**Problema**: `UNIQUE(worker_id, document_id, task_type)` permitía dos workers OCR para el mismo `document_id`; carrera si aún no había fila. Dashboard: mismo `filename` en dos filas.  
+**Solución**: Migración: limpia duplicados activos; índice único parcial en `(document_id, task_type)` para `assigned`/`started`; `pg_advisory_xact_lock` + `UniqueViolation`.  
+**Impacto**: Un OCR activo por documento; datos alineados con `document_id`.  
+**⚠️ NO rompe**: Retry mismo worker (`ON CONFLICT` triple) ✅, pipeline ✅  
+
+**Verificación**:
+- [ ] Migración 015 aplicada en todos los entornos
+- [ ] Como mucho una fila `assigned`/`started` por `(document_id, ocr)`
+
+---
 
 ### 95. Fix: File naming con hash prefix + extensión en symlinks ✅
 **Fecha**: 2026-03-19

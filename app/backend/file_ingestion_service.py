@@ -71,6 +71,25 @@ def check_duplicate(file_hash: str) -> Optional[Dict]:
     return document_status_store.find_by_hash(file_hash)
 
 
+def _has_hash_prefix(basename: str) -> bool:
+    """True if basename looks like {8 hex}_{rest} (Fix #95 / migrate_file_naming)."""
+    parts = basename.split("_", 1)
+    if len(parts) < 2:
+        return False
+    prefix = parts[0]
+    return len(prefix) == 8 and all(c in "0123456789abcdef" for c in prefix)
+
+
+def _processed_basename(original_filename: str, short_hash: str) -> str:
+    """
+    Target name under processed/: add short_hash_ unless the file already has that prefix.
+    Avoids abcdef12_abcdef12_report.pdf when inbox files were pre-prefixed.
+    """
+    if _has_hash_prefix(original_filename):
+        return original_filename
+    return f"{short_hash}_{original_filename}"
+
+
 def _register_and_enqueue(
     document_id: str,
     filename: str,
@@ -160,9 +179,10 @@ def ingest_from_inbox(
     """
     Ingest a file from the inbox folder.
 
-    Moves original to processed/{short_hash}_{filename}, creates symlink in uploads/{document_id}.pdf.
+    Moves original to processed/{short_hash}_{filename} (or keeps name if it already has an 8-char hex prefix),
+    creates symlink in uploads/{document_id}{ext}.
     Returns document_id on success, None if duplicate or error.
-    
+
     Fix #95: Prevents overwriting files with same name but different content.
     """
     file_hash = compute_sha256(file_path=inbox_path)
@@ -171,14 +191,14 @@ def ingest_from_inbox(
     existing = check_duplicate(file_hash)
     if existing:
         os.makedirs(processed_dir, exist_ok=True)
-        # Even duplicates use hash prefix (Fix #95)
-        dest = os.path.join(processed_dir, f"{short_hash}_{filename}")
+        dup_name = _processed_basename(filename, short_hash)
+        dest = os.path.join(processed_dir, dup_name)
         try:
             shutil.move(inbox_path, dest)
         except OSError as e:
             logger.warning(f"Could not move duplicate {filename}: {e}")
         logger.info(
-            f"📦 Inbox: Duplicate {filename} → processed/{short_hash}_{filename} "
+            f"📦 Inbox: Duplicate {filename} → processed/{dup_name} "
             f"(matches {existing['filename']})"
         )
         return None
@@ -186,9 +206,9 @@ def ingest_from_inbox(
     document_id = _generate_document_id(filename, file_hash)
 
     os.makedirs(processed_dir, exist_ok=True)
-    
-    # Store in processed with hash prefix to prevent overwrites (Fix #95)
-    processed_path = os.path.join(processed_dir, f"{short_hash}_{filename}")
+
+    proc_name = _processed_basename(filename, short_hash)
+    processed_path = os.path.join(processed_dir, proc_name)
     shutil.move(inbox_path, processed_path)
 
     # Create symlink with .pdf extension (Fix #95)
