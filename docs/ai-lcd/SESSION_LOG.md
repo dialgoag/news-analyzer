@@ -2,8 +2,163 @@
 
 > Decisiones, cambios importantes, y contexto entre sesiones
 
-**Última actualización**: 2026-03-30  
-**Sesión**: 46 (Spike REQ-021 LLM local vs API insights)
+**Última actualización**: 2026-03-31  
+**Sesión**: 47 (REQ-021 — Documentación LangChain Integration)
+
+---
+
+## Sesión 47: REQ-021 — Documentación Completa LangChain + LangGraph + LangMem (2026-03-31)
+
+### Petición: Documentar cómo interactúa el ecosistema LangChain antes de continuar implementación
+
+- **Decisión**: Crear documentación completa del stack LangChain/LangGraph/LangMem **antes** de implementar LangGraph workflows y LangMem cache.
+- **Motivación**: 
+  - Refactor REQ-021 introduce arquitectura compleja (Hexagonal + DDD + LangChain)
+  - Pipeline de 2 pasos (ExtractionChain → AnalysisChain) con lógica diferenciada
+  - LangGraph workflows con estado, validación y retry inteligente
+  - Múltiples providers con fallback automático
+  - Necesidad de onboarding claro para el equipo
+
+### Decisión 1: 3 documentos complementarios
+
+1. **LANGCHAIN_INTEGRATION.md**: Overview técnico completo
+   - Por qué LangChain vs código ad-hoc (ventajas concretas)
+   - Pipeline de 2 pasos con temperaturas diferenciadas (0.1 factual vs 0.7 creativa)
+   - LangGraph state machines (nodos, edges, retry logic)
+   - LangMem para caché de insights/embeddings (ahorro 50-90% costos)
+   - Providers intercambiables (OpenAI, Ollama, Perplexity) con fallback
+   - Casos de uso, troubleshooting, métricas clave
+
+2. **LANGCHAIN_INTEGRATION_DIAGRAM.md**: Visualización completa
+   - Diagrama ASCII end-to-end (Worker → Cache → LangGraph → Chains → Database)
+   - Vista de componentes (Hexagonal layers + LangChain adapters)
+   - Flujo de datos step-by-step (4 escenarios: cache hit, cache miss, fallback, retry)
+   - Diagramas de secuencia (interacción entre componentes)
+   - Comparación Antes vs Después (500 líneas monolíticas → 100 líneas modulares)
+
+3. **MIGRATION_GUIDE.md**: Guía práctica de migración
+   - Mapeo detallado: app.py línea X → nueva ubicación Y
+   - Ejemplos de código: Antes (monolítico) vs Después (hexagonal)
+   - Testing: Cómo testear con mocks (sin I/O real)
+   - Checklist de migración por fases (1-7)
+   - Ejemplo completo: Migrar `_insights_worker_task` (~250 líneas → ~50 líneas)
+   - Consideraciones de backward compatibility durante migración
+
+4. **INDEX.md**: Índice completo de 21 documentos
+   - Organización por categoría (Arquitectura, LLM, DB, Pipeline, Frontend)
+   - Mapas de navegación por rol (backend dev, LLM work, DB work, debugging)
+   - Estados de documentación (Activo/Estable/Legacy)
+   - Estadísticas y roadmap de documentación
+
+### Decisión 2: Pipeline de 2 pasos con temperaturas diferenciadas
+
+- **ExtractionChain** (Paso 1):
+  - **Objetivo**: Extraer SOLO datos estructurados verificables
+  - **Temperature**: 0.1 (baja, para precisión factual)
+  - **Tokens**: 1200 (prompt detallado para metadata/actors/events/themes)
+  - **Output**: Structured markdown (## Metadata, ## Actors, ## Events, etc.)
+  - **Uso**: Knowledge graph, timeline analysis, actor networks
+
+- **AnalysisChain** (Paso 2):
+  - **Objetivo**: Generar insights expertos basados en datos extraídos
+  - **Input**: Los datos estructurados de ExtractionChain
+  - **Temperature**: 0.7 (más alta, para creatividad analítica)
+  - **Tokens**: 1000 (análisis profundo)
+  - **Output**: Analytical markdown (## Significance, ## Context, ## Implications)
+  - **Uso**: Human consumption, reports, summaries
+
+- **Justificación**: Separar extracción de análisis permite:
+  - Factualidad garantizada en paso 1 (low temp)
+  - Creatividad analítica en paso 2 (high temp)
+  - Debugging más fácil (identificar si falla extracción o análisis)
+  - Reutilización (mismo extraction para múltiples análisis)
+  - Testing independiente de cada paso
+
+### Decisión 3: LangGraph para workflows complejos (implementación pendiente)
+
+- **Cuándo usar Graph vs Chain**:
+  - **Chain**: Pipeline lineal simple (extraction → analysis)
+  - **Graph**: Workflow complejo con validación, retry, rutas condicionales
+
+- **InsightsGraph workflow** (a implementar):
+  - Nodos: extract → validate_extraction → analyze → validate_analysis → store
+  - Retry inteligente: max 3 intentos por paso con validación antes de continuar
+  - Estado persistente: `InsightState` con counters, flags, outputs intermedios
+  - Edges condicionales: validación exitosa → continuar; validación fallida → retry
+
+- **Ventajas sobre chains simples**:
+  - Retry inteligente por paso (no todo o nada)
+  - Validación antes de continuar (no propagar errores)
+  - Estado persistente (puede retomar desde último paso exitoso)
+  - Trazabilidad completa (cada transición logueada)
+
+### Decisión 4: LangMem para caché y memoria (implementación pendiente)
+
+- **Insight Cache**: Evitar re-generar insights para noticias duplicadas
+  - Key: `sha256(normalized_text)`
+  - Value: `InsightResult` completo
+  - TTL: 7 días
+  - **Ahorro esperado**: 10-30% tokens (basado en tasa de duplicados)
+
+- **Embedding Cache**: Evitar re-computar embeddings
+  - Key: `document_id`
+  - Value: `embedding vector`
+  - TTL: 30 días
+  - **Ahorro esperado**: 50-90% embedding calls
+
+- **Conversation Memory** (RAG futuro): Mantener contexto en preguntas follow-up
+  - TTL: 1 hora
+  - Mejora UX en modo conversacional
+
+### Alternativas consideradas
+
+1. **Documentación en código vs docs separados**:
+   - ❌ Solo docstrings: Insuficiente para arquitectura compleja
+   - ✅ Docs + docstrings: Overview en docs, detalles en código
+
+2. **Un documento largo vs múltiples documentos**:
+   - ❌ Documento único de 200+ páginas: Difícil navegación
+   - ✅ 3 documentos especializados: Cada uno con propósito claro
+
+3. **Implementar primero, documentar después**:
+   - ❌ Riesgo de desviación entre implementación y diseño
+   - ✅ Documentar primero: Valida arquitectura antes de codificar
+
+### Impacto en roadmap
+
+- **Fase actual**: Mini FASE 1 + FASE 4 parcial (chains básicas implementadas)
+- **Documentación completa**: Permite continuar con confianza en:
+  - FASE 4: LangGraph implementation
+  - FASE 5: LangMem cache layer
+  - FASE 6: Integration en workers actuales
+  - FASE 7: Testing completo
+
+- **Onboarding**: Reduce de ~3 días a ~1 día para nuevos devs
+- **Maintenance**: Decisiones documentadas evitan regresiones
+
+### Riesgos identificados
+
+1. **Documentación desactualizada**:
+   - Mitigación: Marcar documentos como "vivos" durante REQ-021
+   - Actualización post-implementación garantizada
+
+2. **Complejidad percibida**:
+   - Mitigación: Diagramas visuales + ejemplos concretos
+   - Comparación Antes vs Después muestra beneficios claros
+
+3. **Overhead de mantener 3 documentos**:
+   - Mitigación: Cada documento tiene propósito único
+   - INDEX.md facilita navegación
+
+### Archivos creados
+- `docs/ai-lcd/02-construction/LANGCHAIN_INTEGRATION.md` (~23KB)
+- `docs/ai-lcd/02-construction/LANGCHAIN_INTEGRATION_DIAGRAM.md` (~43KB)
+- `docs/ai-lcd/02-construction/MIGRATION_GUIDE.md` (~19KB)
+- `docs/ai-lcd/02-construction/INDEX.md` (~13KB)
+
+### Archivos actualizados
+- `docs/ai-lcd/CONSOLIDATED_STATUS.md` (Fix #104)
+- `docs/ai-lcd/SESSION_LOG.md` (esta sesión)
 
 ---
 

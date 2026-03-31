@@ -9,9 +9,17 @@ psycopg2-binary>=2.9.9
 # Database Migrations (Flyway-like)
 yoyo-migrations>=9.0.0
 
-# LangChain
-langchain==0.1.0
-langchain-community==0.0.10
+# LangChain Ecosystem
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-core>=0.2.0
+langchain-openai>=0.1.0
+langgraph>=0.1.0
+langmem>=0.0.1  # Memory management
+
+# LangChain Providers
+langchain-anthropic>=0.1.0  # Claude (future)
+langchain-cohere>=0.1.0     # Cohere (future)
 
 # Embeddings
 sentence-transformers>=3.0.0

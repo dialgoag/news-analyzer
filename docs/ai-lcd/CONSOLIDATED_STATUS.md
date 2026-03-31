@@ -1,11 +1,71 @@
-# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-30
+# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-31
 
-> **Versión definitiva**: Fix #100 pausas pipeline en PostgreSQL + shutdown; #99 UI/API pausas; #98 workers ADMIN; Fix #103 spike REQ-021 (doc).
+> **Versión definitiva**: Fix #104 documentación LangChain integration; Fix #100 pausas pipeline en PostgreSQL + shutdown; #99 UI/API pausas; #98 workers ADMIN; Fix #103 spike REQ-021 (doc).
 
-**Última actualización**: 2026-03-30  
-**Prioridad**: REQ-019 — operaciones: `03-operations/ORDERLY_SHUTDOWN_AND_REBUILD.md`
+**Última actualización**: 2026-03-31  
+**Prioridad**: REQ-021 — Backend Refactor: Hexagonal + DDD + LangChain/LangGraph/LangMem
 
 ---
+
+### 104. Documentación LangChain + LangGraph + LangMem Integration ✅
+**Fecha**: 2026-03-31  
+**Ubicación**: 
+- `docs/ai-lcd/02-construction/LANGCHAIN_INTEGRATION.md` (overview completo)
+- `docs/ai-lcd/02-construction/LANGCHAIN_INTEGRATION_DIAGRAM.md` (diagramas visuales)
+- `docs/ai-lcd/02-construction/MIGRATION_GUIDE.md` (guía de migración)
+- `docs/ai-lcd/02-construction/INDEX.md` (índice actualizado)  
+
+**Problema**: REQ-021 integra LangChain, LangGraph y LangMem en arquitectura hexagonal, pero no había documentación sobre:
+- Cómo interactúan estos componentes entre sí
+- Pipeline de 2 pasos (ExtractionChain → AnalysisChain)
+- LangGraph workflows con estado y validación
+- LangMem para caché y memoria
+- Cómo migrar código monolítico a la nueva arquitectura  
+
+**Solución**: Documentación completa en 3 archivos:
+1. **LANGCHAIN_INTEGRATION.md**: Overview completo del ecosistema LangChain
+   - Pipeline de 2 pasos (extracción + análisis) con temperaturas diferenciadas
+   - LangGraph state machines con retry inteligente
+   - LangMem para caché de insights y embeddings
+   - Providers intercambiables (OpenAI, Ollama, Perplexity)
+   - Casos de uso y troubleshooting
+   
+2. **LANGCHAIN_INTEGRATION_DIAGRAM.md**: Diagramas visuales ASCII
+   - Flujo completo end-to-end (Worker → Cache → LangGraph → Chains)
+   - Vista de componentes (Hexagonal + LangChain layers)
+   - Diagramas de secuencia (interacción entre componentes)
+   - Comparación Antes vs Después (monolito vs hexagonal)
+   
+3. **MIGRATION_GUIDE.md**: Guía práctica de migración
+   - Mapeo: Dónde va cada pieza de app.py
+   - Ejemplos código: Antes (500 líneas) vs Después (100 líneas)
+   - Testing: Cómo testear con mocks (sin I/O)
+   - Checklist de migración por fases
+   - Ejemplo completo: Migrar `_insights_worker_task`
+
+4. **INDEX.md**: Índice actualizado con navegación
+   - 21 documentos organizados por categoría
+   - Mapas de navegación por rol/tarea
+   - Estados de documentación (Activo/Estable/Legacy)
+
+**Impacto**: 
+- Equipo entiende cómo funciona integración LangChain completa
+- Referencia clara para implementar LangGraph workflows
+- Guía paso a paso para migrar código legacy
+- Reduce tiempo de onboarding en arquitectura nueva
+- Trazabilidad de decisiones (por qué 2 pasos, por qué temperaturas diferentes)
+
+**⚠️ NO rompe**: 
+- Pipeline actual ✅ (documentación, no cambios de código)
+- Hexagonal architecture docs ✅
+- Código chains existente ✅
+
+**Verificación**:
+- [x] LANGCHAIN_INTEGRATION.md legible y completo
+- [x] Diagramas ASCII renderizables en markdown
+- [x] MIGRATION_GUIDE.md con ejemplos código
+- [x] INDEX.md referencia todos los docs correctamente
+- [ ] Team review de claridad
 
 ### 103. Spike REQ-021: documentación análisis LLM local vs API (insights / calidad) ✅
 **Fecha**: 2026-03-30  
