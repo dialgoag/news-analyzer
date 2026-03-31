@@ -3,7 +3,192 @@
 > Decisiones, cambios importantes, y contexto entre sesiones
 
 **Última actualización**: 2026-03-31  
-**Sesión**: 47 (REQ-021 — Documentación LangChain Integration)
+**Sesión**: 48 (REQ-021 — Implementación LangGraph + LangMem)
+
+---
+
+## Sesión 48: REQ-021 — Implementación LangGraph Workflow + LangMem Cache (2026-03-31)
+
+### Contexto: Continuación después de documentación completa
+
+Después de crear documentación exhaustiva (Sesión 47), continuamos con la implementación de los componentes core: LangGraph workflow y LangMem cache manager.
+
+### Decisión 1: LangGraph State Machine con TypedDict
+
+- **Tipo de estado**: `InsightState` como `TypedDict` (no dataclass)
+  - **Por qué**: LangGraph requiere TypedDict para compatibilidad con su sistema de estado
+  - **Ventaja**: Type hints claros + validación en runtime
+  - **Campos**: 20+ campos rastreando todo el workflow (input, outputs, validation, retry, error)
+
+- **Estructura del workflow**:
+  ```
+  extract → validate_extraction → analyze → validate_analysis → finalize → END
+                ↓ (retry)              ↓ (retry)                ↓ (error)
+              extract              analyze                     error → END
+  ```
+
+- **Nodos implementados** (6 nodos):
+  1. `extract_node`: Llama ExtractionChain, maneja errores retriables
+  2. `validate_extraction_node`: Valida metadata, actors/events, longitud mínima
+  3. `analyze_node`: Llama AnalysisChain con extracted_data como input
+  4. `validate_analysis_node`: Valida significance, context/implications, longitud
+  5. `finalize_node`: Combina extracted_data + analysis en full_text
+  6. `error_node`: Loguea error y marca workflow como failed
+
+- **Conditional edges** (routing logic):
+  - `should_retry_extraction()`: Retorna "retry" | "continue" | "fail"
+    * retry: Si attempts < max_attempts y validation failed
+    * continue: Si validation passed
+    * fail: Si max_attempts alcanzado
+  - `should_retry_analysis()`: Misma lógica para paso de análisis
+
+### Decisión 2: Retry inteligente por paso
+
+- **Max attempts**: 3 intentos por paso (configurable)
+- **Retry independiente**: extraction y analysis tienen sus propios contadores
+- **Ventaja sobre chains simples**: 
+  - Si extraction falla 1 vez pero succeed en intento 2 → continúa a analysis
+  - Si analysis falla 1 vez → retry analysis solamente (no re-ejecuta extraction)
+  - Ahorra tokens: No re-ejecuta pasos exitosos
+
+### Decisión 3: Validación antes de continuar
+
+- **Validation criteria** (extraction):
+  - ✅ Tiene sección "## Metadata"
+  - ✅ Tiene al menos "## Actors" O "## Events"
+  - ✅ Longitud > 100 caracteres
+  - **Por qué**: Evita propagar outputs vacíos/inválidos a analysis
+
+- **Validation criteria** (analysis):
+  - ✅ Tiene sección "## Significance"
+  - ✅ Tiene "## Context" O "## Implications"
+  - ✅ Longitud > 200 caracteres
+  - **Por qué**: Garantiza insights de calidad mínima
+
+- **Alternativa descartada**: Validación con LLM (costo/latency no justificado para validación simple)
+
+### Decisión 4: LangMem con multi-backend support
+
+- **Clase principal**: `InsightMemory`
+  - **Backends soportados**: "memory" (in-memory), "postgres" (TODO), "redis" (TODO)
+  - **Por qué multi-backend**: Permite migrar a Redis/PostgreSQL sin cambiar código cliente
+
+- **Operaciones implementadas**:
+  - `get(text_hash)`: Busca insight cached, verifica TTL, retorna None si expirado
+  - `store(...)`: Guarda insight con timestamp, evict oldest si excede max_size
+  - `invalidate(text_hash)`: Elimina entry específico
+  - `clear()`: Limpia todo el caché
+  - `get_stats()`: Retorna CacheStats con hit_rate y tokens_saved
+  - `reset_stats()`: Resetea estadísticas
+
+- **Deduplication strategy**:
+  - **Key**: `sha256(normalized_text)` → garantiza deduplicación exacta
+  - **Normalization**: lowercase, strip whitespace, normalizar line breaks
+  - **Por qué SHA256**: Hash criptográfico garantiza unicidad, no colisiones
+
+- **TTL management**:
+  - Default: 7 días (configurable)
+  - Auto-expiration: `get()` verifica edad y auto-invalida si > TTL
+  - **Por qué 7 días**: Balance entre cache hit rate y freshness de datos
+
+- **Eviction policy**:
+  - LRU (Least Recently Used): Elimina entry más antiguo cuando excede max_size
+  - Max size default: 10,000 entries
+  - **Por qué LRU**: Sencillo, eficaz para workload típico
+
+### Decisión 5: Statistics tracking
+
+- **Métricas rastreadas**:
+  - `total_requests`: Total de get() calls
+  - `cache_hits`: Cuántas veces se encontró en caché
+  - `cache_misses`: Cuántas veces no se encontró
+  - `tokens_saved`: Total de tokens ahorrados (suma de tokens de insights cached)
+
+- **CacheStats dataclass**:
+  - `hit_rate`: Calculado como hits / total (0.0 - 1.0)
+  - `__str__`: Formato human-readable para logs
+
+- **Por qué tracking**: Permite monitorear eficiencia del caché y justificar ROI
+
+### Decisión 6: Singleton pattern para memoria global
+
+- **Función**: `get_insight_memory()` retorna instancia singleton
+- **Por qué singleton**: Evita múltiples instancias de caché (desperdicio de memoria)
+- **Thread-safety**: No implementado aún (TODO si se usa en multi-threading)
+
+### Alternativas consideradas
+
+1. **LangGraph vs simplemente usar chains con retry manual**:
+   - ❌ Retry manual: Código boilerplate, difícil de testear
+   - ✅ LangGraph: Workflow declarativo, trazabilidad completa
+
+2. **Validación con regex vs LLM**:
+   - ❌ LLM validation: Costo adicional (~100 tokens/validación), latency
+   - ✅ Regex simple: Gratis, instantáneo, suficiente para validación básica
+
+3. **Cache en PostgreSQL vs Redis vs In-Memory**:
+   - ✅ In-memory (implementado): Sencillo, sin dependencies externas
+   - ⏳ PostgreSQL (TODO): Persistencia entre restarts
+   - ⏳ Redis (TODO): Ultra-rápido, TTL nativo
+
+4. **TTL de 7 días vs 30 días**:
+   - ❌ 30 días: Riesgo de datos stale (noticias evolucionan)
+   - ✅ 7 días: Balance entre freshness y cache hit rate
+
+### Impacto en roadmap
+
+- **Fases completadas**:
+  - ✅ FASE 1: Estructura hexagonal + base classes
+  - ✅ FASE 2: LangChain chains (Extraction, Analysis, Insights)
+  - ✅ FASE 3: LangChain providers (OpenAI, Ollama)
+  - ✅ FASE 4a: Documentación completa
+  - ✅ FASE 4b: LangGraph workflow (state machine)
+  - ✅ FASE 4c: LangMem cache manager
+
+- **Próximos pasos**:
+  - ⏳ FASE 5: Testing (unit tests para nodes, mocks para providers)
+  - ⏳ FASE 6: PostgreSQL backend para LangMem
+  - ⏳ FASE 7: Integration en insights worker
+  - ⏳ FASE 8: Dashboard metrics (cache hit rate, workflow success)
+
+### Riesgos identificados
+
+1. **LangGraph dependencies**:
+   - Riesgo: LangGraph API puede cambiar (biblioteca joven)
+   - Mitigación: Versión pinned en requirements.txt, abstracción en nuestro código
+
+2. **In-memory cache pierde datos en restart**:
+   - Riesgo: Cache vacío después de cada deploy
+   - Mitigación: Implementar PostgreSQL backend (próximo paso)
+
+3. **Validation muy estricta puede rechazar insights válidos**:
+   - Riesgo: False negatives (rechaza insight bueno por no tener sección exacta)
+   - Mitigación: Validation criteria flexibles (OR conditions, no AND estricto)
+
+4. **Cache key collision (SHA256)**:
+   - Riesgo: Teóricamente posible (probabilidad: ~1 en 2^256)
+   - Mitigación: Probabilidad negligible en práctica, no requiere acción
+
+### Archivos creados
+
+- `app/backend/adapters/driven/llm/graphs/insights_graph.py` (~500 líneas)
+  - InsightState (TypedDict con 20+ campos)
+  - 6 nodos (extract, validate_extraction, analyze, validate_analysis, finalize, error)
+  - 2 conditional edges (should_retry_extraction, should_retry_analysis)
+  - create_insights_graph() constructor
+  - run_insights_workflow() public API
+
+- `app/backend/adapters/driven/memory/insight_memory.py` (~400 líneas)
+  - CachedInsight dataclass
+  - CacheStats dataclass
+  - InsightMemory class (manager principal)
+  - Utilities (compute_text_hash, normalize_text_for_hash)
+  - get_insight_memory() singleton
+
+### Archivos actualizados
+
+- `docs/ai-lcd/CONSOLIDATED_STATUS.md` (Fix #105)
+- `docs/ai-lcd/SESSION_LOG.md` (esta sesión)
 
 ---
 
