@@ -63,6 +63,11 @@ Las migraciones se encuentran en `/backend/migrations/` y están organizadas por
 - **013**: Añade `llm_source` a `news_item_insights`
 - **014**: Añade `indexed_in_qdrant_at` a `news_item_insights` (Indexing Insights etapa)
 
+### 016: Pipeline runtime KV (pausas persistentes)
+- **Archivo**: `016_pipeline_runtime_kv.py`
+- **Dominio**: Operaciones / control de pipeline
+- **Contenido**: Tabla `pipeline_runtime_kv` (`key`, `value` JSONB, `updated_at`) para `pause.*` e `insights.llm`. Código: `pipeline_runtime_store.py`, `insights_pipeline_control.py`.
+
 ### 015: Worker tasks — un activo por documento y tipo
 - **Archivo**: `015_worker_tasks_one_active_per_doc_task.py`
 - **Dominio**: Event-Driven / semáforo `worker_tasks`

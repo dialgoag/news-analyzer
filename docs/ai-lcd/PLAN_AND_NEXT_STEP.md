@@ -4,10 +4,10 @@
 > 
 > **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> **📋 ÚLTIMO**: Fix #96–97 (worker OCR único + login UX) + doc `ORDERLY_SHUTDOWN_AND_REBUILD.md`. Fix #95 naming sigue vigente.
+> **📋 ÚLTIMO**: Fix #103 — spike **REQ-021** (`SPIKE_REQ021_LOCAL_LLM_INSIGHTS_QUALITY.md`) + registro en `REQUESTS_REGISTRY.md`. Fix #100–102 siguen vigentes.
 
-**Última actualización**: 2026-03-27  
-**Versión**: 3.0.12 (Workers semaphore + login + ops doc)
+**Última actualización**: 2026-03-28  
+**Versión**: 3.0.14 (Pipeline KV persistente)
 
 ---
 

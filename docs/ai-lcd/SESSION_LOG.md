@@ -2,8 +2,42 @@
 
 > Decisiones, cambios importantes, y contexto entre sesiones
 
-**Última actualización**: 2026-03-27  
-**Sesión**: 44 (Workers OCR únicos + Login UX + doc operativa AI-LCD)
+**Última actualización**: 2026-03-30  
+**Sesión**: 46 (Spike REQ-021 LLM local vs API insights)
+
+---
+
+## Sesión 46: Spike REQ-021 — Análisis LLM local vs API (insights, calidad) (2026-03-30)
+
+### Petición: spike documentado como request formal
+- **Decisión**: Registrar el trabajo de comparación manual / benchmark como **REQ-021** (spike completado en documentación), no como feature en app.
+- **Doc maestro**: `02-construction/SPIKE_REQ021_LOCAL_LLM_INSIGHTS_QUALITY.md` (contrato = `generate_insights_with_fallback`, hallazgos Mistral/`api.chat`, RAM, Docker `pwd`, timeouts).
+- **Herramienta**: `app/benchmark/compare_insights_models.py` queda referenciado como utilidad de comparación con prompt alineado al backend.
+- **Riesgo**: Hallazgos son **contexto de laboratorio**; otro hardware/imagen Ollama puede comportarse distinto.
+
+---
+
+## Sesión 45: Pausa pipeline insights y selección de proveedor (2026-03-28)
+
+### Cambio: selector de modelo Ollama en dashboard admin (Fix #102)
+- **Decisión**: Reutilizar `insights.llm` en KV con campo `ollama_model`; listar tags vía `/api/tags` en cada GET admin para rellenar el desplegable.
+- **Variable env opcional**: `OLLAMA_LLM_MODEL` si `LLM_MODEL` es de OpenAI pero se usa Local en insights.
+- **Riesgo**: Si Ollama no responde, la lista queda vacía (sigue pudiendo quedar un valor guardado mostrado como opción “guardado”).
+
+### Cambio: comparación local vs OpenAI sin integrar en la app (Fix #101)
+- **Decisión**: No exponer endpoint de “doble insights” en la API; comparar con `curl`/entorno y, si aplica, alternar `LLM_PROVIDER` o orden manual en admin.
+- **Alternativas**: Endpoint admin paralelo (descartada por ahora).
+- **Impacto en roadmap**: Doc `LOCAL_LLM_VS_OPENAI_INSIGHTS.md` como proceso manual único.
+- **Riesgo**: Ninguno (menos código).
+
+### Cambio: controles runtime insights → persistencia BD (Fix #100)
+- **Decisión inicial (#99)**: Pausas en RAM + orden manual de LLM para insights.
+- **Evolución (#100)**: Tabla `pipeline_runtime_kv`; pausas por `task_type` (ocr, chunking, indexing, insights, indexing_insights); `POST /api/workers/shutdown` persiste **pausa total** alineada con UI «Pausar todo». Caché en proceso + `refresh_from_db()` al startup.
+- **Extensión futura**: Añadir entrada en `KNOWN_PAUSE_STEPS` (`pipeline_runtime_store.py`) y enganchar el despacho del nuevo paso a `is_step_paused(id)`.
+- **Riesgo**: `workers/start` no limpia pausas por diseño — operador usa «Reanudar todo» o PUT explícito.
+
+### Cambio: controles runtime insights (contexto #99)
+- **Proveedores**: Modo automático conserva `LLM_PROVIDER` + `LLM_FALLBACK_PROVIDERS`; modo manual construye cadena solo para `generate_insights_with_fallback`.
 
 ---
 

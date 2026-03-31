@@ -21,6 +21,7 @@ import asyncio
 import logging
 import time
 import os
+import insights_pipeline_control as _ipc
 from threading import Thread, Event, Lock
 from datetime import datetime
 
@@ -159,6 +160,10 @@ class GenericWorkerPool:
                 """)
                 result = cursor.fetchone()
                 pending_tasks['indexing_insights'] = result['count'] if result else 0
+
+                for _tt in ("ocr", "chunking", "indexing", "insights", "indexing_insights"):
+                    if _ipc.is_step_paused(_tt):
+                        pending_tasks[_tt] = 0
                 
                 # Priority order: COMPLETE PIPELINE (indexing_insights after insights)
                 priority_order = ['indexing_insights', 'insights', 'indexing', 'chunking', 'ocr']

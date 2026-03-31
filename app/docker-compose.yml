@@ -34,20 +34,17 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
-      interval: 30s
-      timeout: 15s
-      retries: 3
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          cpus: '8.0'
-          memory: 6G
-        reservations:
-          memory: 3G
+      interval: 60s
+      timeout: 60s
+      retries: 5
+      start_period: 120s
+    # ~24 Gi Colima: tope 10 g (prioridad OCR); reserva baja para no robar aire a Postgres/backend.
+    mem_reservation: 4g
+    mem_limit: 10g
+    cpus: 7
     environment:
       TESSERACT_LANG: spa+eng
-      OCR_THREADS: 3
+      OCR_THREADS: 5
 
   qdrant:
     image: qdrant/qdrant:v1.15.2
@@ -59,12 +56,8 @@ services:
     networks:
       - rag-network
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-        reservations:
-          memory: 1G
+    mem_reservation: 512m
+    mem_limit: 3g
     environment:
       QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_REQUESTS: 100
 
@@ -78,6 +71,9 @@ services:
     networks:
       - rag-network
     restart: unless-stopped
+    # Prioridad 2: ~24 Gi Colima; sube límite si usas modelos grandes o sube RAM VM.
+    mem_reservation: 8g
+    mem_limit: 12g
 
   backend:
     build:

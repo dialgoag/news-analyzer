@@ -7,7 +7,7 @@
 import React, { useState, useEffect } from 'react';
 import { PipelineDashboard } from '../PipelineDashboard';
 
-export function DashboardView({ API_URL, token }) {
+export function DashboardView({ API_URL, token, isAdmin = false }) {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   // Auto-refresh every 30 seconds
@@ -47,6 +47,7 @@ export function DashboardView({ API_URL, token }) {
         <PipelineDashboard 
           API_URL={API_URL} 
           token={token} 
+          isAdmin={isAdmin}
           refreshTrigger={refreshTrigger} 
         />
       </div>

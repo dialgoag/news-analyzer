@@ -1,9 +1,46 @@
-# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-27
+# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-30
 
-> **Versión definitiva**: Fix #98 workers start/shutdown JWT ADMIN + #97 Login + #96 worker único; #95 naming vigente.
+> **Versión definitiva**: Fix #100 pausas pipeline en PostgreSQL + shutdown; #99 UI/API pausas; #98 workers ADMIN; Fix #103 spike REQ-021 (doc).
 
-**Última actualización**: 2026-03-27  
+**Última actualización**: 2026-03-30  
 **Prioridad**: REQ-019 — operaciones: `03-operations/ORDERLY_SHUTDOWN_AND_REBUILD.md`
+
+---
+
+### 103. Spike REQ-021: documentación análisis LLM local vs API (insights / calidad) ✅
+**Fecha**: 2026-03-30  
+**Ubicación**: `docs/ai-lcd/02-construction/SPIKE_REQ021_LOCAL_LLM_INSIGHTS_QUALITY.md`; `REQUESTS_REGISTRY.md` REQ-021; `INDEX.md`; `app/benchmark/compare_insights_models.py` (referenciado en spike)  
+**Problema**: Comparación local/API para insights era táctica; faltaba **registro tipo spike** (objetivo, metodología, hallazgos Ollama/Docker, contrato alineado con `rag_pipeline`).  
+**Solución**: Documento de spike + entrada REQ-021; enlaces desde índice y guía manual; checklist de secciones vía script benchmark.  
+**Impacto**: Trazabilidad para decisiones “¿todo local?”; operadores saben límites conocidos (Mistral+HTTP, `num_ctx`, timeouts, montajes Docker Mac).  
+**⚠️ NO rompe**: Pipeline producción ✅; guías previas ✅  
+
+**Verificación**:
+- [x] Spike legible y REQ-021 enlazado
+- [x] `compare_insights_models.py --help` coherente con doc §3
+
+### 102. Admin UI: modelo Ollama para insights + listado desde Ollama ✅
+**Fecha**: 2026-03-28  
+**Ubicación**: `pipeline_runtime_store.py` (`insights.llm.ollama_model`, `write_insights_llm`); `insights_pipeline_control.py` (`fetch_ollama_models`, `ollama_model_for_insights`, snapshot); `rag_pipeline.py` (`_effective_insights_ollama_model`, cadena insights); `app.py` (`InsightsPipelineUpdate.ollama_model`, `generate_insights_for_queue`); `PipelineAnalysisPanel.jsx` + CSS  
+**Problema**: Solo se podía elegir proveedor (OpenAI/Perplexity/Local) en UI; el nombre del modelo Ollama venía solo de `LLM_MODEL` en servidor.  
+**Solución**: Persistencia opcional `ollama_model` en KV; GET admin devuelve `ollama_models` desde `http://OLLAMA_HOST:PORT/api/tags`; desplegable en panel Insights; resolución: override UI → `OLLAMA_LLM_MODEL` → `LLM_MODEL` si `LLM_PROVIDER=ollama` → `mistral`.  
+**Impacto**: Modo auto con cadena que incluye Ollama sustituye cliente Ollama si hay override en UI.  
+**⚠️ NO rompe**: Orden manual proveedores ✅; pausas ✅  
+
+**Verificación**:
+- [ ] GET `/api/admin/insights-pipeline` incluye `ollama_models` y `ollama_model`
+- [ ] Cambiar modelo en UI y generar insight → `llm_source` o logs coherentes
+
+### 101. Comparación Ollama vs OpenAI: solo manual (sin endpoint en app) ✅
+**Fecha**: 2026-03-28  
+**Ubicación**: `docs/ai-lcd/03-operations/LOCAL_LLM_VS_OPENAI_INSIGHTS.md` (sin `POST /api/admin/insights-compare`)  
+**Problema**: Se valoró un endpoint admin para comparar insights en paralelo; el equipo prefiere decidir local vs API ejecutando pruebas fuera de la app.  
+**Solución**: Guía operativa: `curl` a Ollama y a OpenAI con el mismo texto; opcional alternar `LLM_PROVIDER` / orden manual admin en Docker.  
+**Impacto**: Menos superficie API; comparación bajo control del operador.  
+**⚠️ NO rompe**: Pipeline insights, admin pausas/proveedores ✅  
+
+**Verificación**:
+- [ ] Doc actualizado; ninguna ruta `insights-compare` en backend
 
 ---
 
@@ -13,7 +50,33 @@
 cd app && docker compose build backend frontend && docker compose up -d backend frontend
 ```
 
-Opcional antes de rebuild backend: `POST /api/workers/shutdown` con **Bearer token rol ADMIN** (ver `03-operations/ORDERLY_SHUTDOWN_AND_REBUILD.md`).
+Opcional antes de rebuild backend: `POST /api/workers/shutdown` con **Bearer token rol ADMIN** (ver `03-operations/ORDERLY_SHUTDOWN_AND_REBUILD.md`). Tras shutdown, las pausas quedan **persistidas** en BD hasta reanudar desde UI o `PUT /api/admin/insights-pipeline`.
+
+### 100. Pausas de pipeline persistentes (PostgreSQL) + shutdown en pausa total ✅
+**Fecha**: 2026-03-28  
+**Ubicación**: migración `016_pipeline_runtime_kv.py`; `pipeline_runtime_store.py`; `insights_pipeline_control.py` (caché + `refresh_from_db`); `app.py` startup + `POST /api/workers/shutdown`; `master_pipeline_scheduler` + `worker_pool.py` (`is_step_paused` por `task_type`); `PUT/GET /api/admin/insights-pipeline` (`pause_steps`, `pause_all`, `resume_all`); frontend `PipelineAnalysisPanel.jsx` (admin integrado)  
+**Problema**: Pausas solo en RAM; reinicio las perdía; no había pausa unificada con shutdown ni extensión clara a otros pasos.  
+**Solución**: Tabla `pipeline_runtime_kv`; claves `pause.<task_type>` (ocr, chunking, indexing, insights, indexing_insights) y `insights.llm`. Caché en proceso sincronizada al arranque y tras cada escritura. Shutdown admin llama `apply_worker_shutdown_pauses()` → `set_all_pauses(True)`.  
+**Impacto**: Nuevos pasos: añadir fila en `KNOWN_PAUSE_STEPS` y respetar en schedulers si aplica.  
+**⚠️ NO rompe**: Lógica de insights/LLM existente ✅; arranque sin filas en KV (= nada pausado) ✅  
+
+**Verificación**:
+- [ ] Migración 016 aplicada
+- [ ] Pausar OCR → master/pool no despachan OCR; reinicio backend → sigue pausado
+- [ ] Shutdown → todas las pausas true en UI; Reanudar todo → vuelve a procesar
+
+### 99. Insights: pausar pasos (LLM / indexación Qdrant) + orden de proveedores ✅
+**Fecha**: 2026-03-28  
+**Ubicación**: `backend/insights_pipeline_control.py`; `app.py` (`generate_insights_for_queue`, master scheduler, jobs); `worker_pool.py`; `rag_pipeline.py` (`generate_insights_with_fallback` + `_build_insights_chain_ordered`); `GET|PUT /api/admin/insights-pipeline`; frontend `PipelineAnalysisPanel.jsx`, `PipelineDashboard.jsx`, `App.jsx`  
+**Problema**: No había forma operativa de frenar solo insights ni de forzar OpenAI / Perplexity / Ollama sin tocar `.env`.  
+**Solución**: Estado en memoria (por proceso): `pause_generation`, `pause_indexing_insights`; modo `auto` (cadena .env) vs `manual` (orden explícito). Workers pool y master scheduler respetan pausas.  
+**Impacto**: Admin ve panel en dashboard; API admin para automatización.  
+**⚠️ NO rompe**: Cadena LLM por defecto ✅; chat/RAG principal ✅; OCR/indexado documentos ✅  
+
+**Verificación**:
+- [ ] PUT pausa generación → no nuevos insights; quitar pausa → retoma
+- [ ] PUT pausa indexación insights → no nuevos `indexing_insights` en pool
+- [ ] Modo manual con orden solo Ollama → `llm_source` coherente en insights
 
 ### 98. Workers start/shutdown: solo ADMIN (JWT Bearer) ✅
 **Fecha**: 2026-03-27  
@@ -2464,6 +2527,16 @@ Performance: +40% vs SQLite
   - Rebuilds subsecuentes: 2-3 min (3-5x más rápido)
   - Cambios de código: ~30 sec
 
+### 7. Dashboard Visual Refresh ✅
+**Ubicación**: `frontend/src/components/PipelineDashboard.jsx`, `dashboard/ParallelPipelineCoordinates.jsx`, `dashboard/WorkerLoadCard.jsx`, `backend/app.py` (`/api/dashboard/parallel-data`)  
+**Problema**: Sankey y tablas de Workers/Documentos en la columna derecha generaban ruido y no seguían la guía AI-LCD (doc→news→insight).  
+**Solución**:
+- Eliminado `PipelineSankeyChartWithZoom` + tablas (`WorkersTable`, `DocumentsTableWithGrouping`).  
+- Nuevo endpoint `/api/dashboard/parallel-data` que entrega documento + news_items + estados de insights/indexing.  
+- Nuevo componente `ParallelPipelineCoordinates` (D3) donde cada documento se bifurca en sus noticias y estados de insight/indexing; sincroniza con filtros globales.  
+- `WorkerLoadCard` mantiene la mini gráfica de barras de workers en una tarjeta compacta (sin tabla).  
+**Impacto**: Vista derecha limpia, coherente con AI-LCD, drill-down doc→news→insight disponible sin tablas; workers siguen mostrando capacidad activa vía mini chart.
+
 ---
 
 ## 🏗️ DOCKER OPTIMIZATION ARCHITECTURE
@@ -3098,4 +3171,3 @@ docker logs rag-ocr-service --tail 20 2>&1
 **⚠️ NO rompe**: Compose; respeta `COMPOSE_FILE` en `app/.env`
 **Verificación**:
 - [x] `make help` ejecuta
-

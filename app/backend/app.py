@@ -6,7 +6,7 @@ Manages: OCR, Embedding, RAG Pipeline, Qdrant Integration
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 import os
 import hashlib
@@ -439,6 +439,21 @@ CHUNK_OVERLAP = max(0, int(os.getenv("CHUNK_OVERLAP", "300")))
 INSIGHTS_QUEUE_ENABLED = os.getenv("INSIGHTS_QUEUE_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 INSIGHTS_THROTTLE_SECONDS = max(10, int(os.getenv("INSIGHTS_THROTTLE_SECONDS", "60")))
 INSIGHTS_MAX_RETRIES = max(1, min(10, int(os.getenv("INSIGHTS_MAX_RETRIES", "5"))))
+
+
+def generate_insights_for_queue(context: str, label: str):
+    """Call insights LLM with runtime provider order from admin settings."""
+    import insights_pipeline_control as _ipc
+
+    order = _ipc.provider_order_for_rag()
+    om = _ipc.ollama_model_for_insights()
+    return rag_pipeline.generate_insights_with_fallback(
+        context,
+        label,
+        provider_order=order,
+        insights_ollama_model=om,
+    )
+
 
 # Create upload folder if it doesn't exist
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -1037,10 +1052,14 @@ def master_pipeline_scheduler():
                 pending_tasks = cursor.fetchall()
                 
                 dispatched_count = 0
+                import insights_pipeline_control as _ipc
                 for row in pending_tasks:
                     task_id, doc_id, filename, task_type, priority = row['id'], row['document_id'], row['filename'], row['task_type'], row['priority']
                     if dispatched_count >= slots_available:
                         break
+
+                    if _ipc.is_step_paused(str(task_type).lower()):
+                        continue
                     
                     # Verificar si este tipo de tarea ya alcanzó su límite
                     current_count = active_by_type.get(task_type.upper(), 0)
@@ -1265,6 +1284,10 @@ async def startup_event():
             openai_api_key=OPENAI_API_KEY,
         )
         logger.info("✅ RAG Pipeline ready")
+
+        import insights_pipeline_control as _ipc_controls
+        _ipc_controls.refresh_from_db()
+        logger.info("✅ Pipeline runtime controls (pauses / insights LLM) loaded from database")
 
         # 6. Backup Scheduler
         logger.info("🔗 [6/6] Starting Backup Scheduler...")
@@ -1493,6 +1516,18 @@ def generate_weekly_report_for_week(week_start: str) -> bool:
 # PYDANTIC MODELS
 # ============================================================================
 
+class InsightsPipelineUpdate(BaseModel):
+    """Partial update for pipeline runtime controls (admin); persisted in pipeline_runtime_kv."""
+    pause_generation: Optional[bool] = None
+    pause_indexing_insights: Optional[bool] = None
+    pause_steps: Optional[Dict[str, bool]] = None
+    pause_all: Optional[bool] = None
+    resume_all: Optional[bool] = None
+    provider_mode: Optional[str] = None
+    provider_order: Optional[List[str]] = None
+    ollama_model: Optional[str] = None  # empty/null clears override (use env / default)
+
+
 class QueryRequest(BaseModel):
     query: str
     top_k: int = 5
@@ -1544,6 +1579,32 @@ class DocumentStatusItem(BaseModel):
     news_items_count: int = 0
     insights_done: int = 0
     insights_total: int = 0
+
+
+class ParallelNewsItem(BaseModel):
+    news_item_id: str
+    document_id: str
+    title: Optional[str] = None
+    item_index: int = 0
+    news_status: Optional[str] = None
+    insight_status: Optional[str] = None
+    index_status: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class ParallelDocumentFlow(BaseModel):
+    document_id: str
+    filename: str
+    status: str
+    processing_stage: Optional[str] = None
+    ingested_at: Optional[str] = None
+    news_items_total: int = 0
+    news_items: List[ParallelNewsItem] = Field(default_factory=list)
+
+
+class ParallelFlowResponse(BaseModel):
+    documents: List[ParallelDocumentFlow]
+    meta: Dict[str, int]
 
 
 class HealthResponse(BaseModel):
@@ -2262,6 +2323,9 @@ def run_insights_queue_job():
     """Process one document from the insights queue (LLM report per file). Retry with backoff on 429."""
     if not INSIGHTS_QUEUE_ENABLED or not rag_pipeline or not qdrant_connector:
         return
+    import insights_pipeline_control as _ipc
+    if _ipc.is_generation_paused():
+        return
     pending = document_insights_store.get_next_pending(limit=1)
     if not pending:
         return
@@ -2285,7 +2349,7 @@ def run_insights_queue_job():
             context = context[:80000] + "\n\n[... truncado ...]"
         for attempt in range(INSIGHTS_MAX_RETRIES):
             try:
-                content, _ = rag_pipeline.generate_insights_with_fallback(context, filename)
+                content, _ = generate_insights_for_queue(context, filename)
                 document_insights_store.set_status(document_id, document_insights_store.STATUS_DONE, content=content)
                 logger.info(f"Insights generated for {filename}")
                 return
@@ -2305,6 +2369,9 @@ def run_insights_queue_job():
 def run_news_item_insights_queue_job():
     """Process one news item from the insights queue (LLM report per noticia). Retry with backoff on 429."""
     if not INSIGHTS_QUEUE_ENABLED or not rag_pipeline or not qdrant_connector:
+        return
+    import insights_pipeline_control as _ipc
+    if _ipc.is_generation_paused():
         return
     pending = news_item_insights_store.get_next_pending(limit=1)
     if not pending:
@@ -2340,7 +2407,7 @@ def run_news_item_insights_queue_job():
         label = f"{filename} — {title}".strip(" —")
         for attempt in range(INSIGHTS_MAX_RETRIES):
             try:
-                content, llm_source = rag_pipeline.generate_insights_with_fallback(context, label)
+                content, llm_source = generate_insights_for_queue(context, label)
                 news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_DONE, content=content, llm_source=llm_source)
                 logger.info(f"News item insights generated for {news_item_id} ({title}) via {llm_source}")
                 return
@@ -2437,7 +2504,7 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
         for attempt in range(INSIGHTS_MAX_RETRIES):
             try:
                 content, llm_source = await asyncio.to_thread(
-                    rag_pipeline.generate_insights_with_fallback,
+                    generate_insights_for_queue,
                     context,
                     label
                 )
@@ -2515,7 +2582,10 @@ def run_news_item_insights_queue_job_parallel():
     """
     if not INSIGHTS_QUEUE_ENABLED or not rag_pipeline or not qdrant_connector:
         return
-    
+    import insights_pipeline_control as _ipc
+    if _ipc.is_generation_paused():
+        return
+
     try:
         parallel_workers = max(2, min(
             int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "2")),
@@ -2862,7 +2932,7 @@ async def _handle_insights_task(task_data: dict, worker_id: str):
         context = "\n\n".join(texts)[:80000]
         label = f"{filename} — {title}".strip(" —")
         
-        content, llm_source = rag_pipeline.generate_insights_with_fallback(context, label)
+        content, llm_source = generate_insights_for_queue(context, label)
         news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_DONE, content=content, llm_source=llm_source)
         
         processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", 'insights', 'completed')
@@ -4511,6 +4581,43 @@ async def update_logging_config(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.get("/api/admin/insights-pipeline")
+async def get_insights_pipeline_settings(current_user: CurrentUser = Depends(get_current_user)):
+    """Runtime insights controls: pause steps, provider order vs .env chain."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    import insights_pipeline_control as _ipc
+    return _ipc.get_snapshot()
+
+
+@app.put("/api/admin/insights-pipeline")
+async def put_insights_pipeline_settings(
+    body: InsightsPipelineUpdate,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    import insights_pipeline_control as _ipc
+    try:
+        patch = body.model_dump(exclude_unset=True)
+        ollama_kw = {}
+        if "ollama_model" in patch:
+            ollama_kw["ollama_model"] = patch["ollama_model"]
+        snap = _ipc.update_settings(
+            pause_generation=body.pause_generation,
+            pause_indexing_insights=body.pause_indexing_insights,
+            pause_steps=body.pause_steps,
+            pause_all=body.pause_all,
+            resume_all=body.resume_all,
+            provider_mode=body.provider_mode,
+            provider_order=body.provider_order,
+            **ollama_kw,
+        )
+        return {"success": True, **snap}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.get("/api/admin/data-integrity")
 async def get_data_integrity(current_user: CurrentUser = Depends(get_current_user)):
     """Data integrity metrics: files vs DB, insights linkage, schema validation."""
@@ -5269,6 +5376,127 @@ async def get_dashboard_summary(
     except Exception as e:
         logger.error(f"Error fetching dashboard summary: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error fetching summary")
+
+
+# ============================================================================
+# PARALLEL FLOW DATA - Document + news insights for dashboard
+# ============================================================================
+
+
+def _fetch_parallel_news_items(doc_ids: List[str], max_news_per_doc: int) -> Dict[str, List[Dict]]:
+    """Load news items (and their insight/index status) for a set of documents."""
+    if not doc_ids or max_news_per_doc <= 0:
+        return {}
+
+    conn = news_item_store.get_connection()
+    cursor = conn.cursor()
+    try:
+        placeholders = ",".join(["%s"] * len(doc_ids))
+        cursor.execute(
+            f"""
+            SELECT * FROM (
+                SELECT
+                    ni.news_item_id,
+                    ni.document_id,
+                    ni.item_index,
+                    ni.title,
+                    ni.status AS news_status,
+                    nii.status AS insight_status,
+                    nii.error_message,
+                    nii.indexed_in_qdrant_at,
+                    ROW_NUMBER() OVER (PARTITION BY ni.document_id ORDER BY ni.item_index ASC) AS rn
+                FROM news_items ni
+                LEFT JOIN news_item_insights nii ON ni.news_item_id = nii.news_item_id
+                WHERE ni.document_id IN ({placeholders})
+            ) sub
+            WHERE rn <= %s
+            ORDER BY document_id, item_index
+            """,
+            tuple(doc_ids + [max_news_per_doc]),
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    result: Dict[str, List[Dict]] = {doc_id: [] for doc_id in doc_ids}
+    for row in rows:
+        doc_id = row["document_id"]
+        indexed_at = row.get("indexed_in_qdrant_at")
+        if isinstance(indexed_at, datetime):
+            indexed_at = indexed_at.isoformat()
+        insight_status = row.get("insight_status") or None
+        if indexed_at:
+            index_status = "indexed"
+        elif insight_status == "indexing":
+            index_status = "indexing"
+        elif insight_status == "done":
+            index_status = "ready"
+        else:
+            index_status = "pending"
+
+        payload = {
+            "news_item_id": row["news_item_id"],
+            "document_id": doc_id,
+            "title": row.get("title"),
+            "item_index": int(row.get("item_index") or 0),
+            "news_status": row.get("news_status"),
+            "insight_status": insight_status,
+            "index_status": index_status,
+            "error_message": row.get("error_message"),
+        }
+        result.setdefault(doc_id, []).append(payload)
+
+    return result
+
+
+@app.get("/api/dashboard/parallel-data", response_model=ParallelFlowResponse)
+async def get_parallel_coordinates_data(
+    limit: int = 80,
+    max_news_per_doc: int = 20,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Return document + news_item slices for the Parallel Coordinates visualization."""
+    limit = max(10, min(limit, 250))
+    max_news_per_doc = max(1, min(max_news_per_doc, 50))
+
+    try:
+        rows = document_status_store.get_all()
+        selected_docs = rows[:limit]
+        doc_ids = [row["document_id"] for row in selected_docs]
+        news_totals = news_item_store.get_counts_by_document_ids(doc_ids) if doc_ids else {}
+        news_map = _fetch_parallel_news_items(doc_ids, max_news_per_doc)
+
+        documents_payload: List[ParallelDocumentFlow] = []
+        for row in selected_docs:
+            doc_id = row["document_id"]
+            ingested_at = row.get("ingested_at")
+            if isinstance(ingested_at, datetime):
+                ingested_at = ingested_at.isoformat()
+
+            news_items = [ParallelNewsItem(**item) for item in news_map.get(doc_id, [])]
+            documents_payload.append(
+                ParallelDocumentFlow(
+                    document_id=doc_id,
+                    filename=row["filename"],
+                    status=row["status"],
+                    processing_stage=row.get("processing_stage"),
+                    ingested_at=ingested_at,
+                    news_items_total=int(news_totals.get(doc_id, 0) or 0),
+                    news_items=news_items,
+                )
+            )
+
+        return ParallelFlowResponse(
+            documents=documents_payload,
+            meta={
+                "limit": limit,
+                "max_news_per_doc": max_news_per_doc,
+                "total_documents": len(documents_payload),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error building parallel dashboard data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Error fetching parallel data")
 
 
 # ============================================================================
@@ -6441,17 +6669,22 @@ async def shutdown_workers_gracefully(current_user: CurrentUser = Depends(requir
             logger.info(f"✅ {orphaned_tasks} tareas huérfanas corregidas")
         
         conn.close()
-        
+
+        import insights_pipeline_control as _ipc_shutdown
+        _ipc_shutdown.apply_worker_shutdown_pauses()
+        logger.info("✅ Pausas de pipeline persistidas en BD (todos los pasos) tras shutdown de workers")
+
         logger.info("✅ Shutdown ordenado completado exitosamente")
-        
+
         return {
             "status": "success",
-            "message": "Shutdown ordenado completado",
+            "message": "Shutdown ordenado completado; pipeline en pausa persistida (reanudar desde UI o PUT /api/admin/insights-pipeline)",
             "details": {
                 "tasks_rolled_back": total_processing,
                 "worker_tasks_cleaned": total_active,
                 "orphaned_tasks_fixed": orphaned_tasks,
-                "tasks_by_type": {row['task_type']: row['count'] for row in processing_tasks} if processing_tasks else {}
+                "tasks_by_type": {row['task_type']: row['count'] for row in processing_tasks} if processing_tasks else {},
+                "pipeline_pauses_persisted": True,
             }
         }
         

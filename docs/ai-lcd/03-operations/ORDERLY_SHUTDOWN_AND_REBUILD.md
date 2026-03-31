@@ -1,7 +1,7 @@
 # Shutdown ordenado y rebuild (Backend / Frontend)
 
 > **Fuente única** para parar workers con coherencia en BD y reconstruir imágenes Docker.  
-> **Fase**: 03-operations | **Última actualización**: 2026-03-27
+> **Fase**: 03-operations | **Última actualización**: 2026-03-28
 
 ---
 
@@ -27,6 +27,7 @@ Obtener token: `POST /api/auth/login` con usuario `admin` (respuesta incluye `ac
 1. Detiene `generic_worker_pool` si está activo.
 2. Pasa filas `processing_queue` con `status = 'processing'` a **`pending`** (reprocesables).
 3. Marca `worker_tasks` en `assigned` / `started` como **`error`** con mensaje *Shutdown ordenado…* (los filtros de análisis suelen excluirlos como errores “reales”; ver dashboard).
+4. **Persiste en PostgreSQL** (`pipeline_runtime_kv`) **pausa en todos los pasos** del pipeline (OCR, chunking, indexing, insights LLM, indexado de insights). Tras reiniciar el backend, **no** se reanuda el trabajo hasta **«Reanudar todo»** en el dashboard (admin) o `PUT /api/admin/insights-pipeline` con `resume_all: true`. `POST /api/workers/start` solo levanta el pool; **no** quita las pausas.
 
 **Ejemplo** (sustituir `$TOKEN` por el JWT del admin):
 
@@ -52,7 +53,7 @@ docker compose build backend
 docker compose up -d backend
 ```
 
-Las migraciones Yoyo (p. ej. **015** — un solo worker activo por documento+tarea) se aplican al arrancar el backend.
+Las migraciones Yoyo (p. ej. **015** — worker único; **016** — `pipeline_runtime_kv` para pausas) se aplican al arrancar el backend.
 
 ---
 

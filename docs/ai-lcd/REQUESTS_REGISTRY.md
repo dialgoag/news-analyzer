@@ -2,9 +2,9 @@
 
 > **Propósito**: Rastrear TODAS las peticiones del usuario con trazabilidad completa
 > 
-> **Última actualización**: 2026-03-27  
-> **Total peticiones**: 19  
-> **Completadas**: 17 | Pendientes: 2 | Rechazadas: 0
+> **Última actualización**: 2026-03-31  
+> **Total peticiones**: 21  
+> **Completadas**: 18 | Pendientes: 3 (REQ-014, REQ-021, otros) | Rechazadas: 0
 
 > **Pendientes técnicos** (mejoras, fixes): ver `PENDING_BACKLOG.md` (fuente única).
 
@@ -33,10 +33,39 @@
 | **REQ-017** | 2026-03-16 | "BUG: 429 OpenAI Rate Limit — insights bloqueados" | ✅ **IMPLEMENTADA** | v3.0.3 | **#63** |
 | **REQ-018** | 2026-03-16 | "BUG: Crashed workers loop — recovery a None" | ✅ **COMPLETADA** | v3.0.3 | **#64** |
 | **REQ-019** | 2026-03-27 | "Doc AI-LCD + workers OCR duplicados + login + shutdown/rebuild" | ✅ **COMPLETADA** | v3.0.12 | **#96–#98** |
+| **REQ-020** | 2026-03-28 | "Pausar pasos pipeline insights + elegir proveedor LLM (OpenAI/Perplexity/local)" | ✅ **COMPLETADA** | v3.0.14 | **#99, #100** |
+| **REQ-021** | 2026-03-31 | "Refactor Backend SOLID + Hexagonal + DDD + LangChain/LangGraph" | 🔄 **EN PROGRESO** | v4.0.0 | — |
+| **REQ-021** | 2026-03-30 | **Spike**: análisis LLM local vs API para **calidad** de insights (sin producto obligatorio) | ✅ **COMPLETADA** (doc) | — | **#103** (doc spike) |
 
 ---
 
 ## 📌 PETICIONES DETALLADAS
+
+### **REQ-021: Spike — LLM local vs API para insights (calidad) (2026-03-30)**
+
+**Estado**: ✅ COMPLETADA (documentación de análisis; decisiones de arquitectura siguen siendo del equipo)  
+**Tipo**: Spike / investigación  
+**Doc maestro**: [`02-construction/SPIKE_REQ021_LOCAL_LLM_INSIGHTS_QUALITY.md`](./02-construction/SPIKE_REQ021_LOCAL_LLM_INSIGHTS_QUALITY.md)
+
+**Objetivo**: Evaluar si insights por noticia pueden ejecutarse **en local** con **calidad** comparable a API; **latencia** secundaria.
+
+**Entregables**:
+- Spike consolidado (metodología, contrato con `rag_pipeline`, hallazgos Docker/Ollama/Mistral, riesgos).
+- Script `app/benchmark/compare_insights_models.py` (mismo prompt canónico; salidas bajo `benchmark/insights_results/runs`).
+- Guía manual existente: `03-operations/LOCAL_LLM_VS_OPENAI_INSIGHTS.md` (complementa; el spike es la narrativa REQ).
+
+**No alcance**: Endpoint admin “doble insights” (ya descartado en #101). No cambio de producto obligatorio tras el spike.
+
+---
+
+### **REQ-020: Pausa insights + proveedores LLM (2026-03-28)**
+
+**Estado**: ✅ COMPLETADA  
+**Fixes**: #99 — UI/API pausas insights + orden LLM; **#100** — persistencia `pipeline_runtime_kv`, pausas por etapa (OCR…), shutdown → pausa total en BD.
+
+**Alcance**: Pausas persisten tras reinicio; `POST /api/workers/shutdown` activa todas las pausas; extensible vía `KNOWN_PAUSE_STEPS`.
+
+---
 
 ### **REQ-019: Documentación centralizada + fixes workers/login (2026-03-27)**
 
@@ -305,6 +334,151 @@ Copiar y rellenar cuando haya nueva petición:
 - `PLAN_AND_NEXT_STEP.md` § v1.2: Master Pipeline versión
 - `backup_scheduler.py` línea 186: add_job() method
 - `app.py` línea 498: master_pipeline_scheduler() function
+
+---
+
+### **REQ-021: "Refactor Backend SOLID + Hexagonal + DDD + LangChain/LangGraph"**
+
+**Metadata**:
+- **Fecha**: 2026-03-31
+- **Sesión**: Sesión 46 (Backend Refactor Hexagonal)
+- **Prioridad**: 🔴 CRÍTICA (prerequisito para cambios de enfoque)
+- **Estado**: 🔄 **EN PROGRESO**
+
+**Descripción Original**:
+> "quiero que hagamos Considerar PEND-009 (Refactor Backend SOLID) - sesión larga pues pretendo cambiar el enfoque y creo que sera mas facil si tenemos bien organizado el backend, que piensas?"
+>
+> "en este refactor considera el uso de langchain pydantic lang mem y langgraph para lo que este relacionado con los insights"
+>
+> "por lo tengo deberiamos tener un folder o una estructura de carpetas quizas diferente, quizas algun enfoque mas como arquitectura hexagonal para respetar la logica de la pipeline? que sugieres? recuerda que tenemos orientado a eventos y una pipeline que es manejada por un master scheduler"
+
+**Problema Identificado**:
+1. **`app.py` monolítico**: 6,718 líneas mezclando endpoints, workers, scheduler, lógica de negocio
+2. **`database.py` grande**: 1,495 líneas con 10+ stores en un archivo
+3. **Sin testabilidad**: Imposible testear sin I/O completo
+4. **LLM sin estructura**: Insights usa código ad-hoc, no LangChain/LangGraph profesional
+5. **Difícil cambiar enfoque**: Cualquier cambio arquitectónico requiere tocar todo
+6. **Event-driven sin estructura clara**: Eventos mezclados con lógica de negocio
+
+**Solución Propuesta**:
+Arquitectura **Hexagonal (Ports & Adapters) + DDD + Event-Driven** con integración completa de LangChain/LangGraph.
+
+**Estructura objetivo**:
+```
+backend/
+├── core/                          # 🟦 NÚCLEO
+│   ├── domain/                    # Lógica pura (DDD)
+│   │   ├── entities/              # Document, NewsItem, Worker
+│   │   ├── value_objects/         # DocumentId, TextHash
+│   │   ├── events/                # 🔥 Domain Events (Event-Driven)
+│   │   └── services/              # Domain services
+│   ├── application/               # Orquestación (Use Cases)
+│   │   ├── commands/              # CQRS commands
+│   │   ├── queries/               # CQRS queries
+│   │   ├── services/              # Pipeline orchestrator
+│   │   └── events/                # 🔥 Event Bus
+│   └── ports/                     # 🔌 Interfaces (Hexagonal)
+│       ├── repositories/          # Repository ports
+│       ├── ocr_port.py
+│       ├── llm_port.py
+│       └── vector_store_port.py
+├── adapters/                      # 🟨 ADAPTADORES
+│   ├── driving/                   # 🟧 Entrada (REST API)
+│   │   └── api/v1/routers/
+│   └── driven/                    # 🟨 Salida (PostgreSQL, OpenAI)
+│       ├── persistence/postgres/
+│       ├── ocr/ocrmypdf_adapter.py
+│       ├── llm/                   # 🔥 LangChain
+│       │   ├── chains/insights_chain.py
+│       │   └── providers/
+│       ├── graphs/                # 🔥 LangGraph
+│       │   └── insights_graph.py
+│       ├── memory/                # 🔥 LangMem
+│       └── vector_store/qdrant_adapter.py
+├── workers/                       # 🟪 Background processing
+│   ├── ocr_worker.py
+│   ├── insights_worker.py         # 🔥 Usa LangGraph
+│   └── indexing_worker.py
+└── schedulers/
+    └── master_pipeline_scheduler.py
+```
+
+**Principios aplicados**:
+1. **Hexagonal Architecture**: Core independiente de I/O, ports definen contratos, adapters implementan
+2. **Domain-Driven Design**: Entities, Value Objects, Domain Events, Aggregates
+3. **Event-Driven**: Event Bus in-memory, Domain Events comunican entre capas
+4. **CQRS**: Commands modifican, Queries solo leen
+5. **Dependency Inversion**: Todo apunta hacia el core
+
+**Tecnologías LangChain**:
+- **LangChain**: Chains para insights, RAG queries, summarization
+- **LangGraph**: StateGraph para workflows multi-paso de insights
+- **LangMem**: Caché de contexto y memoria conversacional
+- **LangSmith** (futuro): Tracing y debugging de LLM calls
+
+**Fases de implementación**:
+- ✅ **FASE 0**: Documentación arquitectura (HEXAGONAL_ARCHITECTURE.md)
+- 🔄 **FASE 1**: Estructura base + utils (2-3h)
+- ⏳ **FASE 2**: Domain + Entities (2h)
+- ⏳ **FASE 3**: Infrastructure - Repositories (3h)
+- ⏳ **FASE 4**: Infrastructure - LLM (LangChain/LangGraph) (4-5h) 🔥
+- ⏳ **FASE 5**: Application - Commands/Queries (3h)
+- ⏳ **FASE 6**: Workers + Scheduler (3h)
+- ⏳ **FASE 7**: Interfaces - API Routers (2h)
+- ⏳ **FASE 8**: Testing + Verificación (2h)
+
+**Estimación total**: 20-25 horas (múltiples sesiones)
+
+**Alternativas Consideradas**:
+1. ❌ **Solo extraer utils** - No resuelve problema de fondo
+2. ❌ **Microservicios** - Overkill para monolito actual
+3. ❌ **Clean Architecture** - Más capas de las necesarias
+4. ✅ **Hexagonal + DDD** - Balance perfecto estructura/simplicidad
+
+**Impacto en Roadmap**:
+- 🚀 Prerequisito para cambio de enfoque (según usuario)
+- 🚀 Permite testing sin I/O completo
+- 🚀 LangChain/LangGraph = estándar profesional
+- 🚀 Fácil agregar nuevos providers LLM
+- 🚀 Event-Driven explícito y mantenible
+
+**Riesgos Identificados**:
+- ⚠️ Refactor largo (20-25h) - Mitigación: incremental por fases
+- ⚠️ Regresiones - Mitigación: verificar cada fase
+- ⚠️ Imports circulares - Mitigación: estructura en capas estricta
+
+**Mejoras Futuras** (post-refactor):
+- [ ] Event bus con Redis pub/sub (escalabilidad multi-instancia)
+- [ ] LangSmith integration para tracing
+- [ ] Event Sourcing (histórico completo)
+- [ ] GraphQL API como driving adapter alternativo
+
+**Linkeo a Documentación**:
+- `HEXAGONAL_ARCHITECTURE.md` - Arquitectura completa documentada
+- `BACKEND_REFACTOR_TASK.md` - Análisis estado actual
+- `SESSION_LOG.md` § Sesión 46 (cuando se complete)
+- `PENDING_BACKLOG.md` § PEND-009 → REQ-021
+
+**Notas**:
+- Esta petición **SUPERCEDE** PEND-009 (refactor básico)
+- **Cambio de enfoque** justifica el esfuerzo de refactor completo
+- **LangChain/LangGraph** = modernización de insights pipeline
+- **Hexagonal** = preparación para arquitectura futura
+- **Commit/push** del estado actual ANTES de empezar
+
+**Decisión Técnica**:
+```
+¿Por qué Hexagonal + DDD para Event-Driven?
+
+Event-Driven es un patrón de COMUNICACIÓN, no una arquitectura completa.
+
+Necesitamos:
+- Hexagonal → Estructura en capas (DÓNDE va el código)
+- DDD → Organización del dominio (QUÉ es cada cosa)
+- Event-Driven → Comunicación asíncrona (CÓMO se comunican)
+
+Domain Events de DDD + Event Bus = Event-Driven integrado naturalmente
+```
 
 ---
 

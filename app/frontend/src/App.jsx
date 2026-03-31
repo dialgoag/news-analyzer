@@ -122,7 +122,7 @@ function App() {
 
       {/* Main Content Area (View-based routing) */}
       {currentView === 'dashboard' && (
-        <DashboardView API_URL={API_URL} token={token} />
+        <DashboardView API_URL={API_URL} token={token} isAdmin={user?.role === 'admin'} />
       )}
 
       {currentView === 'query' && (

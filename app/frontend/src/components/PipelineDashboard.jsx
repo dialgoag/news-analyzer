@@ -2,19 +2,20 @@ import React, { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import { DashboardProvider } from './hooks/useDashboardFilters.jsx';
 import { API_TIMEOUT_MS } from '../config/apiConfig';
-import PipelineSankeyChartWithZoom from './dashboard/PipelineSankeyChartWithZoom';
+import ParallelPipelineCoordinates from './dashboard/ParallelPipelineCoordinates';
 import { CollapsibleSection } from './dashboard/CollapsibleSection';
 import ErrorAnalysisPanel from './dashboard/ErrorAnalysisPanel';
 import PipelineAnalysisPanel from './dashboard/PipelineAnalysisPanel';
 import StuckWorkersPanel from './dashboard/StuckWorkersPanel';
 import DatabaseStatusPanel from './dashboard/DatabaseStatusPanel';
-import WorkersTable from './dashboard/WorkersTable';
-import DocumentsTableWithGrouping from './dashboard/DocumentsTableWithGrouping';
+import WorkerLoadCard from './dashboard/WorkerLoadCard';
+import PipelineSummaryCard from './dashboard/PipelineSummaryCard';
 import './PipelineDashboard.css';
 
-export function PipelineDashboard({ API_URL, token, refreshTrigger }) {
+export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = false }) {
   const [data, setData] = useState(null);
   const [documents, setDocuments] = useState([]); // NEW: Lista de documentos individuales
+  const [parallelData, setParallelData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -28,14 +29,28 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger }) {
         timeout: API_TIMEOUT_MS
       });
       setData(summaryResponse.data);
-      try {
-        const docsResponse = await axios.get(`${API_URL}/api/documents`, {
+
+      const [docsResponse, parallelResponse] = await Promise.allSettled([
+        axios.get(`${API_URL}/api/documents`, {
           headers: { Authorization: `Bearer ${token}` },
           timeout: API_TIMEOUT_MS
-        });
-        setDocuments(docsResponse.data?.documents || []);
-      } catch (docErr) {
-        console.warn('Could not fetch documents list:', docErr);
+        }),
+        axios.get(`${API_URL}/api/dashboard/parallel-data`, {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: API_TIMEOUT_MS
+        })
+      ]);
+
+      if (docsResponse.status === 'fulfilled') {
+        setDocuments(docsResponse.value.data?.documents || []);
+      } else {
+        console.warn('Could not fetch documents list:', docsResponse.reason);
+      }
+
+      if (parallelResponse.status === 'fulfilled') {
+        setParallelData(parallelResponse.value.data || null);
+      } else {
+        console.warn('Could not fetch parallel data:', parallelResponse.reason);
       }
       setError(null);
     } catch (err) {
@@ -133,7 +148,12 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger }) {
           </CollapsibleSection>
 
           <CollapsibleSection title="Análisis de Pipeline" icon="🔄" defaultCollapsed={false}>
-            <PipelineAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+            <PipelineAnalysisPanel
+              API_URL={API_URL}
+              token={token}
+              refreshTrigger={refreshTrigger}
+              isAdmin={isAdmin}
+            />
           </CollapsibleSection>
 
           <CollapsibleSection title="Workers Stuck" icon="⏱️" defaultCollapsed>
@@ -146,15 +166,21 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger }) {
         </div>
 
         <div className="visualizations-grid">
-          <CollapsibleSection title="Flujo (Sankey)" icon="📊" defaultCollapsed>
-            <PipelineSankeyChartWithZoom data={data} documents={documents} />
-          </CollapsibleSection>
-          <div className="tables-grid-collapsible">
-            <CollapsibleSection title="Workers" icon="👷" defaultCollapsed={false}>
-              <WorkersTable API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+          <div className="visualizations-row">
+            <CollapsibleSection title="Resumen Pipeline" icon="🧭" defaultCollapsed={false}>
+              <PipelineSummaryCard
+                files={files}
+                newsItems={newsItems}
+                insights={insightsData}
+              />
             </CollapsibleSection>
-            <CollapsibleSection title="Documentos" icon="📄" defaultCollapsed={false}>
-              <DocumentsTableWithGrouping API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+            <CollapsibleSection title="Carga de Workers" icon="👷" defaultCollapsed={false}>
+              <WorkerLoadCard API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+            </CollapsibleSection>
+          </div>
+          <div className="visualizations-row visualizations-row--full">
+            <CollapsibleSection title="Coordenadas Paralelas" icon="🛰️" defaultCollapsed={false}>
+              <ParallelPipelineCoordinates data={parallelData} documents={documents} />
             </CollapsibleSection>
           </div>
         </div>

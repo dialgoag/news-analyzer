@@ -2,7 +2,7 @@
 
 > Guía rápida para navegar la documentación consolidada del NewsAnalyzer-RAG
 
-**Última actualización**: 2026-03-27  
+**Última actualización**: 2026-03-30  
 **Documentación consolidada**: ✅ Yes
 
 **Principio**: Evitar redundancia — cada tema tiene una **fuente única**. Ej.: variables de entorno → `ENVIRONMENT_CONFIGURATION.md`; pipeline stages → `PIPELINE_GLOSARIO.md`.
@@ -58,6 +58,7 @@
 | **EVENT_DRIVEN_ARCHITECTURE.md** | Blueprint: database semaphores | `ai-lcd/` |
 | **ARCHITECTURE_DETAILED.md** | Stack completo | `02-construction/` |
 | **DATA_FLOWS.md** | Upload → OCR → RAG → Response | `02-construction/` |
+| **SPIKE_REQ021_LOCAL_LLM_INSIGHTS_QUALITY.md** | Spike: LLM local vs API para insights (calidad); REQ-021 | `02-construction/` |
 | **MIGRATIONS_SYSTEM.md** | Yoyo, migraciones 001–015 | `02-construction/` |
 
 ### ✅ Operaciones
@@ -67,6 +68,7 @@
 | **ENVIRONMENT_CONFIGURATION.md** | Variables de entorno | `03-operations/` |
 | **TROUBLESHOOTING_GUIDE.md** | Problemas y soluciones | `03-operations/` |
 | **ORDERLY_SHUTDOWN_AND_REBUILD.md** | Shutdown API + rebuild backend/frontend | `03-operations/` |
+| **LOCAL_LLM_VS_OPENAI_INSIGHTS.md** | Comparación manual curl Ollama/OpenAI (complemento REQ-021) | `03-operations/` |
 | **DOCKER.md** | Docker Compose unificado (CPU/GPU) | `app/docs/` |
 | **PERFORMANCE_OPTIMIZATION.md** | Optimizaciones | `03-operations/` |
 
@@ -97,6 +99,9 @@
 **...mejoras pendientes / backlog?**
 → `PENDING_BACKLOG.md` (fuente única de pendientes técnicos)
 → `REQUESTS_REGISTRY.md` (peticiones usuario, ej. REQ-014)
+
+**...spike LLM local vs API para insights?**
+→ `02-construction/SPIKE_REQ021_LOCAL_LLM_INSIGHTS_QUALITY.md` (REQ-021); script `app/benchmark/compare_insights_models.py`
 
 **...cómo verificar deduplicación?**
 → `CONSOLIDATED_STATUS.md § 🔍 VERIFICACIÓN PRÓXIMA`

@@ -44,6 +44,8 @@ COPY backend/pipeline_states.py .
 COPY backend/worker_pool.py .
 COPY backend/migration_runner.py .
 COPY backend/file_ingestion_service.py .
+COPY backend/pipeline_runtime_store.py .
+COPY backend/insights_pipeline_control.py .
 COPY backend/migrations/ ./migrations/
 COPY backend/entrypoint.sh .
 RUN chmod +x /app/entrypoint.sh

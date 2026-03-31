@@ -1,7 +1,7 @@
 # Backlog Pendiente - NewsAnalyzer-RAG
 
 > **Fuente única** de pendientes técnicos (mejoras, fixes menores).
-> **Última actualización**: 2026-03-18
+> **Última actualización**: 2026-03-31
 
 ---
 
@@ -10,9 +10,11 @@
 | Fuente | Contenido | Ubicación |
 |--------|-----------|-----------|
 | **Este archivo** | Mejoras técnicas (PEND-XXX) | PENDING_BACKLOG.md |
-| **REQUESTS_REGISTRY** | Peticiones usuario (REQ-XXX) | REQUESTS_REGISTRY.md § REQ-014 |
+| **REQUESTS_REGISTRY** | Peticiones usuario (REQ-XXX) | REQUESTS_REGISTRY.md § REQ-014, REQ-021 |
 
-**Petición usuario pendiente**: REQ-014 — Mejoras UX Dashboard (4 sub-peticiones). Ver `REQUESTS_REGISTRY.md`.
+**Peticiones usuario pendientes**: 
+- REQ-014 — Mejoras UX Dashboard (4 sub-peticiones). Ver `REQUESTS_REGISTRY.md`
+- **REQ-021 — Refactor Backend SOLID + Hexagonal + LangChain** (EN PROGRESO). Ver `REQUESTS_REGISTRY.md`
 
 **No hay listas paralelas**: PLAN_AND_NEXT_STEP.md § Improvements solo referencia este archivo.
 
@@ -37,22 +39,13 @@ _(ninguna pendiente)_
 
 ## Prioridad: Media
 
-### PEND-009: Refactor Backend — SOLID y Single Responsibility
-**Descripción**: Hacer el backend más manejable. `app.py` tiene ~6,500 líneas y mezcla endpoints, lógica de negocio, workers, scheduler y utils. No sigue Single Responsibility ni principios SOLID.
+### ~~PEND-009: Refactor Backend — SOLID y Single Responsibility~~ ✅ EN PROGRESO (REQ-021)
+**Descripción**: Hacer el backend más manejable. `app.py` tiene ~6,700 líneas y mezcla endpoints, lógica de negocio, workers, scheduler y utils. No sigue Single Responsibility ni principios SOLID.
 
-**Problema**:
-- `app.py`: 6,485 líneas — monolito con 15+ responsabilidades
-- `database.py`: 1,480 líneas — 10+ stores en un archivo
-- Difícil mantener, testear y extender
-
-**Propuesta**:
-- Extraer controllers, services, repositories, schedulers (ver `02-construction/BACKEND_REFACTOR_TASK.md`)
-- Refactor incremental sin romper funcionalidad
-- Referencia: `DASHBOARD_REFACTOR_PLAN.md` § FASE 2
-
-**Ubicación**: `app/backend/app.py`, `database.py`  
-**Esfuerzo**: Alto (4-8 horas, múltiples sesiones)  
-**Fecha detección**: 2026-03-18
+**Estado**: ✅ **Movido a REQ-021** — Refactor Hexagonal + DDD + LangChain/LangGraph  
+**Fecha inicio**: 2026-03-31  
+**Ver**: `REQUESTS_REGISTRY.md § REQ-021`  
+**Documentación**: `02-construction/HEXAGONAL_ARCHITECTURE.md`
 
 ---
 

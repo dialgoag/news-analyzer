@@ -344,6 +344,8 @@ class RAGPipeline:
         self.llm_model = llm_model
         self.llm_provider = llm_provider
         self.relevance_threshold = relevance_threshold
+        self._ollama_base_url = ollama_base_url.rstrip("/")
+        self._openai_api_key = openai_api_key or ""
 
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
@@ -453,6 +455,70 @@ class RAGPipeline:
                 add_ollama()
 
         return chain if chain else [(llm_provider, self.llm)]
+
+    def _effective_insights_ollama_model(self, runtime_override: Optional[str]) -> str:
+        """Model name for Ollama in insights: UI/runtime, then OLLAMA_LLM_MODEL, else LLM_MODEL if primary is ollama, else mistral."""
+        o = (runtime_override or "").strip()
+        if o:
+            return o
+        alt = os.getenv("OLLAMA_LLM_MODEL", "").strip()
+        if alt:
+            return alt
+        if (self.llm_provider or "").lower() in ("ollama", "local"):
+            return (self.llm_model or "").strip() or "mistral"
+        return "mistral"
+
+    def _build_insights_chain_ordered(
+        self,
+        ordered_providers: List[str],
+        insights_ollama_model: Optional[str] = None,
+    ) -> List[Tuple[str, object]]:
+        """Build LLM chain for insights in explicit order (openai / perplexity / ollama). Skips missing credentials."""
+        chain: List[Tuple[str, object]] = []
+        llm_model = self.llm_model
+        ollama_base_url = self._ollama_base_url
+        openai_api_key = self._openai_api_key
+        ollama_name = self._effective_insights_ollama_model(insights_ollama_model)
+
+        def add_openai():
+            if openai_api_key:
+                chain.append(("openai", OpenAIChatClient(
+                    model=llm_model,
+                    api_key=openai_api_key,
+                    temperature=0.0,
+                    base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
+                )))
+
+        def add_perplexity():
+            key = os.getenv("PERPLEXITY_API_KEY", openai_api_key)
+            if key:
+                pplx_model = os.getenv("PERPLEXITY_MODEL", "sonar-pro")
+                chain.append(("perplexity", OpenAIChatClient(
+                    model=pplx_model,
+                    api_key=key,
+                    temperature=0.0,
+                    base_url="https://api.perplexity.ai",
+                    chat_path="v1/sonar",
+                )))
+
+        def add_ollama():
+            chain.append(("ollama", OllamaChatDirect(
+                model=ollama_name,
+                base_url=ollama_base_url,
+                temperature=0.0,
+            )))
+
+        for name in ordered_providers:
+            n = (name or "").strip().lower()
+            if n in ("local", "ollama"):
+                n = "ollama"
+            if n == "openai":
+                add_openai()
+            elif n == "perplexity":
+                add_perplexity()
+            elif n == "ollama":
+                add_ollama()
+        return chain
 
     def _get_prompt_template(self) -> str:
         """Optimized template for better extraction and accuracy"""
@@ -829,8 +895,18 @@ DOCUMENT EXCERPTS:
 INSIGHTS REPORT (Markdown):"""
         return self.llm(prompt)
 
-    def generate_insights_with_fallback(self, context: str, label: str) -> Tuple[str, str]:
-        """Generate insights trying each LLM in chain. On 429, try next. Returns (content, llm_source)."""
+    def generate_insights_with_fallback(
+        self,
+        context: str,
+        label: str,
+        provider_order: Optional[List[str]] = None,
+        insights_ollama_model: Optional[str] = None,
+    ) -> Tuple[str, str]:
+        """Generate insights trying each LLM in chain. On 429, try next. Returns (content, llm_source).
+
+        If provider_order is set (e.g. from runtime admin UI), only those providers are tried in order.
+        insights_ollama_model: runtime Ollama tag for insights (from admin UI); else env heuristics.
+        """
         prompt = f"""You are a news analyst. Based on the following document excerpts from "{label}", produce a structured insights report in Markdown.
 
 EXTRACT AND INCLUDE (use only information from the context; do not invent):
@@ -853,8 +929,34 @@ DOCUMENT EXCERPTS:
 ---
 
 INSIGHTS REPORT (Markdown):"""
+        chain = self.llm_chain
+        if provider_order:
+            custom = self._build_insights_chain_ordered(
+                provider_order,
+                insights_ollama_model=insights_ollama_model,
+            )
+            if custom:
+                chain = custom
+        elif insights_ollama_model:
+            om = self._effective_insights_ollama_model(insights_ollama_model)
+            rebuilt: List[Tuple[str, object]] = []
+            for name, llm in self.llm_chain:
+                if name == "ollama":
+                    rebuilt.append(
+                        (
+                            name,
+                            OllamaChatDirect(
+                                model=om,
+                                base_url=self._ollama_base_url,
+                                temperature=0.0,
+                            ),
+                        )
+                    )
+                else:
+                    rebuilt.append((name, llm))
+            chain = rebuilt
         last_error = None
-        for name, llm in self.llm_chain:
+        for name, llm in chain:
             try:
                 content = llm(prompt)
                 return (content, name)
