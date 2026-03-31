@@ -2429,9 +2429,21 @@ def run_news_item_insights_queue_job():
 
 async def _insights_worker_task(news_item_id: str, document_id: str, filename: str, title: str, worker_id: str):
     """
-    Background worker for insights generation: processes ONE task independently.
-    Each worker has its own worker_id. If crashed, task marked 'started' for recovery.
-    Checks text_hash dedup BEFORE calling GPT to reuse existing insights and save costs.
+    Background worker for insights generation with LangGraph + LangMem.
+    
+    Workflow:
+    1. Check text_hash dedup (reuse existing insights from other news_items)
+    2. Fetch chunks from Qdrant
+    3. Build context
+    4. Call InsightsWorkerService (LangGraph workflow + LangMem cache)
+    5. Save results with provider/token metadata
+    
+    Features:
+    - LangMem cache (PostgreSQL-backed, 30 days TTL)
+    - Text hash deduplication (saves API calls across news_items)
+    - LangGraph workflow (extraction + analysis + validation + retry)
+    - Provider fallback (OpenAI → Ollama)
+    - Token tracking
     """
     try:
         logger.info(f"[{worker_id}] Assigned insights for: {title or 'untitled'}")
@@ -2441,7 +2453,8 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
             worker_id, f"insight_{news_item_id}", 'insights', 'started'
         )
         
-        # DEDUP: Check if an insight with the same text_hash already exists (saves GPT costs)
+        # DEDUP: Check if an insight with the same text_hash already exists (saves API costs)
+        # This is different from LangMem cache: text_hash dedup reuses insights from OTHER news_items
         try:
             conn_dedup = document_status_store.get_connection()
             cur_dedup = conn_dedup.cursor()
@@ -2462,13 +2475,16 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
                     news_item_id,
                     news_item_insights_store.STATUS_DONE,
                     content=existing["content"],
-                    llm_source=existing.get("llm_source")
+                    llm_source=existing.get("llm_source", "dedup")
                 )
                 processing_queue_store.update_worker_status(
                     worker_id, f"insight_{news_item_id}", 'insights', 'completed'
                 )
                 processing_queue_store.mark_task_completed(f"insight_{news_item_id}", 'insights')
-                logger.info(f"[{worker_id}] ♻️ Reused insight via text_hash for {news_item_id} (saved GPT call)")
+                logger.info(
+                    f"[{worker_id}] ♻️ Reused insight via text_hash dedup for {news_item_id} "
+                    f"(saved API call)"
+                )
                 return
         
         # Set to generating in insights store
@@ -2496,59 +2512,60 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
         if len(context) > 80000:
             context = context[:80000] + "\n\n[... truncado ...]"
         
-        label = f"{filename} — {title}".strip(" —")
+        logger.info(
+            f"[{worker_id}] Generating insights for {news_item_id} "
+            f"({len(context)} chars, {len(chunks)} chunks)"
+        )
         
-        logger.info(f"[{worker_id}] Generating insights for {news_item_id} ({len(context)} chars)")
+        # Generate insights with InsightsWorkerService (LangGraph + LangMem)
+        from core.application.services.insights_worker_service import get_insights_worker_service
         
-        # Generate insights with fallback chain (OpenAI 429 → Perplexity → Ollama)
-        for attempt in range(INSIGHTS_MAX_RETRIES):
-            try:
-                content, llm_source = await asyncio.to_thread(
-                    generate_insights_for_queue,
-                    context,
-                    label
-                )
-                news_item_insights_store.set_status(
-                    news_item_id,
-                    news_item_insights_store.STATUS_DONE,
-                    content=content,
-                    llm_source=llm_source
-                )
-                processing_queue_store.update_worker_status(
-                    worker_id, f"insight_{news_item_id}", 'insights', 'completed'
-                )
-                processing_queue_store.mark_task_completed(f"insight_{news_item_id}", 'insights')
-                
-                logger.info(f"[{worker_id}] ✅ Insights generated for {news_item_id}")
-                return
-                
-            except (requests.exceptions.HTTPError, RateLimitError) as e:
-                is_429 = (
-                    (isinstance(e, requests.exceptions.HTTPError) and e.response is not None and e.response.status_code == 429)
-                    or isinstance(e, RateLimitError)
-                )
-                if is_429 and attempt < INSIGHTS_MAX_RETRIES - 1:
-                    wait = getattr(e, "retry_after", 0) or (INSIGHTS_THROTTLE_SECONDS * (2 ** attempt))
-                    wait = min(max(wait, 5), 120)
-                    logger.warning(
-                        f"[{worker_id}] All LLMs rate limited - waiting {wait}s "
-                        f"(attempt {attempt + 1}/{INSIGHTS_MAX_RETRIES})"
-                    )
-                    await asyncio.sleep(wait)
-                else:
-                    raise
+        service = get_insights_worker_service(
+            cache_backend="postgres",
+            cache_ttl=86400 * 30,  # 30 days
+            cache_max_size=10000
+        )
         
-        # Max retries exceeded
+        result = await service.generate_insights(
+            news_item_id=news_item_id,
+            document_id=document_id,
+            context=context,
+            title=title or filename,
+            max_attempts=INSIGHTS_MAX_RETRIES
+        )
+        
+        # Log cache/dedup information
+        if result.from_cache:
+            logger.info(
+                f"[{worker_id}] ♻️ LangMem cache HIT for {news_item_id} "
+                f"(saved {result.total_tokens} tokens, ~${result.total_tokens * 0.00002:.4f})"
+            )
+        else:
+            logger.info(
+                f"[{worker_id}] 💸 API call made: "
+                f"provider={result.provider_used}, model={result.model_used}, "
+                f"tokens={result.total_tokens} "
+                f"(extract={result.extraction_tokens}, analyze={result.analysis_tokens})"
+            )
+        
+        # Save to database
+        llm_source = f"{result.provider_used}/{result.model_used}"
         news_item_insights_store.set_status(
             news_item_id,
-            news_item_insights_store.STATUS_ERROR,
-            error_message="Max retries (429)"
+            news_item_insights_store.STATUS_DONE,
+            content=result.content,
+            llm_source=llm_source
         )
+        
         processing_queue_store.update_worker_status(
-            worker_id, f"insight_{news_item_id}", 'insights', 'error',
-            error_message="Max retries (429)"
+            worker_id, f"insight_{news_item_id}", 'insights', 'completed'
         )
         processing_queue_store.mark_task_completed(f"insight_{news_item_id}", 'insights')
+        
+        logger.info(
+            f"[{worker_id}] ✅ Insights generated for {news_item_id}: "
+            f"{len(result.content)} chars, {result.total_tokens} tokens"
+        )
         
     except Exception as e:
         logger.error(f"[{worker_id}] Insights error: {e}", exc_info=True)
