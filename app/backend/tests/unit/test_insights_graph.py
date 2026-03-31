@@ -23,6 +23,7 @@ from adapters.driven.llm.graphs.insights_graph import (
     run_insights_workflow
 )
 from tests.fixtures.mock_providers import (
+    MockLLMProvider,
     MockExtractionProvider,
     MockAnalysisProvider,
     FailingMockProvider,
@@ -393,10 +394,14 @@ class TestFullWorkflow:
     @pytest.mark.asyncio
     async def test_workflow_failure_after_max_retries(self):
         """Test workflow fails after max extraction attempts."""
-        # Mock provider that always returns invalid extraction
-        class InvalidExtractionProvider(MockExtractionProvider):
+        # Simple mock that always returns invalid short text
+        class InvalidExtractionProvider(MockLLMProvider):
             def __init__(self):
-                super().__init__(responses={'default': 'Too short'})  # <100 chars, fails validation
+                super().__init__(
+                    provider_name='invalid-mock',
+                    model_name='invalid-model',
+                    responses={'default': 'x'}  # <100 chars, fails validation
+                )
         
         with patch('adapters.driven.llm.graphs.insights_graph._get_providers') as mock_get_providers:
             mock_get_providers.return_value = [InvalidExtractionProvider()]

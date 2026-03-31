@@ -100,9 +100,16 @@ class MockLLMProvider(LLMPort):
         """
         prompt_lower = prompt.lower()
         
-        # Check for explicit keyword matches first (excluding 'default')
-        for keyword, response in self.responses.items():
-            if keyword != 'default' and keyword.lower() in prompt_lower:
+        # Check for explicit keyword matches (sorted by length descending to match longer phrases first)
+        # Exclude 'default' from keyword matching
+        sorted_keywords = sorted(
+            [(k, v) for k, v in self.responses.items() if k != 'default'],
+            key=lambda x: len(x[0]),
+            reverse=True  # Longest keywords first
+        )
+        
+        for keyword, response in sorted_keywords:
+            if keyword.lower() in prompt_lower:
                 return response
         
         # Smart detection: Is this extraction or analysis?
@@ -111,7 +118,8 @@ class MockLLMProvider(LLMPort):
         is_extraction = any(kw in prompt_lower for kw in extraction_keywords)
         
         # Analysis prompts mention: "analyze", "insights", "significance", "implications", "analytical"
-        analysis_keywords = ['analyze and provide insights', 'analytical insights', 'significance', 'expert perspective']
+        # More flexible: check for partial matches
+        analysis_keywords = ['analyze and provide', 'analytical insights', 'expert analysis', 'significance']
         is_analysis = any(kw in prompt_lower for kw in analysis_keywords)
         
         # Return appropriate response based on detection
@@ -129,11 +137,15 @@ class MockLLMProvider(LLMPort):
             return """## Significance
 This is significant.
 
-## Context
+## Historical Context
 Some context here.
 
 ## Implications
-Some implications."""
+Short-term: Impact
+Long-term: Consequences
+
+## Expert Analysis
+Comprehensive analysis here."""
         
         # Extraction fallback
         return """## Metadata
@@ -316,7 +328,7 @@ This policy shift indicates prioritization of growth over fiscal consolidation.
             "analyze": analysis_response,
             "analytical insights": analysis_response,  # Keyword in ANALYSIS_PROMPT
             "extracted data": analysis_response,       # When analysis receives extracted data
-            "default": extraction_response  # Fallback
+            "default": extraction_response  # Fallback (extraction is first step)
         }
         
         # Merge with provided responses
