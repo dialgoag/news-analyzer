@@ -295,6 +295,76 @@ class InsightMemory:
             tokens_saved=self._stats['tokens_saved']
         )
     
+    async def cleanup_expired(self) -> int:
+        """
+        Clean up expired cache entries.
+        
+        Removes entries older than TTL.
+        
+        Returns:
+            Number of entries removed
+        
+        Example:
+            >>> memory = InsightMemory(ttl_days=7, backend="postgres")
+            >>> removed = await memory.cleanup_expired()
+            >>> print(f"Removed {removed} expired entries")
+        """
+        if self.backend == "postgres":
+            return await self._cleanup_expired_postgres()
+        elif self.backend == "redis":
+            # Redis handles TTL automatically
+            return 0
+        else:
+            # In-memory: manually remove expired
+            removed = 0
+            now = datetime.now()
+            expired_keys = []
+            
+            for text_hash, cached in self._cache.items():
+                age = now - cached.cached_at
+                if age > timedelta(days=self.ttl_days):
+                    expired_keys.append(text_hash)
+            
+            for key in expired_keys:
+                del self._cache[key]
+                removed += 1
+            
+            if removed > 0:
+                logger.info(f"🗑️ Cleaned up {removed} expired entries (TTL={self.ttl_days}d)")
+            
+            return removed
+    
+    async def _cleanup_expired_postgres(self) -> int:
+        """Clean up expired entries in PostgreSQL."""
+        import psycopg2
+        import os
+        
+        try:
+            # Get database connection
+            db_url = os.getenv("DATABASE_URL") or self._build_database_url()
+            conn = psycopg2.connect(db_url)
+            cursor = conn.cursor()
+            
+            # Delete expired entries
+            cursor.execute("""
+                DELETE FROM insight_cache
+                WHERE cached_at < NOW() - INTERVAL '%s days'
+            """, (self.ttl_days,))
+            
+            rows_deleted = cursor.rowcount
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            if rows_deleted > 0:
+                logger.info(f"🗑️ Cleaned up {rows_deleted} expired entries from PostgreSQL (TTL={self.ttl_days}d)")
+            
+            return rows_deleted
+            
+        except Exception as e:
+            logger.error(f"❌ Error cleaning up expired entries: {e}", exc_info=True)
+            return 0
+    
     def reset_stats(self) -> None:
         """Reset cache statistics."""
         self._stats = {
@@ -311,28 +381,207 @@ class InsightMemory:
     
     async def _get_from_postgres(self, text_hash: str) -> Optional[CachedInsight]:
         """Get from PostgreSQL backend."""
-        # TODO: Implement PostgreSQL query
-        # SELECT * FROM insight_cache WHERE text_hash = ? AND cached_at > NOW() - INTERVAL '7 days'
-        logger.debug(f"TODO: _get_from_postgres({text_hash[:8]}...)")
-        return None
+        import psycopg2
+        import psycopg2.extras
+        import os
+        
+        try:
+            # Get database connection
+            db_url = os.getenv("DATABASE_URL") or self._build_database_url()
+            conn = psycopg2.connect(db_url)
+            conn.cursor_factory = psycopg2.extras.RealDictCursor
+            cursor = conn.cursor()
+            
+            # Query with TTL check
+            cursor.execute("""
+                SELECT 
+                    text_hash,
+                    extracted_data,
+                    analysis,
+                    full_text,
+                    provider_used,
+                    model_used,
+                    extraction_tokens,
+                    analysis_tokens,
+                    total_tokens,
+                    cached_at,
+                    hit_count
+                FROM insight_cache
+                WHERE text_hash = %s
+                  AND cached_at > NOW() - INTERVAL '%s days'
+            """, (text_hash, self.ttl_days))
+            
+            row = cursor.fetchone()
+            
+            if row:
+                # Update last_accessed_at and hit_count
+                cursor.execute("""
+                    UPDATE insight_cache
+                    SET last_accessed_at = NOW(),
+                        hit_count = hit_count + 1
+                    WHERE text_hash = %s
+                """, (text_hash,))
+                conn.commit()
+                
+                # Convert to CachedInsight
+                cached = CachedInsight(
+                    text_hash=row['text_hash'],
+                    extracted_data=row['extracted_data'],
+                    analysis=row['analysis'],
+                    full_text=row['full_text'],
+                    provider_used=row['provider_used'],
+                    model_used=row['model_used'],
+                    extraction_tokens=row['extraction_tokens'],
+                    analysis_tokens=row['analysis_tokens'],
+                    total_tokens=row['total_tokens'],
+                    cached_at=row['cached_at']
+                )
+                
+                cursor.close()
+                conn.close()
+                
+                logger.debug(f"📥 Retrieved from PostgreSQL: {text_hash[:8]}... (hit_count={row['hit_count']+1})")
+                return cached
+            
+            cursor.close()
+            conn.close()
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting from PostgreSQL: {e}", exc_info=True)
+            return None
+    
+    def _build_database_url(self) -> str:
+        """Build database URL from environment variables."""
+        import os
+        from urllib.parse import quote_plus
+        
+        explicit = os.getenv("DATABASE_URL")
+        if explicit:
+            return explicit
+        
+        user = quote_plus(os.getenv("POSTGRES_USER", "raguser"))
+        password = quote_plus(os.getenv("POSTGRES_PASSWORD", "ragpass"))
+        host = os.getenv("POSTGRES_HOST", "postgres")
+        port = os.getenv("POSTGRES_PORT", "5432")
+        db = os.getenv("POSTGRES_DB", "rag_enterprise")
+        return f"postgresql://{user}:{password}@{host}:{port}/{db}"
     
     async def _store_in_postgres(self, cached: CachedInsight) -> None:
         """Store in PostgreSQL backend."""
-        # TODO: Implement PostgreSQL insert
-        # INSERT INTO insight_cache (...) VALUES (...) ON CONFLICT (text_hash) DO UPDATE ...
-        logger.debug(f"TODO: _store_in_postgres({cached.text_hash[:8]}...)")
+        import psycopg2
+        import psycopg2.extras
+        import os
+        
+        try:
+            # Get database connection
+            db_url = os.getenv("DATABASE_URL") or self._build_database_url()
+            conn = psycopg2.connect(db_url)
+            cursor = conn.cursor()
+            
+            # Upsert (INSERT ... ON CONFLICT UPDATE)
+            cursor.execute("""
+                INSERT INTO insight_cache (
+                    text_hash,
+                    extracted_data,
+                    analysis,
+                    full_text,
+                    provider_used,
+                    model_used,
+                    extraction_tokens,
+                    analysis_tokens,
+                    total_tokens,
+                    cached_at,
+                    last_accessed_at,
+                    hit_count
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (text_hash) DO UPDATE SET
+                    extracted_data = EXCLUDED.extracted_data,
+                    analysis = EXCLUDED.analysis,
+                    full_text = EXCLUDED.full_text,
+                    provider_used = EXCLUDED.provider_used,
+                    model_used = EXCLUDED.model_used,
+                    extraction_tokens = EXCLUDED.extraction_tokens,
+                    analysis_tokens = EXCLUDED.analysis_tokens,
+                    total_tokens = EXCLUDED.total_tokens,
+                    cached_at = EXCLUDED.cached_at,
+                    last_accessed_at = EXCLUDED.last_accessed_at,
+                    hit_count = 0
+            """, (
+                cached.text_hash,
+                cached.extracted_data,
+                cached.analysis,
+                cached.full_text,
+                cached.provider_used,
+                cached.model_used,
+                cached.extraction_tokens,
+                cached.analysis_tokens,
+                cached.total_tokens,
+                cached.cached_at,
+                cached.cached_at,  # last_accessed_at same as cached_at initially
+                0  # hit_count starts at 0
+            ))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            logger.debug(f"💾 Stored in PostgreSQL: {cached.text_hash[:8]}...")
+            
+        except Exception as e:
+            logger.error(f"❌ Error storing in PostgreSQL: {e}", exc_info=True)
     
     async def _invalidate_in_postgres(self, text_hash: str) -> None:
         """Invalidate in PostgreSQL backend."""
-        # TODO: Implement PostgreSQL delete
-        # DELETE FROM insight_cache WHERE text_hash = ?
-        logger.debug(f"TODO: _invalidate_in_postgres({text_hash[:8]}...)")
+        import psycopg2
+        import os
+        
+        try:
+            # Get database connection
+            db_url = os.getenv("DATABASE_URL") or self._build_database_url()
+            conn = psycopg2.connect(db_url)
+            cursor = conn.cursor()
+            
+            # Delete entry
+            cursor.execute("""
+                DELETE FROM insight_cache
+                WHERE text_hash = %s
+            """, (text_hash,))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            logger.debug(f"🗑️ Invalidated in PostgreSQL: {text_hash[:8]}...")
+            
+        except Exception as e:
+            logger.error(f"❌ Error invalidating in PostgreSQL: {e}", exc_info=True)
     
     async def _clear_postgres(self) -> None:
         """Clear PostgreSQL cache."""
-        # TODO: Implement PostgreSQL truncate
-        # DELETE FROM insight_cache
-        logger.debug("TODO: _clear_postgres()")
+        import psycopg2
+        import os
+        
+        try:
+            # Get database connection
+            db_url = os.getenv("DATABASE_URL") or self._build_database_url()
+            conn = psycopg2.connect(db_url)
+            cursor = conn.cursor()
+            
+            # Delete all entries
+            cursor.execute("DELETE FROM insight_cache")
+            
+            rows_deleted = cursor.rowcount
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            logger.info(f"🗑️ Cleared PostgreSQL cache: {rows_deleted} entries deleted")
+            
+        except Exception as e:
+            logger.error(f"❌ Error clearing PostgreSQL cache: {e}", exc_info=True)
     
     async def _get_from_redis(self, text_hash: str) -> Optional[CachedInsight]:
         """Get from Redis backend."""
