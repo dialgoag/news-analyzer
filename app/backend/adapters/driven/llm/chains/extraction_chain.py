@@ -6,10 +6,10 @@ No analysis or insights - just facts, entities, and metadata.
 """
 
 import logging
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
+from typing import List, Dict, Any, Optional
 
-from core.ports.llm_port import LLMPort, LLMChainPort, LLMRequest
+from core.ports.llm_port import LLMPort, LLMChainPort, LLMRequest, LLMResponse
+from shared.exceptions import RateLimitError, TimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -108,23 +108,22 @@ class ExtractionChain(LLMChainPort):
     
     Extracts structured, factual information from news articles.
     This data is then used by AnalysisChain to generate insights.
+    
+    Temperature: 0.1 (low for factual precision)
+    Max tokens: 1200
     """
     
-    def __init__(self, provider: LLMPort):
+    def __init__(self, providers: Optional[List[LLMPort]] = None):
         """
         Initialize extraction chain.
         
         Args:
-            provider: LLM provider to use
+            providers: List of LLM providers to try (with fallback)
         """
-        self.provider = provider
-        self.prompt = PromptTemplate(
-            input_variables=["context", "title"],
-            template=EXTRACTION_PROMPT_TEMPLATE
-        )
-        logger.info("✅ ExtractionChain initialized")
+        self.providers = providers or []
+        logger.info(f"✅ ExtractionChain initialized with {len(self.providers)} providers")
     
-    async def run(self, context: str, title: str = "") -> str:
+    async def run(self, context: str, title: str = "") -> Dict[str, Any]:
         """
         Extract structured data from article.
         
@@ -133,27 +132,55 @@ class ExtractionChain(LLMChainPort):
             title: Article title
         
         Returns:
-            Structured extraction text
+            Dict with extracted_data, tokens_used, provider, model
+        
+        Raises:
+            Exception if all providers fail
         """
-        formatted_prompt = self.prompt.format(context=context, title=title)
-        
-        provider_name = self.provider.get_provider_name()
-        logger.info(f"📊 Extracting structured data with {provider_name}")
-        
-        request = LLMRequest(
-            prompt=formatted_prompt,
-            temperature=0.1,  # Low temperature for factual extraction
-            max_tokens=1200
+        # Format prompt
+        formatted_prompt = EXTRACTION_PROMPT_TEMPLATE.format(
+            context=context,
+            title=title
         )
         
-        response = await self.provider.generate(request)
+        # Try providers in order with fallback
+        last_error = None
+        for provider in self.providers:
+            try:
+                provider_name = provider.get_provider_name()
+                logger.info(f"📊 Extracting structured data with {provider_name}")
+                
+                request = LLMRequest(
+                    prompt=formatted_prompt,
+                    temperature=0.1,  # Low temperature for factual extraction
+                    max_tokens=1200
+                )
+                
+                response = await provider.generate(request)
+                
+                logger.info(
+                    f"✅ Data extracted: {len(response.text)} chars, "
+                    f"tokens={response.tokens_used}, provider={provider_name}"
+                )
+                
+                return {
+                    'extracted_data': response.text,
+                    'tokens_used': response.tokens_used,
+                    'provider': provider_name,
+                    'model': response.model
+                }
+                
+            except (RateLimitError, TimeoutError) as e:
+                logger.warning(f"⚠️ {provider_name} failed: {e}, trying next provider...")
+                last_error = e
+                continue
+            except Exception as e:
+                logger.error(f"❌ {provider_name} error: {e}")
+                last_error = e
+                continue
         
-        logger.info(
-            f"✅ Data extracted: {len(response.text)} chars, "
-            f"tokens={response.tokens_used}"
-        )
-        
-        return response.text
+        # All providers failed
+        raise Exception(f"All {len(self.providers)} providers failed. Last error: {last_error}")
     
     def get_chain_name(self) -> str:
         """Get chain name."""

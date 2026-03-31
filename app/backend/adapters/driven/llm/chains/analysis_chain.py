@@ -5,10 +5,10 @@ This chain takes structured extracted data and generates expert analysis.
 """
 
 import logging
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
+from typing import List, Dict, Any, Optional
 
-from core.ports.llm_port import LLMPort, LLMChainPort, LLMRequest
+from core.ports.llm_port import LLMPort, LLMChainPort, LLMRequest, LLMResponse
+from shared.exceptions import RateLimitError, TimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -90,23 +90,22 @@ class AnalysisChain(LLMChainPort):
     Analysis chain - Second step in insights pipeline.
     
     Generates expert insights from structured extracted data.
+    
+    Temperature: 0.7 (higher for creative analysis)
+    Max tokens: 1000
     """
     
-    def __init__(self, provider: LLMPort):
+    def __init__(self, providers: Optional[List[LLMPort]] = None):
         """
         Initialize analysis chain.
         
         Args:
-            provider: LLM provider to use
+            providers: List of LLM providers to try (with fallback)
         """
-        self.provider = provider
-        self.prompt = PromptTemplate(
-            input_variables=["extracted_data", "title"],
-            template=ANALYSIS_PROMPT_TEMPLATE
-        )
-        logger.info("✅ AnalysisChain initialized")
+        self.providers = providers or []
+        logger.info(f"✅ AnalysisChain initialized with {len(self.providers)} providers")
     
-    async def run(self, extracted_data: str, title: str = "") -> str:
+    async def run(self, extracted_data: str, title: str = "") -> Dict[str, Any]:
         """
         Generate insights from extracted data.
         
@@ -115,30 +114,55 @@ class AnalysisChain(LLMChainPort):
             title: Article title
         
         Returns:
-            Analysis and insights text
+            Dict with analysis, tokens_used, provider, model
+        
+        Raises:
+            Exception if all providers fail
         """
-        formatted_prompt = self.prompt.format(
+        # Format prompt
+        formatted_prompt = ANALYSIS_PROMPT_TEMPLATE.format(
             extracted_data=extracted_data,
             title=title
         )
         
-        provider_name = self.provider.get_provider_name()
-        logger.info(f"🧠 Generating insights with {provider_name}")
+        # Try providers in order with fallback
+        last_error = None
+        for provider in self.providers:
+            try:
+                provider_name = provider.get_provider_name()
+                logger.info(f"🧠 Generating insights with {provider_name}")
+                
+                request = LLMRequest(
+                    prompt=formatted_prompt,
+                    temperature=0.7,  # Higher temperature for creative analysis
+                    max_tokens=1000
+                )
+                
+                response = await provider.generate(request)
+                
+                logger.info(
+                    f"✅ Insights generated: {len(response.text)} chars, "
+                    f"tokens={response.tokens_used}, provider={provider_name}"
+                )
+                
+                return {
+                    'analysis': response.text,
+                    'tokens_used': response.tokens_used,
+                    'provider': provider_name,
+                    'model': response.model
+                }
+                
+            except (RateLimitError, TimeoutError) as e:
+                logger.warning(f"⚠️ {provider_name} failed: {e}, trying next provider...")
+                last_error = e
+                continue
+            except Exception as e:
+                logger.error(f"❌ {provider_name} error: {e}")
+                last_error = e
+                continue
         
-        request = LLMRequest(
-            prompt=formatted_prompt,
-            temperature=0.6,  # Higher temperature for creative analysis
-            max_tokens=1500
-        )
-        
-        response = await self.provider.generate(request)
-        
-        logger.info(
-            f"✅ Insights generated: {len(response.text)} chars, "
-            f"tokens={response.tokens_used}"
-        )
-        
-        return response.text
+        # All providers failed
+        raise Exception(f"All {len(self.providers)} providers failed. Last error: {last_error}")
     
     def get_chain_name(self) -> str:
         """Get chain name."""

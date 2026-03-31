@@ -7,7 +7,7 @@ This adapter wraps LangChain's OpenAI integration.
 import logging
 from typing import Optional
 from langchain_openai import ChatOpenAI
-from langchain.schema import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from core.ports.llm_port import LLMPort, LLMRequest, LLMResponse
 from config import settings

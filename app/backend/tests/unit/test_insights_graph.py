@@ -25,7 +25,8 @@ from adapters.driven.llm.graphs.insights_graph import (
 from tests.fixtures.mock_providers import (
     MockExtractionProvider,
     MockAnalysisProvider,
-    FailingMockProvider
+    FailingMockProvider,
+    UnifiedMockProvider
 )
 
 
@@ -371,12 +372,9 @@ class TestFullWorkflow:
     @pytest.mark.asyncio
     async def test_successful_workflow_with_mock_providers(self):
         """Test complete successful workflow with mock providers."""
-        # Mock the provider getter to return our mocks
+        # Mock the provider getter to return unified mock
         with patch('adapters.driven.llm.graphs.insights_graph._get_providers') as mock_get_providers:
-            mock_get_providers.return_value = [
-                MockExtractionProvider(),
-                MockAnalysisProvider()
-            ]
+            mock_get_providers.return_value = [UnifiedMockProvider()]
             
             result = await run_insights_workflow(
                 news_item_id="test_123",

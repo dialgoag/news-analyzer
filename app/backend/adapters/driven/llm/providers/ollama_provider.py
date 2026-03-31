@@ -7,7 +7,7 @@ This adapter wraps LangChain's Ollama integration for local LLMs.
 import logging
 from typing import Optional
 from langchain_community.llms import Ollama
-from langchain.schema import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from core.ports.llm_port import LLMPort, LLMRequest, LLMResponse
 from config import settings

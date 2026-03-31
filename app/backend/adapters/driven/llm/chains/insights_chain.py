@@ -147,38 +147,44 @@ class InsightsChain(LLMChainPort):
         last_error = None
         for i, provider in enumerate(self.providers):
             provider_name = provider.get_provider_name()
-            model_name = provider.get_model_name()
             
             try:
                 logger.info(
-                    f"🤖 Running insights pipeline with {provider_name}/{model_name} "
-                    f"(provider {i+1}/{len(self.providers)})"
+                    f"🤖 Running insights pipeline (provider {i+1}/{len(self.providers)}): {provider_name}"
                 )
                 
                 # STEP 1: Extract structured data
-                extraction_chain = ExtractionChain(provider)
-                extracted_data = await extraction_chain.run(
+                extraction_chain = ExtractionChain(providers=[provider])
+                extraction_result = await extraction_chain.run(
                     context=context,
                     title=title
                 )
                 
-                logger.info(f"✅ Step 1/2: Data extraction complete")
+                extracted_data = extraction_result['extracted_data']
+                extraction_tokens = extraction_result['tokens_used']
+                
+                logger.info(f"✅ Step 1/2: Data extraction complete ({extraction_tokens} tokens)")
                 
                 # STEP 2: Generate insights from extracted data
-                analysis_chain = AnalysisChain(provider)
-                analysis = await analysis_chain.run(
+                analysis_chain = AnalysisChain(providers=[provider])
+                analysis_result = await analysis_chain.run(
                     extracted_data=extracted_data,
                     title=title
                 )
                 
-                logger.info(f"✅ Step 2/2: Analysis complete")
+                analysis = analysis_result['analysis']
+                analysis_tokens = analysis_result['tokens_used']
+                model_name = analysis_result['model']
+                
+                logger.info(f"✅ Step 2/2: Analysis complete ({analysis_tokens} tokens)")
                 
                 # Combine results
                 full_text = self._combine_results(extracted_data, analysis)
                 
                 logger.info(
                     f"✅ Full insights pipeline complete: "
-                    f"{len(full_text)} chars, provider={provider_name}"
+                    f"{len(full_text)} chars, total_tokens={extraction_tokens + analysis_tokens}, "
+                    f"provider={provider_name}"
                 )
                 
                 return InsightResult(
@@ -186,7 +192,9 @@ class InsightsChain(LLMChainPort):
                     analysis=analysis,
                     full_text=full_text,
                     provider_used=provider_name,
-                    model_used=model_name
+                    model_used=model_name,
+                    extraction_tokens=extraction_tokens,
+                    analysis_tokens=analysis_tokens
                 )
             
             except Exception as e:

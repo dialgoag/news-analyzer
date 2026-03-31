@@ -83,6 +83,10 @@ class MockLLMProvider(LLMPort):
         """Get provider name."""
         return self.provider_name
     
+    def get_model_name(self) -> str:
+        """Get model name."""
+        return self.model_name
+    
     async def is_available(self) -> bool:
         """Check if provider is available."""
         return not self.should_fail
@@ -91,17 +95,55 @@ class MockLLMProvider(LLMPort):
         """
         Get response based on prompt content.
         
-        Looks for keywords in prompt and returns matching response.
+        Intelligently detects whether this is an extraction or analysis prompt
+        based on keywords and structure, returns appropriate response.
         """
         prompt_lower = prompt.lower()
         
-        # Check for keyword matches
+        # Check for explicit keyword matches first (excluding 'default')
         for keyword, response in self.responses.items():
-            if keyword.lower() in prompt_lower:
+            if keyword != 'default' and keyword.lower() in prompt_lower:
                 return response
         
-        # Default response
-        return "Mock response"
+        # Smart detection: Is this extraction or analysis?
+        # Extraction prompts mention: "extract", "metadata", "actors", "events"
+        extraction_keywords = ['extract the following', 'extracted information', 'key actors', 'facts & events']
+        is_extraction = any(kw in prompt_lower for kw in extraction_keywords)
+        
+        # Analysis prompts mention: "analyze", "insights", "significance", "implications", "analytical"
+        analysis_keywords = ['analyze and provide insights', 'analytical insights', 'significance', 'expert perspective']
+        is_analysis = any(kw in prompt_lower for kw in analysis_keywords)
+        
+        # Return appropriate response based on detection
+        if is_analysis and 'analyze' in self.responses:
+            return self.responses['analyze']
+        elif is_extraction and 'extract' in self.responses:
+            return self.responses['extract']
+        
+        # Use default if available
+        if 'default' in self.responses:
+            return self.responses['default']
+        
+        # Final fallback - return basic response based on prompt type
+        if is_analysis:
+            return """## Significance
+This is significant.
+
+## Context
+Some context here.
+
+## Implications
+Some implications."""
+        
+        # Extraction fallback
+        return """## Metadata
+Date: 2026-03-31
+
+## Actors
+- Name: Test Actor | Type: person
+
+## Events
+- Event: Test Event"""
     
     def reset_stats(self):
         """Reset statistics."""
@@ -224,3 +266,66 @@ class FailingMockProvider(MockLLMProvider):
         self.call_count += 1
         self.last_request = request
         raise Exception(self.error_message)
+
+
+class UnifiedMockProvider(MockLLMProvider):
+    """
+    Mock provider that responds correctly to both extraction and analysis prompts.
+    
+    This provider automatically detects whether the prompt is for extraction or analysis
+    and returns the appropriate structured response.
+    """
+    
+    def __init__(self, **kwargs):
+        extraction_response = """## Metadata
+Date: 2026-03-31
+Time: 14:30
+Location: Madrid, España
+Source: El País
+Author: Juan Pérez
+
+## Actors
+- Name: Pedro Sánchez | Type: person | Role: President | Action: Announced measures
+- Name: Spanish Government | Type: organization | Role: Executive | Action: Approved decree
+
+## Events Timeline
+- Event: Decree approval | When: 2026-03-31 14:00 | Where: Madrid | Who: Government
+
+## Themes
+Primary: Politics
+Secondary: Economy
+Tags: decree, government
+"""
+        
+        analysis_response = """## Significance
+This decree represents a significant shift in economic policy, marking the government's commitment to fiscal stimulus.
+
+## Historical Context
+This measure builds upon previous reforms, representing the largest economic intervention since the pandemic recovery.
+
+## Implications
+Short-term: Immediate impact on consumer spending
+Long-term: Could set precedent for future fiscal policy
+
+## Expert Analysis
+This policy shift indicates prioritization of growth over fiscal consolidation.
+"""
+        
+        default_responses = {
+            "extract": extraction_response,
+            "analyze": analysis_response,
+            "analytical insights": analysis_response,  # Keyword in ANALYSIS_PROMPT
+            "extracted data": analysis_response,       # When analysis receives extracted data
+            "default": extraction_response  # Fallback
+        }
+        
+        # Merge with provided responses
+        responses = kwargs.pop('responses', {})
+        default_responses.update(responses)
+        
+        super().__init__(
+            provider_name=kwargs.pop('provider_name', 'mock-unified'),
+            model_name=kwargs.pop('model_name', 'mock-unified-model'),
+            responses=default_responses,
+            **kwargs
+        )
