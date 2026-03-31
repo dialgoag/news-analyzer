@@ -1,0 +1,430 @@
+---
+description: Flujo de trabajo obligatorio para cualquier petición - Lee docs, analiza, planifica, obtiene aprobación, actualiza docs, ejecuta
+alwaysApply: true
+---
+
+# Flujo de Trabajo Obligatorio para Peticiones
+
+## Propósito
+
+Garantizar que **cualquier petición** (nueva feature, bug fix, refactoring, etc.) siga un proceso estructurado que incluya análisis, planificación y aprobación del usuario antes de ejecutar cambios.
+
+---
+
+## 🔄 Los 6 Pasos Obligatorios
+
+### PASO 1️⃣: Leer Documentación Actual
+**Acción**: Consulta la documentación de AI_LCD para entender el estado actual
+
+- Lee el archivo correspondiente en `docs/ai-lcd/`:
+ - Status actual → `CONSOLIDATED_STATUS.md`
+ - Próximos pasos → `PLAN_AND_NEXT_STEP.md`
+ - Decisiones previas → `SESSION_LOG.md`
+ - Arquitectura → `EVENT_DRIVEN_ARCHITECTURE.md`
+ - **Peticiones anteriores → `REQUESTS_REGISTRY.md`** (NUEVO)
+- Identifica qué ya existe y qué está en progreso
+- **NO hagas cambios aún**
+
+```
+Formato de respuesta:
+"He revisado [archivo_x], [archivo_y] y confirmo que:
+- Punto actual: ...
+- Relevancia para la petición: ...
+- Posibles impactos: ..."
+```
+
+### PASO 1.5️⃣: Verificar Contradicciones (NUEVO)
+**Acción**: Antes de analizar, busca si la petición contradice peticiones/cambios anteriores
+
+**Checklist a completar**:
+
+1. **¿Se pidió algo similar antes?** (Búsqueda en REQUESTS_REGISTRY.md)
+   - [ ] Sí: Verificar estado (¿ESTABLE? ¿EN PROGRESO? ¿RECHAZADA?)
+   - [ ] Si fue RECHAZADA: Leer SESSION_LOG.md para entender por qué
+   - [ ] Si fue EN PROGRESO: Verificar si puede combinar con esa
+   - [ ] Si fue ESTABLE: Considerar si quiere SUPERCEDER esa decisión
+
+2. **¿Esta petición SUPERCEDE peticiones anteriores?** (cambiar patrón, revertir decisión)
+   - [ ] Sí: Documentar en plan que se cambia petición anterior
+   - [ ] Sí: Marcar petición anterior como "SUPERCEDIDA" en REQUESTS_REGISTRY
+   - [ ] Sí: Incluir "Por qué se supercede" en SESSION_LOG.md
+
+3. **¿Hay riesgo de romper funcionalidad de petición anterior?** (verificar dependencias)
+   - [ ] Sí: Documentar "⚠️ Podría afectar: REQ-XXX, REQ-YYY" en plan
+   - [ ] Sí: Incluir verificación de esas funcionalidades en checklist
+
+4. **¿La petición NEW THING entra en versión consolidada actual?** (ver PLAN_AND_NEXT_STEP § Versiones)
+   - [ ] Sí: Considerar si agrupa con otros cambios (ej: v1.0 tiene OCR + Dashboard, v1.1 tendrá Indexing)
+   - [ ] Sí: Documentar en plan que es parte de vX.Y
+
+```
+Formato de respuesta (PASO 1.5):
+"✅ Verificación de contradicciones:
+
+Peticiones relacionadas encontradas:
+- REQ-002 (Dashboard): ✅ ESTABLE, no contradice
+- REQ-007 (Performance): 🟡 CUIDADO - también pide 'aumentar workers'
+
+Análisis de cada una:
+- REQ-002: La nueva petición es ortogonal (no usa mismo worker pool)
+- REQ-007: La nueva petición podría SUPERCEDER (ambas buscan performance)
+  → Consideración: ¿combinar ambas en una solución?
+  → Recomendación: Mencionar en PLAN que se supercede REQ-007
+
+Riesgo identificado: MEDIO
+- Podría afectar deduplicación (usa misma tabla worker_tasks)
+- Mitigación: Incluir verificación de dedup en checklist
+
+Versión: Esta petición iría en v1.1 (que incluye REQ-003 + REQ-008)"
+```
+
+**CRÍTICO**: Si hay contradicción clara, DETENER y pedir aclaración al usuario antes de continuar.
+
+### PASO 2️⃣: Analizar la Petición
+**Acción**: Desglosa qué se necesita hacer
+
+Responde a estas preguntas:
+1. ¿Qué exactamente se está pidiendo?
+2. ¿Qué archivos/componentes se verán afectados?
+3. ¿Qué dependencias o cambios previos se necesitan?
+4. ¿Hay riesgos o consideraciones especiales?
+5. ¿Qué se debe actualizar en la documentación?
+
+```
+Formato de respuesta:
+"Análisis de la petición:
+- Objetivo: ...
+- Archivos afectados: ...
+- Dependencias: ...
+- Riesgos identificados: ...
+- Impacto en documentación: ..."
+```
+
+### PASO 3️⃣: Crear un Plan
+**Acción**: Diseña los pasos concretos (sin ejecutarlos)
+
+Define:
+- **Pasos específicos** que se ejecutarán (en orden)
+- **Cambios en documentación** que se realizarán
+- **Timeline estimado** para cada paso
+- **Verificación** de que todo está correcto
+
+```
+Formato de respuesta (Markdown estructurado):
+## Plan de Acción
+
+### Cambios en Documentación
+- [ ] Actualizar docs/ai-lcd/CONSOLIDATED_STATUS.md § [sección]
+- [ ] Actualizar docs/ai-lcd/SESSION_LOG.md con decisión
+- [ ] Actualizar docs/ai-lcd/PLAN_AND_NEXT_STEP.md § Progreso
+
+### Cambios en Código
+1. Modificar archivo X (cambios específicos)
+2. Crear archivo Y (con contenido específico)
+3. Ejecutar comando Z
+
+### Verificación
+- Punto de control 1: ...
+- Punto de control 2: ...
+```
+
+### PASO 4️⃣: Solicitar Aprobación del Usuario
+**Acción**: Presenta el plan y espera aprobación explícita
+
+```
+Formato de respuesta:
+"❓ APROBACIÓN REQUERIDA
+
+He preparado el siguiente plan:
+[Mostrar plan del PASO 3]
+
+¿Estás de acuerdo con este enfoque? 
+Puedo:
+1. Proceder con el plan tal como está
+2. Modificar [aspecto específico]
+3. Cancelar la operación"
+```
+
+**CRÍTICO**: No avances al PASO 5 sin aprobación explícita del usuario.
+
+### PASO 5️⃣: Actualizar Documentación + Auditoría
+**Acción**: Registra cambios en el historial y actualiza docs
+
+**IMPORTANTE: Documentación CONCISA + Auditoría Completa**
+- ✅ Solo lo necesario, sin fluff
+- ✅ Máximo 3-5 líneas por sección
+- ✅ Lenguaje directo y claro
+- ✅ **Incluye auditoría completa**: ubicación, problema, solución, impacto, "qué NO rompe"
+- ❌ Evita explicaciones largas
+- ❌ No repitas información
+
+**Actualiza (EN ORDEN):**
+
+1. **`CONSOLIDATED_STATUS.md`** - QUÉ se cambió
+   - Número secuencial, fecha, ubicación exacta (archivo + líneas)
+   - Problema, solución, impacto en 3-5 líneas
+   - ⚠️ **QUÉ NO SE ROMPE** (funcionalidades existentes que se verificaron)
+   - Checklist de verificación
+
+2. **`SESSION_LOG.md`** - POR QUÉ se cambió
+   - Decisión y alternativas consideradas
+   - Impacto en roadmap
+   - Riesgos identificados
+
+3. **`PLAN_AND_NEXT_STEP.md`** - PROGRESO
+   - Marca cambio como [x] Completado
+   - Incluye estado (ESTABLE / EN PROGRESO)
+   - Marca como 🚫 Congelado si es crítico
+
+4. **Archivos específicos** - Detalles si aplica
+
+```
+Formato de respuesta:
+"📝 Actualizando documentación + auditoría:
+- Registrado CONSOLIDATED_STATUS.md § Fix #N
+  Ubicación: archivo.py línea XYZ
+  ⚠️ NO rompe: OCR ✅, Dashboard ✅, Workers ✅
+- Registrado SESSION_LOG.md § 2026-03-05
+  Decisión: [por qué se hizo]
+- Actualizado PLAN_AND_NEXT_STEP.md
+  [x] Completado - ESTABLE"
+
+Ejemplo COMPLETO:
+✅ "### 7. Refactor: Event-Driven Indexing ✅
+   Ubicación: backend/indexing.py línea 100
+   Problema: Indexing bloqueaba OCR
+   Solución: Worker async implementado
+   Impacto: OCR +40%, sin bloqueos
+   ⚠️ NO rompe: OCR ✅, Dashboard ✅, Insights ✅
+   Verificación: [x] OCR workers ejecutándose"
+```
+
+**CRÍTICO**: Sin auditoría completa, los cambios **no se consideran terminados**.  
+Ver: `.cursor/AUDIT_TEMPLATE.md` para ejemplos detallados.
+
+### PASO 6️⃣: Ejecutar Cambios
+**Acción**: Realiza los cambios de código/infraestructura
+
+- Sigue el plan exactamente como fue aprobado
+- Crea commits descriptivos si aplica
+- Ejecuta verificaciones
+- Reporta resultados
+
+```
+Formato de respuesta:
+"✅ Cambios completados:
+- Cambio 1: Hecho
+- Cambio 2: Hecho
+- Verificación: [resultado]"
+```
+
+---
+
+## 📝 Principio: Documentación CONCISA
+
+**La documentación debe ser breve, directa y sin fluff:**
+
+### ✅ CONCISO (Lo que queremos)
+```
+**Status**: Hecha feature X
+- Cambio: Actualizado módulo Y
+- Impacto: Mejora performance en Z
+- Próximo: Optimizar caché
+```
+
+### ❌ EXTENSO (Lo que evitamos)
+```
+**Status**: Se ha completado exitosamente la implementación de la feature X, 
+que incluye múltiples cambios en diferentes partes del sistema. Estos cambios 
+implican una actualización significativa del módulo Y, lo cual a su vez genera 
+un impacto positivo en el rendimiento del componente Z. El siguiente paso 
+será la optimización del sistema de caché...
+```
+
+### Reglas de Concisión:
+1. **Máximo 3-5 líneas** por sección de actualización
+2. **Sin explicaciones largas** - Solo hechos clave
+3. **Lenguaje directo** - Imperativos, no narrativos
+4. **Evita redundancias** - No repitas información
+5. **Links, no bloques de texto** - Si necesita más detalle, referencia otro doc
+
+---
+
+## 📋 Checklist de Validación
+
+Antes de cada PASO, verifica:
+
+### Antes del PASO 1
+- ¿He identificado qué documentación es relevante? ✓
+
+### Antes del PASO 2
+- ¿He entendido el estado actual del proyecto? ✓
+
+### Antes del PASO 3
+- ¿He identificado todos los archivos afectados? ✓
+- ¿He considerado dependencias? ✓
+
+### Antes del PASO 4
+- ¿El plan es específico y ejecutable? ✓
+- ¿He incluido cambios de documentación? ✓
+
+### Antes del PASO 5
+- ¿Tengo aprobación explícita? ✓
+- ¿El usuario está de acuerdo con el plan? ✓
+
+### Antes del PASO 6
+- ¿He actualizado la documentación? ✓
+- ¿Estoy listo para ejecutar? ✓
+
+---
+
+## ⚠️ Excepciones Raras
+
+En casos MUY específicos, el usuario puede solicitar:
+- "Salta directamente a ejecución" → Solo si dice explícitamente "ejecuta sin plan"
+- "Solo lee la documentación" → Solo si dice "solo analiza, no hagas cambios"
+
+**Pero la regla por defecto es**: SIEMPRE SIGUE LOS 6 PASOS.
+
+---
+
+## 🔓 Ejecución Shell sin Restricciones (Después de Aprobación)
+
+### Principio Fundamental
+
+**Shell NUNCA bloquea** porque siempre requiere interacción humana explícita. El usuario DEBE aprobar cada comando antes de ejecutarse.
+
+### Cuándo Aplica
+
+Después de obtener **aprobación explícita del usuario** en el PASO 4, se puede ejecutar:
+- Comandos shell/bash sin restricciones
+- Operaciones de git complejas
+- Instalación/actualización de dependencias
+- Cualquier operación de infraestructura o sistema
+- Sin tiempos de bloqueo ni esperas predefinidas
+
+### Requisitos Previos
+
+1. ✅ Usuario debe estar informado de qué se ejecutará (mostrar comando exacto)
+2. ✅ Usuario debe dar aprobación explícita ("adelante", "ejecuta", "sí", "procede", etc.)
+3. ✅ Plan debe estar documentado con pasos específicos
+4. ✅ Se debe registrar el comando/operación exacto que se ejecutará
+
+### Proceso
+
+**PASO 4.5️⃣: Presentación del Comando (SIEMPRE)**
+
+Mostrar el comando exacto que se ejecutará:
+```
+Formato:
+"📋 COMANDO A EJECUTAR
+
+$ [comando_exacto]
+
+Efectos esperados:
+- [efecto 1]
+- [efecto 2]
+
+¿Autorizo ejecutar este comando? (sí/no)"
+```
+
+**PASO 6️⃣: Ejecución Shell Directa**
+
+Una vez aprobado, ejecutar sin restricciones:
+- Usa Shell tool con `block_until_ms: 0` para ejecución inmediata
+- NO hay bloqueo porque usuario ya aprobó
+- Captura output completo
+- Reporta errores o resultados
+- Registra en documentación de auditoría
+
+### Ejemplos de Uso
+
+#### ✅ Válido: Con aprobación explícita
+```
+Usuario: "Adelante, ejecuta los cambios"
+→ Ejecutar inmediatamente: git add ., git commit, npm install, etc.
+→ Sin bloqueo: block_until_ms: 0
+```
+
+#### ✅ Válido: Operación compleja aprobada
+```
+Usuario: "Sí, procede con el plan"
+→ Ejecutar: docker build, database migrations, etc.
+→ Sin esperas innecesarias
+```
+
+#### ❌ Inválido: Sin aprobación
+```
+Usuario solo dice: "Parece bien"
+→ Todavía necesitas confirmación explícita ANTES de ejecutar
+```
+
+### Restricciones Importantes
+
+⚠️ **RESTRICCIÓN PRINCIPAL: Protección del `.env`** (Ver: `env-protection.mdc`)
+
+**NUNCA:**
+- Leer, mostrar o manipular el archivo `.env`
+- Cambiar variables de entorno
+- Exponer valores de credenciales, claves API, tokens
+- Crear o editar `.env` con valores reales
+- Incrustar secretos en código, comentarios o logs
+
+**SIEMPRE:**
+- Asumir que `.env` está correctamente configurado
+- Usar referencias a `process.env.VARIABLE_NAME` en el código
+- Listar solo NOMBRES de variables (sin valores)
+- Crear `.env.example` sin valores reales si es necesario
+
+---
+
+⚠️ **Restricciones Secundarias (Shell):**
+
+**Nunca ejecutar sin aprobación:**
+- Comandos destructivos (rm -rf, drop database, etc.)
+- Operaciones que afecten datos de producción
+- Cualquier comando que no esté en el plan aprobado
+
+**Después de aprobación, ejecutar sin restricciones:**
+- El comando es exactamente el que se mostró
+- Verificar que no haya cambios en contexto que invaliden la aprobación
+- Usar `block_until_ms: 0` para ejecución inmediata (sin bloqueos)
+- El usuario ya ha dado su consentimiento, no esperar más confirmaciones
+
+---
+
+## 📚 Referencias de Documentación
+
+Ubicación principal: `/docs/ai-lcd/`
+
+**Documentos principales**:
+- `README.md` - Overview del proyecto
+- `CONSOLIDATED_STATUS.md` - Status definitivo (actualizar aquí)
+- `PLAN_AND_NEXT_STEP.md` - Plan y próximos pasos
+- `SESSION_LOG.md` - Registro de decisiones
+- `EVENT_DRIVEN_ARCHITECTURE.md` - Arquitectura técnica
+- **`REQUESTS_REGISTRY.md` - Rastreo de peticiones del usuario** (NUEVO)
+
+**Subfolderes**:
+- `01-inception/` - Requisitos, casos de uso
+- `02-construction/` - Arquitectura, código, data flows
+- `03-operations/` - Deploy, configuración, troubleshooting
+
+---
+
+## 🎯 Resumen
+
+| Paso | Acción | Resultado |
+|------|--------|-----------|
+| 1 | Leer docs | Entender estado actual |
+| 1.5 | Verificar contradicciones | Detectar conflictos con peticiones previas |
+| 2 | Analizar | Desglosar la petición |
+| 3 | Planificar | Crear plan concreto |
+| 4 | Aprobación | Obtener OK del usuario |
+| 4.5 | Confirmación pre-ejecución | Confirmar comando crítico (si aplica) |
+| 5 | Documentar | Actualizar docs/ai-lcd + REQUESTS_REGISTRY |
+| 6 | Ejecutar (Shell libre) | Realizar cambios sin restricciones |
+
+**REGLA FUNDAMENTAL**: No saltes pasos. Este flujo existe para mantener el proyecto consistente, documentado y alineado con el usuario.
+
+**NUEVA CAPACIDAD**: Después de aprobación explícita (PASO 4), se puede ejecutar shell sin restricciones en PASO 6.

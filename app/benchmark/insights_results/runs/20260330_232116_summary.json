@@ -1,0 +1,14 @@
+[
+  {
+    "provider": "ollama",
+    "status": "ok",
+    "latency_seconds": 86.49,
+    "section_stats": {
+      "missing_sections": [],
+      "section_count": 6,
+      "complete": true,
+      "char_length": 1608
+    },
+    "output_file": "app/benchmark/insights_results/runs/20260330_232116_ollama.md"
+  }
+]

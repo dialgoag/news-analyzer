@@ -1,0 +1,17 @@
+[
+  {
+    "provider": "ollama",
+    "status": "error",
+    "error": "500 Server Error: Internal Server Error for url: http://127.0.0.1:11434/api/chat"
+  },
+  {
+    "provider": "openai",
+    "status": "error",
+    "error": "429 Client Error: Too Many Requests for url: https://api.openai.com/v1/chat/completions"
+  },
+  {
+    "provider": "perplexity",
+    "status": "error",
+    "error": "401 Client Error: Unauthorized for url: https://api.perplexity.ai/v1/sonar"
+  }
+]

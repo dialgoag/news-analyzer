@@ -1,0 +1,245 @@
+---
+description: Sistema de auditoría y historial - Registra cambios, previene regresiones, mantiene trazabilidad
+alwaysApply: true
+---
+
+# Sistema de Auditoría y Historial
+
+## Propósito
+
+Mantener un registro completo de:
+- ✅ Qué funcionalidades están listas
+- ✅ Qué cambios se hicieron (y por qué)
+- ✅ Qué no debe romperse
+- ✅ Impacto de cada cambio
+
+**Objetivo**: Evitar regresiones, recordar decisiones, mantener trazabilidad.
+
+---
+
+## 📋 Sistema de Registro Obligatorio
+
+### PASO A: Registrar en CONSOLIDATED_STATUS.md
+
+Cada cambio DEBE registrarse con estructura clara:
+
+```markdown
+### [NÚMERO]. [Título del cambio] ✅
+**Fecha**: 2026-03-05  
+**Ubicación**: archivo.py línea XYZ  
+**Problema**: Descripción breve del problema  
+**Solución**: Qué se cambió  
+**Impacto**: Qué funciona mejor/diferente  
+**⚠️ NO rompe**: [Lista de funcionalidades que NO se afectaron]
+
+**Verificación**:
+- Punto de control 1: ...
+- Punto de control 2: ...
+```
+
+### PASO B: Registrar en SESSION_LOG.md
+
+Además del status, registra la **decisión** de por qué se hizo:
+
+```markdown
+## 2026-03-05
+
+### Cambio: [Título]
+- **Decisión**: [Por qué se hizo]
+- **Alternativas consideradas**: [Otras opciones]
+- **Impacto en roadmap**: [Cómo afecta próximos pasos]
+- **Riesgo**: [Si hay riesgos conocidos]
+```
+
+### PASO C: Actualizar PLAN_AND_NEXT_STEP.md
+
+Marca qué está hecho y marca **qué NO debe cambiarse**:
+
+```markdown
+## ✅ Completado
+- [x] Feature A (2026-03-05) - ESTABLE, no modificar
+- [x] Feature B (2026-03-04) - ESTABLE, no modificar
+
+## 🔄 En Progreso
+- [ ] Feature C (50%) - Cuidado: cambios aquí pueden afectar Feature A
+
+## 🚫 Congelado (No tocar)
+- ❌ Legacy Module X - Quedaría roto si lo cambias, ver SESSION_LOG
+```
+
+---
+
+## 🛡️ Prevención de Regresiones
+
+### Antes de hacer CUALQUIER cambio:
+
+1. **Verificar impacto**: ¿Qué otras funcionalidades dependen de esto?
+   ```
+   En el plan, agregua:
+   "⚠️ Podría afectar: [Feature X, Feature Y]"
+   ```
+
+2. **Revisar historial**: ¿Se intentó esto antes? ¿Por qué no funcionó?
+   ```
+   Lee SESSION_LOG.md para ver decisiones previas
+   ```
+
+3. **Listar lo que NO debe romperse**:
+   ```
+   En el plan, especifica:
+   "No rompe: [Feature A], [Feature B], [Feature C]"
+   ```
+
+4. **Verificación post-cambio**:
+   ```
+   Después de ejecutar, verifica:
+   - ✅ Feature A sigue funcionando
+   - ✅ Feature B sigue funcionando
+   - ✅ Logs sin errores
+   ```
+
+---
+
+## 📊 Estructura de Historial Recomendada
+
+### En CONSOLIDATED_STATUS.md
+
+```markdown
+## ✅ CAMBIOS COMPLETADOS (Historial de Auditoría)
+
+### 1. SQL Error: task_id → document_id ✅
+**Fecha**: 2026-03-04  
+**Ubicación**: backend/app.py líneas 2962, 3021  
+**Problema**: Endpoint get_workers_status usaba task_id (no existe)  
+**Solución**: Cambié a document_id  
+**Impacto**: Workers status endpoint funciona sin errores  
+**⚠️ NO rompe**: OCR workers, Insights workers, Dashboard  
+**Verificación**: ✅ Testeado manualmente
+
+### 2. Async Workers Never Awaited ✅
+**Fecha**: 2026-03-04  
+**Ubicación**: backend/app.py líneas ~1765, ~1600  
+**Problema**: Scheduler (sync) intentaba crear tasks async  
+**Solución**: Cambié asyncio.create_task() → asyncio.run_coroutine_threadsafe()  
+**Impacto**: Workers async se ejecutan correctamente en background  
+**⚠️ NO rompe**: OCR pipeline, Insights pipeline, Event-driven queue  
+**Verificación**: ✅ Logs muestran workers ejecutándose sin errores
+
+[... más cambios ...]
+```
+
+---
+
+## 🎯 Checklist de Auditoría
+
+### Antes de hacer cambios:
+
+- [ ] ¿He revisado SESSION_LOG.md para decisiones previas?
+- [ ] ¿He identificado todas las dependencias?
+- [ ] ¿He documentado qué NO debe romperse?
+- [ ] ¿He creado un plan con verificaciones?
+- [ ] ¿Tengo aprobación del usuario?
+
+### Después de hacer cambios:
+
+- [ ] ¿He registrado el cambio en CONSOLIDATED_STATUS.md?
+- [ ] ¿He registrado la decisión en SESSION_LOG.md?
+- [ ] ¿He actualizado PLAN_AND_NEXT_STEP.md?
+- [ ] ¿He verificado que no rompí nada?
+- [ ] ¿He testeo las funcionalidades críticas?
+
+---
+
+## 📝 Ejemplos de Registro Correcto
+
+### ❌ MAL (No hay trazabilidad)
+```
+Cambio: Actualicé el código
+```
+
+### ✅ BIEN (Trazabilidad completa)
+```
+### 7. Refactor: Event-Driven Indexing ✅
+**Fecha**: 2026-03-05  
+**Ubicación**: backend/indexing.py (líneas 100-150)  
+**Problema**: Indexing hacía requests síncronos, bloqueaba OCR  
+**Solución**: Implementé cola async con worker_pool  
+**Impacto**: 
+  - Indexing ya no bloquea OCR
+  - Rendimiento OCR +40%
+**⚠️ NO rompe**: 
+  - OCR pipeline ✅
+  - Insights pipeline ✅
+  - Dashboard ✅
+  - Deduplicación ✅
+**Verificación**:
+  - [ ] OCR workers ejecutándose (logs)
+  - [ ] Indexing queue processing
+  - [ ] Dashboard mostrando métricas
+  - [ ] Sin "coroutine never awaited"
+```
+
+---
+
+## 🔍 Qué Documentar en Cada Registro
+
+| Campo | Obligatorio | Ejemplo |
+|-------|------------|---------|
+| Título | ✅ | "SQL Error: task_id → document_id" |
+| Fecha | ✅ | 2026-03-05 |
+| Ubicación | ✅ | backend/app.py línea 123 |
+| Problema | ✅ | "Endpoint usaba columna que no existe" |
+| Solución | ✅ | "Cambié a columna correcta" |
+| Impacto | ✅ | "Endpoint funciona sin errores" |
+| No rompe | ✅ | "OCR workers, Dashboard" |
+| Verificación | ✅ | "Testeado manualmente" |
+
+---
+
+## ⚠️ Funcionalidades Críticas (No Romper)
+
+**Marcar en PLAN_AND_NEXT_STEP.md§Congelado:**
+
+```markdown
+## 🚫 Congelado (No modificar sin razón crítica)
+
+- ❌ Event-Driven OCR Pipeline (2026-03-03)
+  - Razón: Es el corazón del sistema
+  - Impacto: Si lo rompes, nada funciona
+  - Ver: CONSOLIDATED_STATUS.md § Fixes Aplicados
+
+- ❌ Database Schema (worker_tasks, processing_queue)
+  - Razón: Muchas queries dependen de esto
+  - Impacto: Regresiones masivas
+  - Ver: SESSION_LOG.md § 2026-03-04
+
+- ❌ Deduplicación Logic (assign_worker)
+  - Razón: Recién arreglado, delicado
+  - Impacto: Puede generar duplicados
+  - Ver: CONSOLIDATED_STATUS.md § Fix #4
+```
+
+---
+
+## 🚀 Flujo Completo con Auditoría
+
+1. **Leer docs** (incluye revisar historial)
+2. **Analizar** (identificar impactos)
+3. **Planificar** (documentar qué no romper)
+4. **Aprobación**
+5. **Registrar cambio** (CONSOLIDATED_STATUS.md)
+6. **Registrar decisión** (SESSION_LOG.md)
+7. **Actualizar roadmap** (PLAN_AND_NEXT_STEP.md)
+8. **Ejecutar** + Verificar
+9. **Confirmar que nada se rompió**
+
+---
+
+## 📚 Referencias
+
+Archivos donde va el historial:
+- `CONSOLIDATED_STATUS.md` - **QUÉ** se cambió
+- `SESSION_LOG.md` - **POR QUÉ** se cambió
+- `PLAN_AND_NEXT_STEP.md` - **QUÉ NO** debe cambiar
+
+**Regla fundamental**: Si no está documentado en estos 3 archivos, **no cuenta como completado**.

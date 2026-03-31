@@ -1,0 +1,74 @@
+---
+description: Protección de variables de entorno - Los agentes no pueden manipular ni exponer valores del .env
+alwaysApply: true
+---
+
+# Protección de Variables de Entorno
+
+## Restricciones Críticas
+
+El archivo `.env` y cualquier variable de entorno contiene información sensible (claves API, contraseñas, credenciales). Los agentes **NUNCA** deben:
+
+### ❌ Prohibido
+
+1. **Leer o mostrar contenido del `.env`**
+   - No leer el archivo `.env` directamente
+   - No listar o mostrar variables de entorno
+   - No exponer valores de credenciales en logs, mensajes o código
+
+2. **Manipular el `.env`**
+   - No crear, editar o eliminar el archivo `.env`
+   - No añadir, cambiar o eliminar variables de entorno
+   - No generar archivos `.env` de ejemplo con valores reales
+
+3. **Exponer secretos en código**
+   - No incrustar valores del `.env` en archivos de código
+   - No crear archivos de configuración con secretos hardcodeados
+   - No mostrar valores en comentarios, docstrings o mensajes de error
+
+4. **Permitir acceso a secretos**
+   - No imprimir variables de entorno en logs
+   - No retornar credenciales en respuestas
+   - No guardar secretos en archivos visibles o temporales
+
+### ✅ Permitido
+
+- Asumir que las variables de entorno están correctamente configuradas
+- Usar `process.env.VARIABLE_NAME` o equivalente en el código
+- Referenciar que un valor debe venir del `.env` sin mostrarlo
+- Documentar qué variables de entorno se requieren
+- Crear plantillas `.env.example` **sin valores reales**
+- **Enlister solo los NOMBRES de variables de entorno** (sin mostrar valores)
+  - Ejemplo: "Las siguientes variables deben estar configuradas: DATABASE_URL, API_KEY, JWT_SECRET, etc."
+  - Útil para confirmar que existen y recibirán valores en runtime
+
+## Manejo de Errores Relacionados con `.env`
+
+Si un agente necesita información sobre variables de entorno:
+
+```
+❌ MAL (Exponer valores):
+"El archivo .env contiene: DATABASE_URL=postgres://... API_KEY=sk-..."
+
+✅ BIEN (Enlister solo nombres):
+"El archivo .env debe contener las siguientes variables:
+- DATABASE_URL
+- API_KEY
+- JWT_SECRET
+- REDIS_URL
+
+Asegúrate de que están configuradas correctamente en tu entorno local."
+
+✅ BIEN (Verificar disponibilidad):
+"He incluido referencias a process.env.DATABASE_URL, process.env.API_KEY, 
+y process.env.JWT_SECRET en el código. Estos valores serán cargados desde 
+tu archivo .env en tiempo de ejecución."
+```
+
+## Validación
+
+Antes de cualquier interacción con código de configuración:
+
+- ¿Estoy leyendo/mostrando el `.env`? → **DETENER**
+- ¿Voy a escribir secretos en el código? → **DETENER**
+- ¿Voy a exponer credenciales? → **DETENER**

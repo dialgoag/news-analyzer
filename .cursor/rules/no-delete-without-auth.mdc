@@ -1,0 +1,46 @@
+---
+description: Prohibir borrado o eliminación sin autorización explícita del usuario
+alwaysApply: true
+---
+
+# Prohibición de Borrado Sin Autorización
+
+## Regla Fundamental
+
+**NUNCA** borrar, eliminar, mover o sobrescribir archivos, directorios o datos sin **aprobación explícita** del usuario.
+
+## Archivos y Directorios Protegidos (NUNCA tocar sin OK explícito)
+
+| Tipo | Ejemplos | Riesgo |
+|------|----------|--------|
+| **Configuración** | `.env`, `.env.example`, `.env.*` | Credenciales, configuración |
+| **Datos** | `local-data/`, `uploads/`, `backups/`, `*.db` | Datos irreversibles |
+| **Volúmenes** | `postgres/`, `qdrant/`, `huggingface/` | Bases de datos, embeddings |
+| **Submódulos** | Cualquier `git submodule` | Código + datos locales |
+
+## Proceso Obligatorio Antes de Cualquier Operación Destructiva
+
+1. **Listar exactamente** qué se va a borrar/mover
+2. **Mostrar al usuario** el comando o acción
+3. **Esperar aprobación explícita** ("sí", "adelante", "autorizado")
+4. **Si hay datos sensibles** (local-data, .env): advertir que se perderán
+
+## Operaciones que REQUIEREN aprobación explícita
+
+- `rm`, `rm -rf`, `git rm`
+- `mv` que cambie ubicación de datos
+- `git submodule deinit`, `git submodule update` que pueda borrar contenido
+- Cualquier comando que elimine archivos del disco
+
+## Excepciones (solo con aprobación)
+
+- Archivos temporales creados en la misma sesión
+- Limpieza de caché de build (`node_modules`, `__pycache__`) — solo si el usuario lo pide
+
+## Verificación en Refactors
+
+Antes de refactors que impliquen mover/copiar código:
+
+1. **Copiar primero** a destino nuevo
+2. **Verificar** que todo el contenido llegó (incl. local-data, .env.example)
+3. **Solo entonces** considerar eliminar origen — y solo con aprobación

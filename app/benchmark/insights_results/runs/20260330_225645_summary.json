@@ -1,0 +1,7 @@
+[
+  {
+    "provider": "ollama",
+    "status": "error",
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=11434): Max retries exceeded with url: /api/chat (Caused by NewConnectionError(\"HTTPConnection(host='127.0.0.1', port=11434): Failed to establish a new connection: [Errno 1] Operation not permitted\"))"
+  }
+]

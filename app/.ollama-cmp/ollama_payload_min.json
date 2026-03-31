@@ -1,0 +1,5 @@
+{
+  "model": "mistral:latest",
+  "prompt": "Responde en una sola frase en espanol: que es un periodico.",
+  "stream": false
+}

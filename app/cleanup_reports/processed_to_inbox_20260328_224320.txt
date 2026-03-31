@@ -1,0 +1,21 @@
+MOVED ac4b9eb3_02-26-National Geographic.pdf -> app/local-data/inbox/02-26-National Geographic.pdf
+MOVED ff481528_09-03-26-El Mundo.pdf -> app/local-data/inbox/09-03-26-El Mundo.pdf
+MOVED a3cc5cd7_11-03-26-ABC.pdf -> app/local-data/inbox/11-03-26-ABC.pdf
+MOVED 46fdc452_12-02-26-El Periodico Catalunya.pdf -> app/local-data/inbox/12-02-26-El Periodico Catalunya.pdf
+MOVED f14f2cf0_23-03-26-El Pais.pdf -> app/local-data/inbox/23-03-26-El Pais.pdf
+MOVED 91fafac5_23-03-26-El Periodico Catalunya.pdf -> app/local-data/inbox/23-03-26-El Periodico Catalunya.pdf
+MOVED 7f572036_28-01-26-ABC.pdf -> app/local-data/inbox/28-01-26-ABC.pdf
+MOVED 3ff90d23_28-01-26-El Mundo.pdf -> app/local-data/inbox/28-01-26-El Mundo.pdf
+MOVED cbaefdb9_28-01-26-El Periodico Catalunya.pdf -> app/local-data/inbox/28-01-26-El Periodico Catalunya.pdf
+MOVED 8955293e_28-01-26-Expansion.pdf -> app/local-data/inbox/28-01-26-Expansion.pdf
+MOVED d3ab2ae8_28-01-26-La Vanguardia 3.pdf -> app/local-data/inbox/28-01-26-La Vanguardia 3.pdf
+MOVED d3ab2ae8_28-01-26-La Vanguardia.pdf -> app/local-data/inbox/28-01-26-La Vanguardia.pdf
+MOVED f45e84ec_30-01-26-El Mundo 3.pdf -> app/local-data/inbox/30-01-26-El Mundo 3.pdf
+MOVED f45e84ec_30-01-26-El Mundo 4.pdf -> app/local-data/inbox/30-01-26-El Mundo 4.pdf
+MOVED f45e84ec_30-01-26-El Mundo.pdf -> app/local-data/inbox/30-01-26-El Mundo.pdf
+MOVED a87e06a4_30-01-26-El Periodico Catalunya 3.pdf -> app/local-data/inbox/30-01-26-El Periodico Catalunya 3.pdf
+MOVED a87e06a4_30-01-26-El Periodico Catalunya 4.pdf -> app/local-data/inbox/30-01-26-El Periodico Catalunya 4.pdf
+MOVED 67c37b27_30-01-26-La Vanguardia.pdf -> app/local-data/inbox/30-01-26-La Vanguardia.pdf
+MOVED 4ef2f0c2_31-01-26-El Mundo.pdf -> app/local-data/inbox/31-01-26-El Mundo.pdf
+MOVED d00880cd_31-01-26-El Periodico Catalunya.pdf -> app/local-data/inbox/31-01-26-El Periodico Catalunya.pdf
+MOVED 14b2502f_La-Vanguardia-14-feb-.pdf -> app/local-data/inbox/La-Vanguardia-14-feb-.pdf

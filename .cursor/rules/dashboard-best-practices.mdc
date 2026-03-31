@@ -1,0 +1,845 @@
+# Dashboard Best Practices - D3.js + React
+
+## Propósito
+
+Establecer patrones, principios y buenas prácticas para crear dashboards interactivos con D3.js y React que sean:
+- ✅ Interconectados (brushing & linking)
+- ✅ Performance optimizado
+- ✅ Mantenibles y escalables
+- ✅ Accesibles y responsive
+
+---
+
+## 1. Principios Fundamentales
+
+### 1.1 Separación de Concerns (D3 + React)
+
+**REGLA**: React maneja el DOM, D3 maneja los cálculos y transiciones.
+
+```javascript
+// ❌ MAL: D3 crea elementos DOM directamente
+d3.select(ref.current)
+  .append('div')
+  .attr('class', 'chart');
+
+// ✅ BIEN: React crea elementos, D3 solo manipula atributos
+<svg ref={svgRef}>
+  <g className="chart-group"></g>
+</svg>
+
+useEffect(() => {
+  const svg = d3.select(svgRef.current);
+  const g = svg.select('.chart-group');
+  // D3 solo actualiza atributos, no crea elementos
+}, [data]);
+```
+
+**Razón**: Evitar conflictos entre React y D3 por control del DOM.
+
+### 1.2 Brushing & Linking (Visualizaciones Interconectadas)
+
+**REGLA**: Usar estado compartido (Context/Redux) para coordinar filtros entre visualizaciones.
+
+```javascript
+// ✅ BIEN: Estado compartido
+const DashboardContext = createContext();
+
+export const DashboardProvider = ({ children }) => {
+  const [filters, setFilters] = useState({
+    stage: null,
+    timeRange: null,
+    status: null
+  });
+
+  const updateFilter = useCallback((key, value) => {
+    setFilters(prev => ({ ...prev, [key]: value }));
+  }, []);
+
+  return (
+    <DashboardContext.Provider value={{ filters, updateFilter }}>
+      {children}
+    </DashboardContext.Provider>
+  );
+};
+
+// En cada visualización
+function SankeyChart() {
+  const { filters, updateFilter } = useDashboardFilters();
+  
+  // Cuando usuario click en stage
+  const handleStageClick = (stage) => {
+    updateFilter('stage', stage);
+  };
+
+  // Re-render cuando filters cambian
+  useEffect(() => {
+    // Filtrar datos basado en filters.timeRange, filters.status, etc.
+  }, [filters]);
+}
+```
+
+**Razón**: Coordinación centralizada evita bugs y duplicación.
+
+### 1.3 Data Binding Pattern
+
+**REGLA**: Usar el patrón enter/update/exit de D3 para transiciones suaves.
+
+```javascript
+// ✅ BIEN: Enter/Update/Exit
+useEffect(() => {
+  const svg = d3.select(svgRef.current);
+  
+  // DATA JOIN
+  const bars = svg.selectAll('.bar')
+    .data(data, d => d.id); // Key function importante
+  
+  // EXIT: remover elementos viejos
+  bars.exit()
+    .transition()
+    .duration(300)
+    .attr('opacity', 0)
+    .remove();
+  
+  // ENTER: crear elementos nuevos
+  const enter = bars.enter()
+    .append('rect')
+    .attr('class', 'bar')
+    .attr('opacity', 0);
+  
+  // UPDATE: actualizar elementos existentes + nuevos
+  bars.merge(enter)
+    .transition()
+    .duration(300)
+    .attr('x', d => xScale(d.category))
+    .attr('y', d => yScale(d.value))
+    .attr('height', d => height - yScale(d.value))
+    .attr('width', xScale.bandwidth())
+    .attr('opacity', 1);
+    
+}, [data]);
+```
+
+**Razón**: Transiciones suaves mejoran UX, key function previene bugs.
+
+---
+
+## 2. Patrones de Visualización
+
+### 2.1 Sankey Diagram (Pipeline Flow)
+
+**Uso**: Mostrar flujo de documentos entre stages del pipeline.
+
+```javascript
+import * as d3Sankey from 'd3-sankey';
+
+function PipelineSankeyChart({ data }) {
+  const svgRef = useRef();
+  
+  useEffect(() => {
+    // 1. Preparar datos
+    const nodes = [
+      { name: 'Pending' },
+      { name: 'OCR' },
+      { name: 'Chunking' },
+      { name: 'Indexing' },
+      { name: 'Insights' },
+      { name: 'Completed' }
+    ];
+    
+    const links = [
+      { source: 0, target: 1, value: data.ocr_total },
+      { source: 1, target: 2, value: data.chunking_total },
+      // ...
+    ];
+    
+    // 2. Crear layout Sankey
+    const sankey = d3Sankey.sankey()
+      .nodeWidth(15)
+      .nodePadding(10)
+      .extent([[1, 1], [width - 1, height - 6]]);
+    
+    const { nodes: sankeyNodes, links: sankeyLinks } = sankey({
+      nodes: nodes.map(d => Object.assign({}, d)),
+      links: links.map(d => Object.assign({}, d))
+    });
+    
+    // 3. Renderizar
+    const svg = d3.select(svgRef.current);
+    
+    // Links
+    svg.selectAll('.link')
+      .data(sankeyLinks)
+      .join('path')
+      .attr('class', 'link')
+      .attr('d', d3Sankey.sankeyLinkHorizontal())
+      .attr('stroke-width', d => Math.max(1, d.width))
+      .on('click', (event, d) => {
+        // Filtrar por stage
+        updateFilter('stage', d.source.name);
+      });
+    
+    // Nodes
+    svg.selectAll('.node')
+      .data(sankeyNodes)
+      .join('rect')
+      .attr('class', 'node')
+      .attr('x', d => d.x0)
+      .attr('y', d => d.y0)
+      .attr('height', d => d.y1 - d.y0)
+      .attr('width', d => d.x1 - d.x0);
+      
+  }, [data]);
+  
+  return <svg ref={svgRef} width={width} height={height}></svg>;
+}
+```
+
+**Best Practices**:
+- ✅ Tooltip en hover mostrando cantidad exacta
+- ✅ Click en node/link para filtrar
+- ✅ Color consistente por stage (usar VISUAL_ANALYTICS_GUIDELINES)
+- ✅ Transición suave al actualizar datos
+
+### 2.2 Timeline con Brush (Histórico)
+
+**Uso**: Mostrar evolución temporal con zoom interactivo.
+
+```javascript
+import { brushX } from 'd3-brush';
+import { scaleTime, scaleLinear } from 'd3-scale';
+import { line } from 'd3-shape';
+
+function ProcessingTimeline({ data }) {
+  const svgRef = useRef();
+  const { filters, updateFilter } = useDashboardFilters();
+  
+  useEffect(() => {
+    const svg = d3.select(svgRef.current);
+    const margin = { top: 20, right: 20, bottom: 30, left: 40 };
+    const width = 800 - margin.left - margin.right;
+    const height = 400 - margin.top - margin.bottom;
+    
+    // Scales
+    const xScale = scaleTime()
+      .domain(d3.extent(data, d => new Date(d.timestamp)))
+      .range([0, width]);
+    
+    const yScale = scaleLinear()
+      .domain([0, d3.max(data, d => d.count)])
+      .range([height, 0]);
+    
+    // Line generator
+    const lineGenerator = line()
+      .x(d => xScale(new Date(d.timestamp)))
+      .y(d => yScale(d.count))
+      .curve(d3.curveMonotoneX); // Suavizado
+    
+    // Render line
+    svg.select('.line-path')
+      .datum(data)
+      .attr('d', lineGenerator)
+      .attr('fill', 'none')
+      .attr('stroke', '#4dd0e1')
+      .attr('stroke-width', 2);
+    
+    // Brush
+    const brush = brushX()
+      .extent([[0, 0], [width, height]])
+      .on('end', (event) => {
+        if (!event.selection) return;
+        
+        const [x0, x1] = event.selection;
+        const timeRange = [xScale.invert(x0), xScale.invert(x1)];
+        
+        // Actualizar filtro global
+        updateFilter('timeRange', timeRange);
+      });
+    
+    svg.select('.brush-group')
+      .call(brush);
+      
+  }, [data, filters]);
+  
+  return (
+    <svg ref={svgRef} width={800} height={400}>
+      <g className="main-group" transform={`translate(${margin.left},${margin.top})`}>
+        <path className="line-path"></path>
+        <g className="brush-group"></g>
+      </g>
+    </svg>
+  );
+}
+```
+
+**Best Practices**:
+- ✅ Brush para zoom temporal
+- ✅ Reset button si filtro aplicado
+- ✅ Indicador visual de rango seleccionado
+- ✅ Multi-líneas para comparar stages
+
+### 2.3 Heatmap (Carga de Workers)
+
+**Uso**: Visualizar carga de workers por hora del día.
+
+```javascript
+function WorkersHeatmap({ data }) {
+  const svgRef = useRef();
+  
+  useEffect(() => {
+    const svg = d3.select(svgRef.current);
+    
+    // Escalas
+    const xScale = scaleBand()
+      .domain(d3.range(0, 24)) // Horas 0-23
+      .range([0, width])
+      .padding(0.05);
+    
+    const yScale = scaleBand()
+      .domain(['OCR', 'Insights', 'Indexing'])
+      .range([0, height])
+      .padding(0.05);
+    
+    const colorScale = scaleSequential(d3.interpolateRdYlGn)
+      .domain([100, 0]); // 100% = rojo (saturado), 0% = verde (idle)
+    
+    // Renderizar celdas
+    svg.selectAll('.heatmap-cell')
+      .data(data)
+      .join('rect')
+      .attr('class', 'heatmap-cell')
+      .attr('x', d => xScale(d.hour))
+      .attr('y', d => yScale(d.worker_type))
+      .attr('width', xScale.bandwidth())
+      .attr('height', yScale.bandwidth())
+      .attr('fill', d => colorScale(d.load_percentage))
+      .on('click', (event, d) => {
+        // Filtrar por worker y hora
+        updateFilter('workerId', d.worker_id);
+        updateFilter('timeRange', [d.hour, d.hour + 1]);
+      });
+      
+  }, [data]);
+  
+  return <svg ref={svgRef} width={width} height={height}></svg>;
+}
+```
+
+**Best Practices**:
+- ✅ Color scale intuitivo (verde = bajo, rojo = alto)
+- ✅ Tooltip con métricas exactas
+- ✅ Click para filtrar por worker + hora
+- ✅ Legend visible
+
+### 2.4 Word Cloud (Keywords)
+
+**Uso**: Mostrar palabras clave de insights.
+
+```javascript
+import cloud from 'd3-cloud';
+
+function WordCloudViz({ keywords }) {
+  const [words, setWords] = useState([]);
+  
+  useEffect(() => {
+    const layout = cloud()
+      .size([width, height])
+      .words(keywords.map(d => ({ text: d.word, size: d.frequency * 10 })))
+      .padding(5)
+      .rotate(() => ~~(Math.random() * 2) * 90) // 0° o 90°
+      .fontSize(d => d.size)
+      .on('end', setWords);
+    
+    layout.start();
+  }, [keywords]);
+  
+  return (
+    <svg width={width} height={height}>
+      <g transform={`translate(${width / 2}, ${height / 2})`}>
+        {words.map((word, i) => (
+          <text
+            key={i}
+            style={{
+              fontSize: word.size,
+              fill: colorScale(word.category),
+              cursor: 'pointer'
+            }}
+            textAnchor="middle"
+            transform={`translate(${word.x}, ${word.y}) rotate(${word.rotate})`}
+            onClick={() => updateFilter('keyword', word.text)}
+          >
+            {word.text}
+          </text>
+        ))}
+      </g>
+    </svg>
+  );
+}
+```
+
+**Best Practices**:
+- ✅ Tamaño proporcional a frecuencia
+- ✅ Color por categoría
+- ✅ Click para filtrar insights por palabra
+- ✅ Hover para mostrar frecuencia exacta
+
+### 2.5 Force Graph (Topics/Entities)
+
+**Uso**: Visualizar relaciones entre topics o entidades.
+
+```javascript
+import { forceSimulation, forceLink, forceManyBody, forceCenter } from 'd3-force';
+
+function TopicForceGraph({ nodes, links }) {
+  const svgRef = useRef();
+  
+  useEffect(() => {
+    const svg = d3.select(svgRef.current);
+    
+    // Simulación de fuerzas
+    const simulation = forceSimulation(nodes)
+      .force('link', forceLink(links).id(d => d.id).distance(100))
+      .force('charge', forceManyBody().strength(-300))
+      .force('center', forceCenter(width / 2, height / 2))
+      .on('tick', ticked);
+    
+    // Links
+    const link = svg.selectAll('.link')
+      .data(links)
+      .join('line')
+      .attr('class', 'link')
+      .attr('stroke', '#999')
+      .attr('stroke-width', d => Math.sqrt(d.value));
+    
+    // Nodes
+    const node = svg.selectAll('.node')
+      .data(nodes)
+      .join('circle')
+      .attr('class', 'node')
+      .attr('r', d => d.size)
+      .attr('fill', d => colorScale(d.category))
+      .call(drag(simulation)) // Drag behavior
+      .on('click', (event, d) => {
+        // Expandir conexiones del nodo
+        updateFilter('topic', d.id);
+      });
+    
+    function ticked() {
+      link
+        .attr('x1', d => d.source.x)
+        .attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x)
+        .attr('y2', d => d.target.y);
+      
+      node
+        .attr('cx', d => d.x)
+        .attr('cy', d => d.y);
+    }
+    
+    return () => simulation.stop();
+  }, [nodes, links]);
+  
+  return <svg ref={svgRef} width={width} height={height}></svg>;
+}
+
+// Drag behavior
+function drag(simulation) {
+  function dragstarted(event) {
+    if (!event.active) simulation.alphaTarget(0.3).restart();
+    event.subject.fx = event.subject.x;
+    event.subject.fy = event.subject.y;
+  }
+  
+  function dragged(event) {
+    event.subject.fx = event.x;
+    event.subject.fy = event.y;
+  }
+  
+  function dragended(event) {
+    if (!event.active) simulation.alphaTarget(0);
+    event.subject.fx = null;
+    event.subject.fy = null;
+  }
+  
+  return d3.drag()
+    .on('start', dragstarted)
+    .on('drag', dragged)
+    .on('end', dragended);
+}
+```
+
+**Best Practices**:
+- ✅ Drag para reorganizar manualmente
+- ✅ Zoom para explorar clusters
+- ✅ Click para expandir/colapsar nodos
+- ✅ Color por categoría, tamaño por relevancia
+
+---
+
+## 3. Performance Optimization
+
+### 3.1 Lazy Loading
+
+**REGLA**: Cargar visualizaciones pesadas solo cuando son visibles.
+
+```javascript
+import { lazy, Suspense } from 'react';
+
+// ✅ BIEN: Lazy load visualizaciones pesadas
+const WordCloudViz = lazy(() => import('./WordCloudViz'));
+const TopicForceGraph = lazy(() => import('./TopicForceGraph'));
+
+function InsightsDashboard() {
+  return (
+    <div>
+      <Suspense fallback={<div>Loading word cloud...</div>}>
+        <WordCloudViz keywords={keywords} />
+      </Suspense>
+      
+      <Suspense fallback={<div>Loading force graph...</div>}>
+        <TopicForceGraph nodes={nodes} links={links} />
+      </Suspense>
+    </div>
+  );
+}
+```
+
+### 3.2 Virtualization (Large Lists)
+
+**REGLA**: Virtualizar listas de 100+ items.
+
+```javascript
+import { FixedSizeList } from 'react-window';
+
+function DocumentList({ documents }) {
+  const Row = ({ index, style }) => (
+    <div style={style}>
+      {documents[index].filename}
+    </div>
+  );
+  
+  return (
+    <FixedSizeList
+      height={400}
+      itemCount={documents.length}
+      itemSize={50}
+      width="100%"
+    >
+      {Row}
+    </FixedSizeList>
+  );
+}
+```
+
+### 3.3 Debounce en Filtros
+
+**REGLA**: Debounce filtros interactivos (input, slider) para evitar renders excesivos.
+
+```javascript
+import { debounce } from 'lodash';
+
+function DashboardFilters() {
+  const { updateFilter } = useDashboardFilters();
+  
+  // ✅ BIEN: Debounce input
+  const handleSearchChange = useMemo(
+    () => debounce((value) => {
+      updateFilter('search', value);
+    }, 300),
+    [updateFilter]
+  );
+  
+  return (
+    <input
+      type="text"
+      onChange={(e) => handleSearchChange(e.target.value)}
+      placeholder="Search..."
+    />
+  );
+}
+```
+
+### 3.4 Memoization
+
+**REGLA**: Memoizar cálculos costosos de D3 (scales, layouts).
+
+```javascript
+import { useMemo } from 'react';
+
+function SankeyChart({ data }) {
+  // ✅ BIEN: Memoizar layout Sankey
+  const sankeyData = useMemo(() => {
+    const sankey = d3Sankey.sankey()
+      .nodeWidth(15)
+      .nodePadding(10)
+      .extent([[1, 1], [width - 1, height - 6]]);
+    
+    return sankey({
+      nodes: nodes.map(d => Object.assign({}, d)),
+      links: links.map(d => Object.assign({}, d))
+    });
+  }, [data, width, height]);
+  
+  // Render usa sankeyData
+}
+```
+
+---
+
+## 4. State Management Pattern
+
+### 4.1 Coordinated Filters Hook
+
+```javascript
+// hooks/useDashboardFilters.js
+import { createContext, useContext, useState, useCallback } from 'react';
+
+const DashboardContext = createContext();
+
+export const DashboardProvider = ({ children }) => {
+  const [filters, setFilters] = useState({
+    stage: null,
+    timeRange: null,
+    status: null,
+    keyword: null,
+    workerId: null
+  });
+  
+  const updateFilter = useCallback((key, value) => {
+    setFilters(prev => ({ ...prev, [key]: value }));
+  }, []);
+  
+  const clearFilter = useCallback((key) => {
+    setFilters(prev => ({ ...prev, [key]: null }));
+  }, []);
+  
+  const clearAllFilters = useCallback(() => {
+    setFilters({
+      stage: null,
+      timeRange: null,
+      status: null,
+      keyword: null,
+      workerId: null
+    });
+  }, []);
+  
+  return (
+    <DashboardContext.Provider value={{ filters, updateFilter, clearFilter, clearAllFilters }}>
+      {children}
+    </DashboardContext.Provider>
+  );
+};
+
+export const useDashboardFilters = () => {
+  const context = useContext(DashboardContext);
+  if (!context) {
+    throw new Error('useDashboardFilters must be used within DashboardProvider');
+  }
+  return context;
+};
+```
+
+### 4.2 Uso en Componentes
+
+```javascript
+// En cada visualización
+function SankeyChart() {
+  const { filters, updateFilter } = useDashboardFilters();
+  
+  // Filtrar datos localmente
+  const filteredData = useMemo(() => {
+    let result = data;
+    
+    if (filters.timeRange) {
+      const [start, end] = filters.timeRange;
+      result = result.filter(d => {
+        const date = new Date(d.timestamp);
+        return date >= start && date <= end;
+      });
+    }
+    
+    if (filters.status) {
+      result = result.filter(d => d.status === filters.status);
+    }
+    
+    return result;
+  }, [data, filters]);
+  
+  // Renderizar con filteredData
+}
+```
+
+---
+
+## 5. Accessibility
+
+### 5.1 Keyboard Navigation
+
+**REGLA**: Todos los elementos interactivos deben ser navegables por teclado.
+
+```javascript
+<rect
+  className="bar"
+  tabIndex={0}
+  role="button"
+  aria-label={`${d.category}: ${d.value}`}
+  onKeyDown={(e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      handleClick(d);
+    }
+  }}
+  onClick={() => handleClick(d)}
+/>
+```
+
+### 5.2 ARIA Labels
+
+**REGLA**: Agregar labels descriptivos para screen readers.
+
+```javascript
+<svg
+  role="img"
+  aria-label="Pipeline flow chart showing document processing stages"
+>
+  <title>Pipeline Flow Chart</title>
+  <desc>A Sankey diagram showing documents flowing from Pending to OCR to Completed</desc>
+  {/* Chart content */}
+</svg>
+```
+
+### 5.3 Color + Pattern
+
+**REGLA**: No usar solo color para transmitir información.
+
+```javascript
+// ✅ BIEN: Color + pattern
+<rect
+  fill={colorScale(d.status)}
+  stroke={d.status === 'error' ? '#f44336' : 'none'}
+  strokeWidth={d.status === 'error' ? 3 : 0}
+  strokeDasharray={d.status === 'error' ? '5,5' : 'none'}
+/>
+```
+
+---
+
+## 6. Testing
+
+### 6.1 Test D3 Calculations
+
+```javascript
+// SankeyChart.test.js
+import { sankey } from 'd3-sankey';
+
+test('Sankey layout calculates correct node positions', () => {
+  const nodes = [
+    { name: 'A' },
+    { name: 'B' }
+  ];
+  
+  const links = [
+    { source: 0, target: 1, value: 10 }
+  ];
+  
+  const layout = sankey()
+    .nodeWidth(15)
+    .nodePadding(10)
+    .extent([[0, 0], [100, 100]]);
+  
+  const result = layout({ nodes, links });
+  
+  expect(result.nodes[0].x0).toBeLessThan(result.nodes[1].x0);
+  expect(result.nodes[0].y0).toBeDefined();
+});
+```
+
+### 6.2 Test Filters
+
+```javascript
+// useDashboardFilters.test.js
+import { renderHook, act } from '@testing-library/react-hooks';
+import { DashboardProvider, useDashboardFilters } from './useDashboardFilters';
+
+test('updateFilter updates specific filter', () => {
+  const { result } = renderHook(() => useDashboardFilters(), {
+    wrapper: DashboardProvider
+  });
+  
+  act(() => {
+    result.current.updateFilter('stage', 'ocr');
+  });
+  
+  expect(result.current.filters.stage).toBe('ocr');
+  expect(result.current.filters.timeRange).toBeNull();
+});
+
+test('clearAllFilters resets all filters', () => {
+  const { result } = renderHook(() => useDashboardFilters(), {
+    wrapper: DashboardProvider
+  });
+  
+  act(() => {
+    result.current.updateFilter('stage', 'ocr');
+    result.current.updateFilter('status', 'active');
+    result.current.clearAllFilters();
+  });
+  
+  expect(result.current.filters.stage).toBeNull();
+  expect(result.current.filters.status).toBeNull();
+});
+```
+
+---
+
+## 7. Checklist de Implementación
+
+Antes de considerar un dashboard completo, verificar:
+
+### Funcionalidad:
+- [ ] Todas las visualizaciones renderizan correctamente
+- [ ] Filtros coordinados funcionan (click en uno afecta otros)
+- [ ] Hover muestra tooltips informativos
+- [ ] Click en elementos filtra/expande correctamente
+- [ ] Brush/zoom funcionales si aplica
+
+### Performance:
+- [ ] Render inicial < 1s
+- [ ] Transiciones suaves (60fps)
+- [ ] Lazy loading implementado para visualizaciones pesadas
+- [ ] Debounce en inputs/sliders
+- [ ] Memoization en cálculos costosos
+
+### Accesibilidad:
+- [ ] Navegable por teclado
+- [ ] ARIA labels en elementos SVG
+- [ ] Contraste WCAG AA mínimo
+- [ ] No solo color para información crítica
+- [ ] Screen reader friendly
+
+### Código:
+- [ ] React maneja DOM, D3 solo manipula atributos
+- [ ] Enter/Update/Exit pattern usado correctamente
+- [ ] State management centralizado (Context)
+- [ ] Componentes reutilizables
+- [ ] Props tipadas (TypeScript o PropTypes)
+
+### Testing:
+- [ ] Tests unitarios para cálculos D3
+- [ ] Tests de integración para filtros
+- [ ] Tests de accesibilidad (axe-core)
+- [ ] Tests de performance (React Profiler)
+
+---
+
+## 8. Referencias
+
+- [D3.js Gallery](https://observablehq.com/@d3/gallery)
+- [React + D3 Patterns](https://2019.wattenberger.com/blog/react-and-d3)
+- [D3 Force Simulation](https://github.com/d3/d3-force)
+- [D3 Sankey](https://github.com/d3/d3-sankey)
+- [Visual Analytics Guidelines](../docs/ai-lcd/02-construction/VISUAL_ANALYTICS_GUIDELINES.md)
+
+---
+
+**Última actualización**: 2026-03-13  
+**Versión**: 1.0  
+**Autor**: AI-DLC
