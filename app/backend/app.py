@@ -2522,7 +2522,7 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
         
         service = get_insights_worker_service(
             cache_backend="postgres",
-            cache_ttl=86400 * 30,  # 30 days
+            cache_ttl_days=30,  # 30 days
             cache_max_size=10000
         )
         

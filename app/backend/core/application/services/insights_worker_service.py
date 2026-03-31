@@ -76,7 +76,7 @@ class InsightsWorkerService:
     def __init__(
         self,
         cache_backend: str = "postgres",
-        cache_ttl: int = 86400 * 30,  # 30 days
+        cache_ttl_days: int = 30,  # TTL in days
         cache_max_size: int = 10000
     ):
         """
@@ -84,17 +84,17 @@ class InsightsWorkerService:
         
         Args:
             cache_backend: Cache backend ("memory", "postgres", "redis")
-            cache_ttl: Time-to-live for cache entries (seconds)
+            cache_ttl_days: Time-to-live for cache entries (days)
             cache_max_size: Maximum number of entries in cache
         """
         self.cache = InsightMemory(
             backend=cache_backend,
-            ttl=cache_ttl,
-            max_size=cache_max_size
+            ttl_days=cache_ttl_days,
+            max_cache_size=cache_max_size
         )
         logger.info(
             f"✅ InsightsWorkerService initialized: "
-            f"backend={cache_backend}, ttl={cache_ttl}s, max_size={cache_max_size}"
+            f"backend={cache_backend}, ttl={cache_ttl_days}d, max_size={cache_max_size}"
         )
     
     async def generate_insights(
@@ -254,7 +254,7 @@ _insights_worker_service: Optional[InsightsWorkerService] = None
 
 def get_insights_worker_service(
     cache_backend: str = "postgres",
-    cache_ttl: int = 86400 * 30,
+    cache_ttl_days: int = 30,
     cache_max_size: int = 10000
 ) -> InsightsWorkerService:
     """
@@ -262,7 +262,7 @@ def get_insights_worker_service(
     
     Args:
         cache_backend: Cache backend ("memory", "postgres", "redis")
-        cache_ttl: Cache TTL in seconds (default: 30 days)
+        cache_ttl_days: Cache TTL in days (default: 30 days)
         cache_max_size: Max cache entries (default: 10000)
     
     Returns:
@@ -272,7 +272,7 @@ def get_insights_worker_service(
     if _insights_worker_service is None:
         _insights_worker_service = InsightsWorkerService(
             cache_backend=cache_backend,
-            cache_ttl=cache_ttl,
+            cache_ttl_days=cache_ttl_days,
             cache_max_size=cache_max_size
         )
     return _insights_worker_service
