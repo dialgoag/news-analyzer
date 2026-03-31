@@ -1,13 +1,13 @@
 # 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-31
 
-> **Versión definitiva**: Fix #108 deprecated imports (93.5% tests pass); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
+> **Versión definitiva**: Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
 **Última actualización**: 2026-03-31  
 **Prioridad**: REQ-021 — Backend Refactor: Hexagonal + DDD + LangChain/LangGraph/LangMem
 
 ---
 
-### 108. Fixed Deprecated LangChain Imports + Modern Chains API ✅
+### 108. Fixed Deprecated LangChain Imports + Modern Chains API ✅ **COMPLETADO**
 **Fecha**: 2026-03-31  
 **Ubicación**:
 - `app/backend/adapters/driven/llm/chains/extraction_chain.py` (~150 líneas)
@@ -15,7 +15,8 @@
 - `app/backend/adapters/driven/llm/chains/insights_chain.py` (~200 líneas)
 - `app/backend/adapters/driven/llm/providers/openai_provider.py` (~140 líneas)
 - `app/backend/adapters/driven/llm/providers/ollama_provider.py` (~140 líneas)
-- `app/backend/tests/fixtures/mock_providers.py` (~300 líneas)
+- `app/backend/tests/fixtures/mock_providers.py` (~350 líneas)
+- `app/backend/tests/unit/test_insights_graph.py` (~425 líneas)
 
 **Problema**: Tests failing con `ModuleNotFoundError: No module named 'langchain.chains'` y `langchain.schema` - imports deprecated en LangChain moderno.
 
@@ -57,10 +58,13 @@
 5. **Mock Providers**:
    - Agregado `get_model_name()` (requerido por `LLMPort` interface)
    - Mejorado `_get_response()` con detección inteligente:
+     * **Keyword matching por longitud**: Ordena keywords de mayor a menor longitud
+     * Evita false positives (ej: "extracted data" match antes que "extract")
      * Detecta extraction prompts (keywords: "extract", "metadata", "actors")
      * Detecta analysis prompts (keywords: "analyze", "significance", "insights")
      * Retorna response estructurado apropiado automáticamente
    - Creado `UnifiedMockProvider`: Maneja extraction y analysis correctamente
+   - Fixed `InvalidExtractionProvider`: Usa `MockLLMProvider` directamente
 
 **Ventajas de este Approach (Hexagonal > LCEL)**:
 - ✅ Sin dependencia en APIs deprecated de LangChain
@@ -70,14 +74,14 @@
 - ✅ Arquitectura Hexagonal preservada (core no conoce LangChain)
 - ✅ Type safety con Dict returns (estructura explícita)
 
-**Test Results**: 29/31 PASSED (93.5% pass rate)
+**Test Results**: 31/31 PASSED ✅ (100% pass rate)
 - ✅ 16/16 InsightMemory tests PASSED
-- ✅ 13/15 InsightsGraph tests PASSED
-- ⚠️ 2/15 InsightsGraph tests FAILED:
-  * `test_successful_workflow_with_mock_providers`: Analysis validation fails
-  * `test_workflow_failure_after_max_retries`: Extraction attempts count mismatch
-  * Causa: Mock responses no matching validation criteria exactly
-  * Impacto: BAJO - core validation/retry logic funciona (13/15 passed)
+- ✅ 15/15 InsightsGraph tests PASSED
+  * TestValidationNodes: 5/5 ✅
+  * TestConditionalEdges: 6/6 ✅
+  * TestFinalizeNode: 1/1 ✅
+  * TestErrorNode: 1/1 ✅
+  * TestFullWorkflow: 2/2 ✅ (including integration scenarios)
 
 **⚠️ NO rompe**:
 - ✅ Chains API cambió pero NO está integrado en production aún
@@ -85,20 +89,33 @@
 - ✅ Backward compatibility via `InsightsChain` wrapper
 - ✅ InsightMemory tests: 16/16 PASSED
 - ✅ LangGraph validation/conditional logic: 11/11 PASSED
+- ✅ Full workflow integration: 2/2 PASSED
 
 **Verificación**:
-- [x] Tests ejecutados: `pytest tests/unit/ -v` (29/31 passed)
+- [x] Tests ejecutados: `pytest tests/unit/ -v` (31/31 passed, 100%)
 - [x] Import errors resueltos (no más `ModuleNotFoundError`)
 - [x] Chains retornan Dict correctamente
 - [x] Mock providers con `get_model_name()` implementado
 - [x] Logs muestran provider/model/tokens usado
+- [x] Keyword matching determinístico (sort by length)
+- [x] Both workflow tests passing (successful + failure scenarios)
 
-**Next Steps**:
-- Opción A: Arreglar 2 workflow tests (ajustar mock responses) ← OPCIONAL
-- Opción B: Integrar en insights worker ← SIGUIENTE PASO
-- Opción C: Dashboard metrics (cache hit rate)
+**Commits**:
+- `9df2124` - refactor: Fix deprecated LangChain imports + update chains API (29/31)
+- `5e37d0d` - docs: Document Fix #108 (29/31)
+- `6c32418` - fix: Complete mock provider keyword matching (31/31) ✅
 
-**Commit**: `9df2124` - refactor: Fix deprecated LangChain imports + update chains API (REQ-021, Fix #108)
+**Next Steps** (Opción A → B → C):
+- ✅ **Opción A: Testing** ← COMPLETADA (31/31, 100%)
+- 🎯 **Opción B: Integración** ← SIGUIENTE PASO
+  1. Crear `InsightsWorkerService` (hexagonal architecture)
+  2. Integrar `run_insights_workflow()` + `InsightMemory`
+  3. Reemplazar llamadas directas a LLM en `app.py`
+  4. Testear end-to-end con backend completo
+  5. Actualizar documentación
+- ⏳ **Opción C: Monitoring** ← DESPUÉS
+  1. Dashboard metrics (cache hit rate)
+  2. Scheduled cleanup job (expired cache entries)
 
 ---
 
