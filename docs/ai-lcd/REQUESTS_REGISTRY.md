@@ -417,15 +417,27 @@ backend/
 - **LangSmith** (futuro): Tracing y debugging de LLM calls
 
 **Fases de implementación**:
-- ✅ **FASE 0**: Documentación arquitectura (HEXAGONAL_ARCHITECTURE.md)
-- 🔄 **FASE 1**: Estructura base + utils (2-3h)
-- ⏳ **FASE 2**: Domain + Entities (2h)
-- ⏳ **FASE 3**: Infrastructure - Repositories (3h)
-- ⏳ **FASE 4**: Infrastructure - LLM (LangChain/LangGraph) (4-5h) 🔥
-- ⏳ **FASE 5**: Application - Commands/Queries (3h)
-- ⏳ **FASE 6**: Workers + Scheduler (3h)
-- ⏳ **FASE 7**: Interfaces - API Routers (2h)
-- ⏳ **FASE 8**: Testing + Verificación (2h)
+- ✅ **FASE 0**: Documentación arquitectura (HEXAGONAL_ARCHITECTURE.md) — Sesión 46
+- ✅ **FASE 1**: Estructura base + utils (Entities + Value Objects) — Sesión 49 🎯
+  * `core/domain/entities/` → Document, NewsItem, Worker (3 files)
+  * `core/domain/value_objects/` → DocumentId, TextHash, PipelineStatus (3 files)
+  * `tests/unit/` → test_entities.py, test_value_objects.py (48 tests, 100% pass)
+- 🔄 **FASE 2**: Infrastructure - Repositories (3h) 🎯 SIGUIENTE
+  * Crear interfaces de repositories (Ports)
+  * Migrar Stores a Repositories (Adapters)
+  * Usar entities en lugar de dicts
+- ⏳ **FASE 3**: Infrastructure - LLM (LangChain/LangGraph) (4-5h)
+  * ✅ Parcialmente completado (Sesión 47-48)
+  * Chains: ExtractionChain, AnalysisChain, InsightsChain
+  * Graphs: InsightsGraph (LangGraph StateGraph)
+  * Memory: InsightMemory (LangMem PostgreSQL-backed)
+- ⏳ **FASE 4**: Application - Commands/Queries (OPCIONAL - CQRS diferido)
+- ⏳ **FASE 5**: Workers + Scheduler (3h)
+  * ✅ Insights worker integrado (Sesión 48)
+  * ⏳ OCR worker, Indexing worker (pendientes)
+- ⏳ **FASE 6**: Interfaces - API Routers (2h)
+  * Migrar endpoints de app.py a routers/
+- ⏳ **FASE 7**: Testing + Verificación (2h)
 
 **Estimación total**: 20-25 horas (múltiples sesiones)
 

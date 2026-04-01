@@ -1,9 +1,131 @@
 # 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-31
 
-> **Versión definitiva**: Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
+> **Versión definitiva**: Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
 **Última actualización**: 2026-03-31  
 **Prioridad**: REQ-021 — Backend Refactor: Hexagonal + DDD + LangChain/LangGraph/LangMem
+
+---
+
+### 110. Domain Entities + Value Objects (Fase 1: Estructura Base) ✅
+**Fecha**: 2026-03-31  
+**Ubicación**:
+- `app/backend/core/domain/entities/` (NEW)
+  - `document.py` (~235 líneas)
+  - `news_item.py` (~230 líneas)
+  - `worker.py` (~180 líneas)
+- `app/backend/core/domain/value_objects/` (NEW)
+  - `document_id.py` (~130 líneas)
+  - `text_hash.py` (~150 líneas)
+  - `pipeline_status.py` (~160 líneas)
+- `tests/unit/test_entities.py` (NEW, 21 tests)
+- `tests/unit/test_value_objects.py` (NEW, 27 tests)
+
+**Problema**: Backend monolítico (`app.py`, `database.py`) mezcla lógica de negocio con infraestructura. Sin domain model explícito, no hay encapsulación de reglas de negocio, validaciones o transiciones de estado. Difícil de testear y evolucionar.
+
+**Solución**: Implementación de **Domain Model** con Entities y Value Objects siguiendo DDD:
+
+**1. Value Objects** (Immutable, defined by attributes):
+
+- **DocumentId / NewsItemId**:
+  * Encapsulan IDs únicos para documentos/news items
+  * Validación automática (no vacío, tipo correcto)
+  * Factory methods: `.generate()`, `.from_string()`
+  * Equality por valor (no por referencia)
+  * Hasheable para uso en sets/dicts
+
+- **TextHash**:
+  * SHA256 hash para content deduplication
+  * Normalización consistente de texto (lowercase, whitespace)
+  * Validación de formato (64 hex chars)
+  * `.compute(text)` para hashing
+  * `.short_form()` para display (8 chars)
+
+- **PipelineStatus**:
+  * Estados válidos para Document/NewsItem/Worker
+  * **Enums**: `DocumentStatusEnum`, `InsightStatusEnum`, `WorkerStatusEnum`
+  * **Validación de transiciones**: `.can_transition_to(new_status)`
+  * **Status queries**: `.is_terminal()`, `.is_error()`, `.is_processing()`
+  * **Reglas de negocio**:
+    - Document: `uploading` → `queued` → `processing` → `completed`
+    - Insight: `pending` → `queued` → `generating` → `indexing` → `done`
+    - Worker: `assigned` → `started` → `completed`
+
+**2. Entities** (Identity-based, mutable, lifecycle):
+
+- **Document Entity**:
+  * Aggregate root para documentos
+  * **Atributos**: id, filename, sha256, file_size, document_type, status, OCR results, timestamps
+  * **Factory**: `.create(filename, sha256, file_size)` → auto-genera ID, infiere tipo, status inicial
+  * **Status transitions** (business logic):
+    - `.mark_queued()` → Transición a "queued"
+    - `.start_processing()` → Transición a "processing"
+    - `.mark_completed(total_pages, total_items, ocr_length)` → Completa con metadata
+    - `.mark_error(error_message)` → Registra error
+    - `.pause()` / `.resume()` → Control de pipeline
+  * **Queries**: `.is_completed()`, `.is_error()`, `.can_retry()`
+  * **Validation**: No permite transiciones inválidas (raises ValueError)
+
+- **NewsItem Entity**:
+  * Entidad para artículos individuales
+  * **Atributos**: id, document_id (parent), item_index, title, content, text_hash, insight_status, insights, llm_source, timestamps
+  * **Factory**: `.create(document_id, item_index, title, content)` → auto-calcula text_hash
+  * **Insights lifecycle**:
+    - `.queue_for_insights()` → "queued"
+    - `.start_generating_insights()` → "generating"
+    - `.start_indexing()` → "indexing"
+    - `.mark_insights_done(content, llm_source)` → "done" con metadata
+    - `.mark_indexed()` → Registra timestamp Qdrant
+    - `.mark_insights_error(error)` → Registra error
+  * **Queries**: `.has_insights()`, `.is_indexed()`, `.needs_insights()`, `.can_retry_insights()`
+
+- **Worker Entity**:
+  * Entidad para workers background
+  * **Atributos**: worker_id, worker_type (OCR/Insights/Indexing), task_id, document_id, status, timestamps
+  * **Factory**: `.create(worker_type, task_id, document_id)` → auto-genera worker_id
+  * **Lifecycle**:
+    - `.start()` → "started" (registra started_at)
+    - `.complete()` → "completed" (registra completed_at)
+    - `.mark_error(error)` → "error" con mensaje
+  * **Queries**: `.is_active()`, `.is_completed()`, `.duration_seconds()`
+
+**Benefits**:
+- ✅ **Encapsulación de reglas de negocio**: Status transitions, validaciones
+- ✅ **Type safety**: IDs, hashes, statuses son tipos explícitos (no strings sueltos)
+- ✅ **Immutability**: Value objects son frozen dataclasses (thread-safe)
+- ✅ **Testabilidad**: 48 tests (27 value objects + 21 entities) - 100% pass
+- ✅ **Domain-driven design**: Lenguaje ubicuo, separación dominio/infraestructura
+- ✅ **Validation automática**: Construcción de objetos siempre válidos
+- ✅ **Factory methods**: Patrones claros para creación de objetos
+- ✅ **Business logic explícito**: Transiciones de estado en entities, no en app.py
+
+**Testing**:
+```bash
+pytest tests/unit/test_value_objects.py  # 27 tests, 0.04s
+pytest tests/unit/test_entities.py       # 21 tests, 0.04s
+pytest tests/unit/                        # 79 tests total (100% pass)
+```
+
+**⚠️ NO rompe**:
+- ✅ OCR pipeline (no usa entities aún)
+- ✅ Insights pipeline (no usa entities aún)
+- ✅ Dashboard (no usa entities aún)
+- ✅ Database schema (sin cambios)
+- ✅ API endpoints (sin cambios)
+
+**Verificación**:
+- [x] Tests de value objects (27/27 pass)
+- [x] Tests de entities (21/21 pass)
+- [x] Tests existentes (31/31 pass - insights graph, memory)
+- [x] Total tests: 79/79 pass (100%)
+
+**Próximos pasos (REQ-021 Fase 2: Repositories)**:
+1. Crear interfaces de repositories (`DocumentRepository`, `NewsItemRepository`, `WorkerRepository`)
+2. Migrar `DocumentStore` a `PostgresDocumentRepository` (implementa interface)
+3. Migrar `NewsItemStore` a `PostgresNewsItemRepository`
+4. Migrar `WorkerStore` a `PostgresWorkerRepository`
+5. Usar entities en lugar de dicts/tuples
+6. Tests de repositories con mocks
 
 ---
 

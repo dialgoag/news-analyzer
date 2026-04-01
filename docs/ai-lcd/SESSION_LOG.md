@@ -3,7 +3,196 @@
 > Decisiones, cambios importantes, y contexto entre sesiones
 
 **Última actualización**: 2026-03-31  
-**Sesión**: 48 (REQ-021 — Implementación LangGraph + LangMem)
+**Sesión**: 49 (REQ-021 — Fase 1: Domain Entities + Value Objects)
+
+---
+
+## Sesión 49: REQ-021 Fase 1 — Domain Entities + Value Objects (2026-03-31)
+
+### Contexto: Refactor incremental backend → Hexagonal + DDD
+
+Después de completar integración LangGraph + LangMem (Sesión 48), continuamos con refactor incremental del backend monolítico siguiendo plan REQ-021. Usuario eligió **Opción A: Estructura base mínima** (entities + value objects) para sentar las bases del domain model.
+
+### Decisión 1: Value Objects primero, luego Entities
+
+**Por qué este orden**:
+- Value objects son más simples (immutable, no lifecycle)
+- Entities dependen de value objects (DocumentId, TextHash, PipelineStatus)
+- Facilita testing incremental
+- Menor riesgo de breaking changes
+
+**Value Objects implementados**:
+1. **DocumentId / NewsItemId**: Unique identifiers
+   - Factory methods (`.generate()`, `.from_string()`)
+   - Validación automática
+   - Hasheable para uso en collections
+   
+2. **TextHash**: SHA256 para content deduplication
+   - Normalización consistente (lowercase, whitespace)
+   - Validación formato (64 hex chars)
+   - `.compute(text)` factory method
+   
+3. **PipelineStatus**: Status management con transiciones validadas
+   - **Enums**: `DocumentStatusEnum`, `InsightStatusEnum`, `WorkerStatusEnum`
+   - **Transiciones explícitas**: `.can_transition_to(new_status)`
+   - **Queries**: `.is_terminal()`, `.is_error()`, `.is_processing()`
+
+**Benefits value objects**:
+- ✅ Immutable (frozen dataclasses) → thread-safe
+- ✅ Type safety (no más strings sueltos)
+- ✅ Validación en construcción → objetos siempre válidos
+- ✅ Domain language explícito
+
+### Decisión 2: Entities con business logic encapsulado
+
+**Entities implementadas**:
+1. **Document**: Aggregate root para documentos
+   - **Lifecycle**: uploading → queued → processing → completed/error
+   - **Business logic**: `.mark_queued()`, `.start_processing()`, `.mark_completed()`
+   - **Validation**: No permite transiciones inválidas (raises ValueError)
+   - **Queries**: `.is_completed()`, `.can_retry()`
+   
+2. **NewsItem**: Entidad para artículos individuales
+   - **Lifecycle**: pending → queued → generating → indexing → done
+   - **Owns insights**: insight_content, llm_source, timestamps
+   - **Text hash auto-computed** from content
+   
+3. **Worker**: Background worker tasks
+   - **Lifecycle**: assigned → started → completed/error
+   - **Duration tracking**: `.duration_seconds()`
+
+**Por qué así**:
+- **Aggregate root (Document)**: Agrupa NewsItems, controla lifecycle document-level
+- **NewsItem separation**: Cada artículo tiene su propio lifecycle de insights
+- **Worker separation**: Tracking de tareas background independiente
+
+### Decisión 3: Factory methods sobre constructores directos
+
+**Pattern elegido**: Factory methods en lugar de `__init__()` directo
+
+```python
+# ❌ NO HACER
+doc = Document(id=..., filename=..., sha256=..., ...)  # Error-prone
+
+# ✅ HACER
+doc = Document.create(filename="report.pdf", sha256="abc...", file_size=1024000)
+```
+
+**Benefits**:
+- ✅ Auto-genera IDs si no se provee
+- ✅ Infiere document_type desde filename
+- ✅ Status inicial automático
+- ✅ Calcula text_hash automáticamente (NewsItem)
+- ✅ API más limpia y menos error-prone
+
+### Decisión 4: Status transitions como métodos de negocio
+
+**Pattern elegido**: Métodos explícitos para transiciones (no setters)
+
+```python
+# ❌ NO HACER
+document.status = "processing"  # No validation
+
+# ✅ HACER
+document.start_processing()  # Validates transition, updates timestamp, logs
+```
+
+**Benefits**:
+- ✅ Validación automática (can't transition from "uploading" to "completed")
+- ✅ Side effects controlados (timestamps, error clearing)
+- ✅ Audit trail (cada transición es explícita en código)
+- ✅ Domain language (`.start_processing()` más claro que `.set_status("processing")`)
+
+### Decisión 5: Equality por ID (entities) vs. por valor (value objects)
+
+**Entities (identity-based)**:
+```python
+doc1 = Document.create("file1.pdf", ...)
+doc2 = Document.create("file2.pdf", ...)
+doc1.id = doc2.id  # Same ID
+
+doc1 == doc2  # True (same identity, different attributes)
+```
+
+**Value Objects (value-based)**:
+```python
+id1 = DocumentId.from_string("doc_123")
+id2 = DocumentId.from_string("doc_123")
+
+id1 == id2  # True (same value)
+```
+
+**Por qué**:
+- Entities representan "cosas" con lifecycle → identidad importa
+- Value objects representan "atributos" inmutables → valor importa
+
+### Alternativas consideradas y rechazadas
+
+**❌ Alternativa 1: Usar dicts/tuples sin domain model**
+- **Rechazada**: No hay encapsulación, validación ni type safety
+- **Problema**: Error-prone, difícil de evolucionar, tests complicados
+
+**❌ Alternativa 2: ActiveRecord pattern (entities con DB logic)**
+- **Rechazada**: Mezcla dominio con persistencia, dificulta testing
+- **Problema**: Viola SRP, no se puede usar sin DB
+
+**❌ Alternativa 3: Dataclasses simples sin business logic**
+- **Rechazada**: No hay validación de transiciones ni reglas de negocio
+- **Problema**: Lógica se dispersa en app.py/database.py
+
+**✅ Elegido: Domain Model con Entities + Value Objects (DDD)**
+- Encapsulación de reglas de negocio
+- Validación automática
+- Type safety
+- Fácil de testear (no necesita DB)
+- Separación dominio/infraestructura
+
+### Testing strategy
+
+**48 tests nuevos (100% pass)**:
+- 27 tests value objects (DocumentId, NewsItemId, TextHash, PipelineStatus)
+- 21 tests entities (Document, NewsItem, Worker)
+
+**Coverage**:
+- ✅ Factory methods
+- ✅ Status transitions (valid + invalid)
+- ✅ Validation (empty values, invalid formats)
+- ✅ Equality (ID-based vs value-based)
+- ✅ Immutability (frozen dataclasses)
+- ✅ Business queries (is_completed, can_retry, etc.)
+
+**Por qué tanto test**:
+- Domain model es el CORE de la app
+- Errores aquí → impacto alto en todo el sistema
+- Tests documentan comportamiento esperado
+- Facilita refactors futuros (confianza)
+
+### Impacto en roadmap REQ-021
+
+**Completado**:
+- ✅ Fase 1 (Estructura base): Domain entities + value objects
+
+**Próximo (Fase 2: Repositories)**:
+1. Crear interfaces de repositories (Ports)
+2. Migrar Stores a Repositories (Adapters)
+3. Usar entities en lugar de dicts
+4. Tests de repositories
+
+**Riesgo identificado**: BAJO
+- ⚠️ Entities NO se usan aún en código existente (no breaking changes)
+- ⚠️ 79/79 tests pasan (no regresiones)
+- ⚠️ Fase 2 requerirá migración incremental de Stores → Repositories
+
+### Metadata
+
+**Archivos creados** (8 nuevos):
+- `core/domain/entities/` (3): document.py, news_item.py, worker.py
+- `core/domain/value_objects/` (3): document_id.py, text_hash.py, pipeline_status.py
+- `tests/unit/` (2): test_entities.py, test_value_objects.py
+
+**LOC**: ~1500 líneas nuevas (domain model + tests)
+
+**Tests**: 79 total (48 nuevos + 31 existentes)
 
 ---
 
