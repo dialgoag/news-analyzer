@@ -3226,6 +3226,51 @@ Usuario solicita 4 mejoras de UX para el dashboard. Se documentan como REQ-014 p
 
 ## 2026-03-31
 
+### Cambio: REQ-021 Fase 5A - Workers migrados a Repositories
+**Decisión**: Refactorizar OCR/Chunking/Indexing workers para usar `DocumentRepository` en lugar de SQL directo.
+
+**Motivación**:
+- Workers eran el mayor consumidor de SQL raw en app.py
+- Difícil de testear (requieren DB real)
+- Alto acoplamiento con estructura de DB
+- Queremos aprovechar PipelineStatus composable (Fase 1) y connection pooling (Fase 2)
+
+**Alternativas consideradas**:
+1. **Refactor completo**: Mover workers a archivos dedicados + usar repositories
+   - ❌ Muy riesgoso, muchos cambios simultáneos
+2. **Inline refactor (elegida)**: Usar repositories dentro de workers existentes
+   - ✅ Cambios mínimos, verificables
+   - ✅ Coexistencia database.py (metadata) + repositories (status)
+3. **No refactorizar**: Mantener SQL directo
+   - ❌ No aprovecha Hexagonal Architecture
+   - ❌ Dificulta testing
+
+**Implementación (Fase 5A)**:
+- OCR Worker: `DocumentRepository.get_by_id()` + `update_status(PipelineStatus.create(OCR, DONE))`
+- Chunking Worker: Repository-based, lee `document.ocr_text`
+- Indexing Worker: Repository-based, mantiene insights queue
+
+**Coexistencia temporal**:
+- Status updates: Via repositories ✅
+- Metadata legacy (processing_stage, num_chunks, etc.): Vía database.py ⏳
+- Gradualmente migrar metadata a entities
+
+**Impacto en roadmap**:
+- Fase 5B: Scheduler (próximo) - refactorizar queries de documents pending
+- Fase 5C: Insights Worker (opcional) - considerar migrar news_item a repository
+- Fase 6: API Routers - usar repositories en endpoints
+- Fase 7: Testing - unit tests con mock repositories
+
+**Riesgo**:
+- BAJO: Workers son async-safe, repository usa connection pool thread-safe
+- Coexistencia database.py + repository es temporal pero estable
+- Posible overhead mínimo por doble acceso (repository status + direct metadata)
+
+**Verificación**:
+- Código compila ✅
+- 3 workers refactorizados ✅
+- [Pendiente] Test de integración con pipeline real
+
 ### Cambio: REQ-021 Fase 2 — Repositories (Hexagonal + DDD)
 
 **Decisión**: Implementar patrón Repository con interfaces (ports) + adaptadores PostgreSQL para desacoplar `database.py`

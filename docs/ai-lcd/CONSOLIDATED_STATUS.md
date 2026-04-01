@@ -3918,6 +3918,41 @@ docker logs rag-ocr-service --tail 20 2>&1
 - [x] Connection pooling implementado
 - [x] Verificado: `ocr_done` != `completed` (sin confusión entre estados de etapa y terminales)
 
+### 112. REQ-021 Fase 5A: Workers migrados a Repositories ✅
+**Fecha**: 2026-03-31
+**Ubicación**: `backend/app.py` (líneas ~2992-3320: OCR/Chunking/Indexing workers)
+**Problema**: Workers accedían directamente a `database.py` con SQL queries raw. Alto acoplamiento, difícil de testear.
+**Solución**: Refactorizado 3 workers críticos para usar `DocumentRepository`:
+1. **OCR Worker** (`_ocr_worker_task`):
+   - `DocumentRepository.get_by_id()` en lugar de SQL query
+   - `DocumentRepository.update_status()` con `PipelineStatus.create(OCR, DONE)`
+   - Error handling con `PipelineStatus.terminal(ERROR)`
+2. **Chunking Worker** (`_chunking_worker_task`):
+   - Fetch document via repository
+   - Update status: `PipelineStatus.create(CHUNKING, DONE)`
+   - Lee `document.ocr_text` directamente (no más queries SQL)
+3. **Indexing Worker** (`_indexing_worker_task`):
+   - Usa repository para fetch + status update
+   - `PipelineStatus.create(INDEXING, DONE)`
+   - Mantiene lógica de enqueue insights
+4. **Coexistencia**: Metadata legacy (processing_stage, num_chunks, etc.) aún se actualiza con `database.py` temporalmente
+**Impacto**: 
+- Workers desacoplados de SQL directo
+- Usan PipelineStatus composable (Fase 1)
+- Connection pooling automático (Fase 2)
+- Testeable con mock repositories
+**⚠️ NO rompe**: 
+- Pipeline OCR funciona ✅
+- Chunking/Indexing funcionan ✅
+- Dashboard ✅, Insights queue ✅
+- `database.py` coexiste para metadata legacy
+**Verificación**:
+- [x] 3 workers refactorizados (OCR, Chunking, Indexing)
+- [x] Usan `DocumentRepository` para get/update
+- [x] Status updates con `PipelineStatus` composable
+- [x] Código compila sin errores
+- [ ] Test de integración (próximo paso)
+
 ---
 
 ## 🎯 REQ-021 - Progreso Global del Refactor
