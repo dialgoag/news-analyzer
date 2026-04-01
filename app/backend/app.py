@@ -548,7 +548,7 @@ ocr_service: Optional[OCRService] = None
 embeddings_service: Optional[EmbeddingsService] = None
 rag_pipeline: Optional[RAGPipeline] = None
 qdrant_connector: Optional[QdrantConnector] = None
-generic_worker_pool = None  # Unified worker pool for all pipeline tasks
+# generic_worker_pool removed in Fase 5C (master scheduler handles all dispatch)
 
 # Conversational memory for users
 user_conversations: dict = {}  # {user_id: [{"user": "...", "assistant": "..."}]}
@@ -1351,23 +1351,10 @@ async def startup_event():
             logger.error(traceback.format_exc())
             print(f"❌ ERROR REGISTERING MASTER PIPELINE: {e}\n", flush=True)
 
-        # Workers Health Check - Auto-restart workers if needed (every 30 seconds)
-        print("\n\n🏥 ===== STARTING WORKERS HEALTH CHECK ===== 🏥\n", flush=True)
-        sys.stdout.flush()
-        logger.info("🏥 Starting Workers Health Check (every 30 seconds)...")
-        try:
-            backup_scheduler.add_job(
-                workers_health_check,
-                trigger_type='interval',
-                job_id='workers_health_check_job',
-                seconds=30
-            )
-            logger.info("✅ Workers Health Check initialized")
-            print("✅ ===== WORKERS HEALTH CHECK REGISTERED ===== ✅\n", flush=True)
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize Workers Health Check: {e}")
-            logger.error(traceback.format_exc())
-            print(f"❌ ERROR REGISTERING WORKERS HEALTH CHECK: {e}\n", flush=True)
+        # Workers Health Check removed in Fase 5C
+        # Master Pipeline Scheduler handles all worker dispatch directly
+        print("\n✅ ===== WORKER DISPATCH HANDLED BY MASTER SCHEDULER ===== ✅\n", flush=True)
+        logger.info("✅ Master Scheduler handles all worker dispatch (no separate health check needed)")
 
         # Initialize worker pools (persistent workers that listen to DB semaphore)
         # COMMENTED OUT: Workers will be started later via lazy initialization to avoid DB contention at startup
@@ -2733,276 +2720,13 @@ def run_news_item_insights_queue_job_parallel():
         logger.error(f"Insights scheduler error: {e}", exc_info=True)
 
 
+
 # ============================================================================
-# GENERIC TASK DISPATCHER & HANDLERS
+# WORKER TASKS (Refactored with Hexagonal Architecture - REQ-021 Fase 5A)
 # ============================================================================
-
-async def _handle_ocr_task(task_data: dict, worker_id: str):
-    """Handler for OCR tasks - extracts text only"""
-    document_id = task_data['document_id']
-    filename = task_data['filename']
-    
-    logger.info(f"[{worker_id}] OCR task: {filename}")
-    processing_queue_store.update_worker_status(worker_id, document_id, 'ocr', 'started')
-    
-    try:
-        # Resolve actual file path (handles .pdf extension, Fix #95)
-        file_path = resolve_file_path(document_id, UPLOAD_DIR)
-        
-        text, doc_type, content_hash = await asyncio.to_thread(_extract_ocr_only, file_path, document_id, filename)
-        
-        document_status_store.store_ocr_text(document_id, text)
-        
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE document_status
-            SET status = %s, processing_stage = %s, indexed_at = %s, doc_type = %s
-            WHERE document_id = %s
-        """, (DocStatus.OCR_DONE, Stage.OCR, datetime.utcnow().isoformat(), doc_type, document_id))
-        conn.commit()
-        conn.close()
-        
-        processing_queue_store.update_worker_status(worker_id, document_id, 'ocr', 'completed')
-        processing_queue_store.mark_task_completed(document_id, 'ocr')
-        logger.info(f"[{worker_id}] ✅ OCR completed: {filename}")
-        
-    except Exception as e:
-        logger.error(f"[{worker_id}] OCR failed: {e}", exc_info=True)
-        document_status_store.update_status(document_id, DocStatus.ERROR, error_message=str(e)[:200])
-        processing_queue_store.update_worker_status(worker_id, document_id, 'ocr', 'error', error_message=str(e)[:200])
-        processing_queue_store.mark_task_completed(document_id, 'ocr')
-        raise
-
-
-async def _handle_chunking_task(task_data: dict, worker_id: str):
-    """Handler for Chunking tasks - segments and chunks text"""
-    document_id = task_data['document_id']
-    filename = task_data['filename']
-    
-    logger.info(f"[{worker_id}] Chunking task: {filename}")
-    processing_queue_store.update_worker_status(worker_id, document_id, 'chunking', 'started')
-    
-    try:
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT ocr_text, doc_type FROM document_status WHERE document_id = %s", (document_id,))
-        result = cursor.fetchone()
-        conn.close()
-        
-        if not result or not result['ocr_text']:
-            raise ValueError("No OCR text found for chunking")
-        
-        ocr_text, doc_type = result['ocr_text'], result['doc_type'] or "unknown"
-        chunk_records = await asyncio.to_thread(_perform_chunking, ocr_text, document_id, filename, doc_type)
-        
-        document_status_store.update_status(document_id, DocStatus.CHUNKING_DONE, processing_stage=Stage.CHUNKING, num_chunks=len(chunk_records))
-        processing_queue_store.update_worker_status(worker_id, document_id, 'chunking', 'completed')
-        processing_queue_store.mark_task_completed(document_id, 'chunking')
-        logger.info(f"[{worker_id}] ✅ Chunking completed: {len(chunk_records)} chunks")
-        
-    except Exception as e:
-        logger.error(f"[{worker_id}] Chunking failed: {e}", exc_info=True)
-        document_status_store.update_status(document_id, DocStatus.ERROR, error_message=str(e)[:200])
-        processing_queue_store.update_worker_status(worker_id, document_id, 'chunking', 'error', error_message=str(e)[:200])
-        processing_queue_store.mark_task_completed(document_id, 'chunking')
-        raise
-
-
-async def _handle_indexing_task(task_data: dict, worker_id: str):
-    """Handler for Indexing tasks - reconstructs chunks from OCR text and indexes into Qdrant."""
-    document_id = task_data['document_id']
-    filename = task_data['filename']
-    
-    logger.info(f"[{worker_id}] Indexing task: {filename}")
-    processing_queue_store.update_worker_status(worker_id, document_id, TaskType.INDEXING, WorkerStatus.STARTED)
-    
-    try:
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT ocr_text, doc_type FROM document_status WHERE document_id = %s", (document_id,))
-        result = cursor.fetchone()
-        conn.close()
-        
-        if not result or not result['ocr_text']:
-            raise ValueError("No OCR text available for indexing")
-        
-        ocr_text = result['ocr_text']
-        doc_type = result['doc_type'] or "unknown"
-        
-        chunk_records = await asyncio.to_thread(_perform_chunking, ocr_text, document_id, filename, doc_type)
-        
-        if not chunk_records:
-            raise ValueError("No chunk records generated for indexing")
-        
-        logger.info(f"[{worker_id}] Indexing {len(chunk_records)} chunks into Qdrant...")
-        await asyncio.to_thread(rag_pipeline.index_chunk_records, chunk_records)
-        
-        document_status_store.update_status(
-            document_id, DocStatus.INDEXING_DONE,
-            processing_stage=Stage.INDEXING,
-            indexed_at=datetime.utcnow().isoformat(),
-            num_chunks=len(chunk_records)
-        )
-        document_status_store.mark_for_reprocessing(document_id, requested=False)
-        
-        if INSIGHTS_QUEUE_ENABLED and rag_pipeline:
-            items = news_item_store.list_by_document_id(document_id)
-            for it in items:
-                news_item_insights_store.enqueue(
-                    news_item_id=it["news_item_id"],
-                    document_id=document_id,
-                    filename=filename,
-                    item_index=int(it.get("item_index") or 0),
-                    title=it.get("title") or "",
-                    text_hash=it.get("text_hash") or None,
-                )
-            logger.info(f"[{worker_id}] Queued {len(items)} insights tasks")
-        
-        processing_queue_store.update_worker_status(worker_id, document_id, TaskType.INDEXING, WorkerStatus.COMPLETED)
-        processing_queue_store.mark_task_completed(document_id, TaskType.INDEXING)
-        logger.info(f"[{worker_id}] ✅ Indexing completed: {len(chunk_records)} chunks indexed")
-        
-    except Exception as e:
-        logger.error(f"[{worker_id}] Indexing failed: {e}", exc_info=True)
-        document_status_store.update_status(document_id, DocStatus.ERROR, error_message=str(e)[:200])
-        processing_queue_store.update_worker_status(worker_id, document_id, TaskType.INDEXING, WorkerStatus.ERROR, error_message=str(e)[:200])
-        processing_queue_store.mark_task_completed(document_id, TaskType.INDEXING)
-        raise
-
-
-def _index_insight_in_qdrant(news_item_id: str, document_id: str, filename: str, title: str, content: str):
-    """Index insight content in Qdrant for RAG retrieval (PEND-001). Used by indexing_insights worker."""
-    if not qdrant_connector or not embeddings_service:
-        return
-    try:
-        vector = embeddings_service.embed_text(content, is_query=False)
-        if vector:
-            qdrant_connector.insert_insight_vector(
-                vector=vector,
-                news_item_id=news_item_id,
-                document_id=document_id,
-                filename=filename,
-                text=content,
-                title=title or "",
-            )
-    except Exception as e:
-        logger.warning(f"Insight indexing failed for {news_item_id}: {e}")
-
-
-async def _handle_indexing_insights_task(task_data: dict, worker_id: str):
-    """Handler for Indexing Insights tasks - embeds insight content and inserts into Qdrant."""
-    news_item_id = task_data.get("news_item_id")
-    document_id = task_data.get("document_id")
-    filename = task_data.get("filename", "")
-    title = task_data.get("title", "")
-    content = task_data.get("content", "")
-    if not news_item_id or not content:
-        logger.warning(f"[{worker_id}] Indexing insights: missing news_item_id or content")
-        news_item_insights_store.set_status(news_item_id or "unknown", news_item_insights_store.STATUS_DONE)
-        return
-    processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", TaskType.INDEXING_INSIGHTS, WorkerStatus.STARTED)
-    try:
-        _index_insight_in_qdrant(news_item_id, document_id, filename, title, content)
-        news_item_insights_store.set_indexed_in_qdrant(news_item_id)
-        processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", TaskType.INDEXING_INSIGHTS, WorkerStatus.COMPLETED)
-        logger.info(f"[{worker_id}] ✅ Insight indexed in Qdrant: {news_item_id}")
-    except Exception as e:
-        logger.error(f"[{worker_id}] Indexing insights failed: {e}", exc_info=True)
-        news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_DONE)
-        processing_queue_store.update_worker_status(
-            worker_id, f"insight_{news_item_id}", TaskType.INDEXING_INSIGHTS, WorkerStatus.ERROR, error_message=str(e)[:200]
-        )
-        raise
-
-
-async def _handle_insights_task(task_data: dict, worker_id: str):
-    """Handler for Insights tasks - generates LLM insights.
-    Checks text_hash dedup BEFORE calling GPT to reuse existing insights and save costs."""
-    news_item_id = task_data.get('news_item_id')
-    document_id = task_data.get('document_id')
-    filename = task_data.get('filename', '')
-    title = task_data.get('title', '')
-    
-    if not news_item_id:
-        raise ValueError("news_item_id is required for insights tasks")
-    
-    logger.info(f"[{worker_id}] Insights task: {title or filename}")
-    processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", 'insights', 'started')
-    
-    # DEDUP: Check text_hash before calling GPT
-    try:
-        conn_dedup = document_status_store.get_connection()
-        cur_dedup = conn_dedup.cursor()
-        cur_dedup.execute("SELECT text_hash FROM news_item_insights WHERE news_item_id = %s", (news_item_id,))
-        row_hash = cur_dedup.fetchone()
-        text_hash = row_hash['text_hash'] if row_hash and row_hash.get('text_hash') else None
-        conn_dedup.close()
-    except Exception:
-        text_hash = None
-    
-    if text_hash:
-        existing = news_item_insights_store.get_done_by_text_hash(text_hash)
-        if existing and existing.get("content") and existing.get("news_item_id") != news_item_id:
-            news_item_insights_store.set_status(
-                news_item_id, news_item_insights_store.STATUS_DONE,
-                content=existing["content"], llm_source=existing.get("llm_source")
-            )
-            processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", 'insights', 'completed')
-            processing_queue_store.mark_task_completed(f"insight_{news_item_id}", 'insights')
-            logger.info(f"[{worker_id}] ♻️ Reused insight via text_hash for {news_item_id} (saved GPT call)")
-            return
-    
-    news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_GENERATING)
-    
-    try:
-        chunks = qdrant_connector.get_chunks_by_news_item_ids([news_item_id], max_chunks=500)
-        if not chunks:
-            raise ValueError("No chunks found")
-        
-        texts = [c.get("text", "") for c in chunks if c.get("text")]
-        context = "\n\n".join(texts)[:80000]
-        label = f"{filename} — {title}".strip(" —")
-        
-        content, llm_source = generate_insights_for_queue(context, label)
-        news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_DONE, content=content, llm_source=llm_source)
-        
-        processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", 'insights', 'completed')
-        logger.info(f"[{worker_id}] ✅ Insights generated ({llm_source})")
-        
-    except RateLimitError as e:
-        logger.warning(f"[{worker_id}] ⏳ OpenAI 429 rate limited — re-enqueuing as pending (not an error): {e}")
-        news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_PENDING)
-        processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", 'insights', 'completed')
-        return
-
-    except Exception as e:
-        logger.error(f"[{worker_id}] Insights failed: {e}", exc_info=True)
-        news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_ERROR, error_message=str(e)[:200])
-        processing_queue_store.update_worker_status(worker_id, f"insight_{news_item_id}", 'insights', 'error', error_message=str(e)[:200])
-        raise
-
-
-async def generic_task_dispatcher(task_type: str, task_data: dict, worker_id: str):
-    """
-    Generic task dispatcher - routes tasks to specialized handlers.
-    This allows a single worker pool to handle all task types efficiently.
-    """
-    handlers = {
-        'ocr': _handle_ocr_task,
-        'chunking': _handle_chunking_task,
-        'indexing': _handle_indexing_task,
-        'insights': _handle_insights_task,
-        'indexing_insights': _handle_indexing_insights_task,
-    }
-    
-    handler = handlers.get(task_type)
-    if not handler:
-        raise ValueError(f"Unknown task type: {task_type}")
-    
-    logger.debug(f"[{worker_id}] Dispatching {task_type} task")
-    return await handler(task_data, worker_id)
-
+# Legacy GenericWorkerPool handlers removed in Fase 5C
+# Master scheduler now dispatches directly to repository-based workers
+# ============================================================================
 
 async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
     """
@@ -3318,116 +3042,13 @@ async def _indexing_worker_task(document_id: str, filename: str, worker_id: str)
             logger.error(f"[{worker_id}] Failed to mark error: {e2}")
 
 
-def run_document_ocr_queue_job_parallel():
-    """
-    Scheduler job (runs every 15s): checks database semaphore and dispatches workers.
-    
-    Logic:
-    1. Check worker_tasks: count active workers (status='assigned' or 'started')
-    2. If active < max_workers (2): there's a free slot
-    3. Check processing_queue: any pending 'ocr' tasks?
-    4. If yes: create unique worker_id, assign task, spawn background worker
-    
-    Each worker is independent and has its own worker_id. If a worker crashes,
-    its task remains in worker_tasks with worker_id marked, enabling recovery.
-    
-    No ThreadPoolExecutor needed - just let async handle it.
-    """
-    if not ocr_service or not rag_pipeline or not qdrant_connector:
-        return
-    
-    try:
-        parallel_workers = max(2, min(
-            int(os.getenv("OCR_PARALLEL_WORKERS", "2")),
-            10
-        ))
-        
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        
-        # Check database semaphore: how many workers are active?
-        cursor.execute("""
-            SELECT COUNT(*) as active
-            FROM worker_tasks
-            WHERE status IN ('assigned', 'started')
-            AND worker_type = 'OCR'
-        """)
-        result = cursor.fetchone()
-        active_workers = result[list(result.keys())[0]] if result else 0
-        
-        if active_workers >= parallel_workers:
-            logger.debug(f"OCR scheduler: {active_workers}/{parallel_workers} workers busy, skipping")
-            conn.close()
-            return
-        
-        # There's a free slot! Check for pending task and mark as processing atomically
-        # Use SELECT FOR UPDATE to prevent race conditions
-        cursor.execute("""
-            SELECT * FROM processing_queue
-            WHERE status = 'pending' AND task_type = 'ocr'
-            ORDER BY priority DESC, created_at ASC
-            LIMIT 1
-            FOR UPDATE SKIP LOCKED
-        """)
-        
-        task_row = cursor.fetchone()
-        
-        if not task_row:
-            conn.close()
-            return
-        
-        task = dict(task_row)
-        task_id = task['id']
-        document_id = task['document_id']
-        filename = task['filename']
-        conn.close()  # Close connection before assign_worker (it opens its own)
-        
-        # Create unique worker ID (will be marked in worker_tasks)
-        worker_id = f"ocr_{os.getpid()}_{int(time.time() * 1000) % 100000}"
-        
-        logger.info(f"OCR scheduler: Attempting to assign worker {worker_id} for {filename}")
-        
-        # CRITICAL: Primero asignar worker (verifica duplicados atómicamente con SELECT FOR UPDATE)
-        # Esto actúa como semáforo centralizado - solo UN worker puede asignarse por documento/tarea
-        assigned = processing_queue_store.assign_worker(
-            worker_id, 'OCR', document_id, 'ocr'
-        )
-        
-        if not assigned:
-            # Otro worker ya está procesando este documento - saltar (semáforo bloqueado)
-            logger.warning(f"OCR scheduler: Document {document_id} already assigned to another worker, skipping")
-            return
-        
-        # Solo marcar como processing si la asignación fue exitosa (worker ya tiene el lock)
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE processing_queue
-            SET status = 'processing'
-            WHERE id = %s
-        """, (task_id,))
-        conn.commit()
-        conn.close()
-        
-        logger.info(f"OCR scheduler: Successfully assigned worker {worker_id} for {filename}")
-        
-        # Spawn background worker task in a separate thread (only if assignment succeeded)
-        # APScheduler is already in a thread, but we need to avoid blocking it
-        try:
-            from threading import Thread
-            worker_thread = Thread(
-                target=lambda: asyncio.run(_ocr_worker_task(document_id, filename, worker_id)),
-                name=f"ocr-worker-{worker_id}",
-                daemon=True
-            )
-            worker_thread.start()
-            logger.info(f"OCR worker {worker_id} thread started")
-        except Exception as e:
-            logger.error(f"Failed to start OCR worker thread: {e}", exc_info=True)
-                    
-    except Exception as e:
-        logger.error(f"OCR scheduler error: {e}", exc_info=True)
 
+# ============================================================================
+# CLEANUP & RECOVERY FUNCTIONS
+# ============================================================================
+# Individual schedulers (run_document_*_queue_job_parallel) removed in Fase 5C
+# Master scheduler handles all dispatching directly
+# ============================================================================
 
 async def detect_crashed_workers():
     """
@@ -3602,82 +3223,10 @@ def _run_async_in_scheduler(coro):
         raise
 
 
-def workers_health_check():
-    """
-    Verifica periódicamente si hay workers activos y los reinicia si es necesario.
-    Se ejecuta cada 30 segundos para asegurar que siempre haya workers procesando.
-    """
-    global generic_worker_pool
-    
-    try:
-        # Solo verificar si los servicios están listos
-        if not ocr_service or not rag_pipeline:
-            logger.debug("⏭️  Workers health check skipped: Services not ready")
-            return
-        
-        # Get worker pool size from env (same as start_workers endpoint)
-        total_workers = int(os.getenv('PIPELINE_WORKERS_COUNT', 20))
-        
-        # Verificar si el pool existe y está corriendo
-        if generic_worker_pool is None or not generic_worker_pool.running:
-            logger.warning("⚠️  Workers health check: No active worker pool detected!")
-            logger.info("🔄 Auto-starting workers...")
-            
-            from worker_pool import GenericWorkerPool
-            
-            # Stop existing pool if it exists but isn't running
-            if generic_worker_pool is not None and not generic_worker_pool.running:
-                logger.info("♻️ Stopping stale worker pool...")
-                try:
-                    generic_worker_pool.stop()
-                except Exception as e:
-                    logger.warning(f"Error stopping stale pool: {e}")
-            
-            # Create new pool
-            logger.info(f"🚀 Creating new worker pool with {total_workers} workers...")
-            generic_worker_pool = GenericWorkerPool(
-                pool_size=total_workers,
-                task_dispatcher_func=generic_task_dispatcher,
-                db_connection_factory=document_status_store.get_connection
-            )
-            
-            # Start pool
-            generic_worker_pool.start()
-            logger.info(f"✅ Worker pool auto-started: {total_workers} workers ready")
-            
-            return
-        
-        # Si el pool existe y está corriendo, verificar que tenga workers activos
-        active_count = len([w for w in generic_worker_pool.workers if w.is_alive()])
-        
-        if active_count == 0:
-            logger.error(f"❌ Workers health check: Pool running but NO alive threads!")
-            logger.info("🔄 Restarting worker pool...")
-            
-            try:
-                generic_worker_pool.stop()
-            except Exception as e:
-                logger.warning(f"Error stopping dead pool: {e}")
-            
-            # Recreate pool
-            from worker_pool import GenericWorkerPool
-            generic_worker_pool = GenericWorkerPool(
-                pool_size=total_workers,
-                task_dispatcher_func=generic_task_dispatcher,
-                db_connection_factory=document_status_store.get_connection
-            )
-            generic_worker_pool.start()
-            logger.info(f"✅ Worker pool restarted: {total_workers} workers ready")
-            
-        elif active_count < generic_worker_pool.pool_size:
-            logger.warning(f"⚠️  Workers health check: Only {active_count}/{generic_worker_pool.pool_size} workers alive")
-            # No reiniciar aquí, solo alertar - puede ser normal si algunos threads terminaron tasks
-        else:
-            logger.info(f"✓ Workers health check OK: {active_count}/{generic_worker_pool.pool_size} workers alive")
-        
-    except Exception as e:
-        logger.error(f"❌ Workers health check failed: {e}", exc_info=True)
 
+# ============================================================================
+# INBOX SCANNING
+# ============================================================================
 
 def run_inbox_scan():
     """
@@ -6565,54 +6114,21 @@ async def get_dashboard_analysis(
 
 @app.post("/api/workers/start")
 async def start_workers(current_user: CurrentUser = Depends(require_admin)):
-    """Start the unified generic worker pool (ADMIN only)."""
-    global generic_worker_pool
-    try:
-        from worker_pool import GenericWorkerPool
-        
-        logger.info(
-            "🚀 Starting unified generic worker pool (requested by %s)...",
-            current_user.username,
-        )
-        
-        # Check if pool exists AND is running, otherwise recreate
-        pool_needs_start = (
-            generic_worker_pool is None or 
-            not generic_worker_pool.running
-        )
-        
-        if pool_needs_start and ocr_service and rag_pipeline:
-            # Stop existing pool if it exists but isn't running
-            if generic_worker_pool is not None and not generic_worker_pool.running:
-                logger.info("♻️ Stopping stale worker pool...")
-                generic_worker_pool.stop()
-            
-            # Calculate total pool size from env vars
-            total_workers = int(os.getenv('PIPELINE_WORKERS_COUNT', 20))
-            
-            logger.info(f"👷 Initializing generic worker pool with {total_workers} workers...")
-            generic_worker_pool = GenericWorkerPool(
-                pool_size=total_workers,
-                task_dispatcher_func=generic_task_dispatcher,
-                db_connection_factory=document_status_store.get_connection
-            )
-            generic_worker_pool.start()
-            logger.info(f"✅ Generic worker pool started with {total_workers} workers")
-            logger.info("   Workers can handle: OCR, Chunking, Indexing, Insights, Indexing Insights")
-        elif generic_worker_pool and generic_worker_pool.running:
-            logger.info(f"ℹ️ Worker pool already running with {generic_worker_pool.pool_size} workers")
-        
-        return {
-            "status": "success",
-            "message": "Generic worker pool started successfully",
-            "pool_active": generic_worker_pool is not None and generic_worker_pool.running,
-            "pool_size": generic_worker_pool.pool_size if generic_worker_pool else 0,
-            "supported_tasks": ["ocr", "chunking", "indexing", "insights", "indexing_insights"]
-        }
-    except Exception as e:
-        logger.error(f"❌ Error starting worker pool: {e}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Error starting worker pool: {str(e)}")
+    """
+    Info endpoint - Workers are always running via master_pipeline_scheduler.
+    Fase 5C: GenericWorkerPool removed, master scheduler handles all dispatch.
+    """
+    logger.info(f"[{current_user.username}] Checked worker status")
+    
+    return {
+        "status": "info",
+        "message": "Workers are managed by master_pipeline_scheduler (runs every 10s)",
+        "architecture": "Master scheduler dispatches workers directly",
+        "pool_active": True,  # Master scheduler is always active
+        "supported_tasks": ["ocr", "chunking", "indexing", "insights"],
+        "note": "No manual start needed - master scheduler auto-dispatches"
+    }
+
 
 
 @app.post("/api/workers/shutdown")
@@ -6620,39 +6136,42 @@ async def shutdown_workers_gracefully(current_user: CurrentUser = Depends(requir
     """
     Shutdown ordenado de workers con rollback de tareas en proceso (ADMIN only).
     
-    Este endpoint:
-    1. Detiene todos los workers activos
-    2. Hace rollback de tareas en 'processing' a 'pending' para que puedan ser reprocesadas
-    3. Limpia worker_tasks de workers activos
-    4. Marca documentos en estados intermedios correctamente
-    5. No deja errores en la base de datos
+    Fase 5C: GenericWorkerPool removed. Now performs cleanup only:
+    1. Rollback tareas 'processing' → 'pending'
+    2. Limpia worker_tasks activos
+    3. Marca documentos intermedios correctamente
+    4. Activa pausas pipeline para detener dispatch
     
-    Útil para:
-    - Reinicios ordenados del sistema
-    - Actualizaciones de código
-    - Mantenimiento planificado
+    Workers son despachados por master_pipeline_scheduler cada 10s.
+    Para detener workers: activar pausas pipeline.
     """
-    global generic_worker_pool
-    
     try:
-        logger.info(
-            "🛑 Iniciando shutdown ordenado de workers (requested by %s)...",
-            current_user.username,
-        )
+        logger.info(f"🛑 Shutdown workers ordenado (by {current_user.username})...")
         
-        # PASO 1: Detener todos los workers activos
-        if generic_worker_pool and generic_worker_pool.running:
-            logger.info("⏸️  Deteniendo worker pool...")
-            generic_worker_pool.stop()
-            logger.info("✅ Worker pool detenido")
-        else:
-            logger.info("ℹ️  No hay worker pool activo")
+        # PASO 1: Activar todas las pausas para detener dispatch
+        import insights_pipeline_control as _ipc
+        conn_pause = document_status_store.get_connection()
+        cursor_pause = conn_pause.cursor()
         
-        # PASO 2: Hacer rollback de tareas en 'processing' a 'pending'
+        cursor_pause.execute("""
+            INSERT INTO pipeline_runtime_kv (key, value, updated_at)
+            VALUES 
+                ('pause_ocr', 'true', NOW()),
+                ('pause_chunking', 'true', NOW()),
+                ('pause_indexing', 'true', NOW()),
+                ('pause_insights', 'true', NOW())
+            ON CONFLICT (key) 
+            DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+        """)
+        conn_pause.commit()
+        conn_pause.close()
+        _ipc.refresh_from_db()
+        logger.info("✅ Pipeline pausas activadas (detiene nuevo dispatch)")
+        
+        # PASO 2: Rollback tareas 'processing' → 'pending'
         conn = document_status_store.get_connection()
         cursor = conn.cursor()
         
-        # Contar tareas en processing
         cursor.execute("""
             SELECT task_type, COUNT(*) as count
             FROM processing_queue
@@ -6663,130 +6182,50 @@ async def shutdown_workers_gracefully(current_user: CurrentUser = Depends(requir
         total_processing = sum(row['count'] for row in processing_tasks)
         
         if total_processing > 0:
-            logger.info(f"🔄 Haciendo rollback de {total_processing} tareas en 'processing'...")
-            
-            # Rollback: cambiar 'processing' → 'pending' para que puedan ser reprocesadas
+            logger.info(f"🔄 Rollback {total_processing} tareas 'processing' → 'pending'...")
             cursor.execute("""
                 UPDATE processing_queue
                 SET status = 'pending'
                 WHERE status = 'processing'
             """)
             conn.commit()
-            
-            logger.info(f"✅ {total_processing} tareas revertidas a 'pending':")
-            for row in processing_tasks:
-                logger.info(f"   - {row['task_type']}: {row['count']} tareas")
-        else:
-            logger.info("ℹ️  No hay tareas en 'processing' para hacer rollback")
+            logger.info(f"✅ {total_processing} tareas revertidas")
         
-        # PASO 3: Limpiar worker_tasks de workers activos (assigned/started)
-        cursor.execute("""
-            SELECT worker_type, task_type, COUNT(*) as count
-            FROM worker_tasks
-            WHERE status IN ('assigned', 'started')
-            GROUP BY worker_type, task_type
-        """)
-        active_worker_tasks = cursor.fetchall()
-        total_active = sum(row['count'] for row in active_worker_tasks)
-        
-        if total_active > 0:
-            logger.info(f"🧹 Limpiando {total_active} registros de worker_tasks activos...")
-            
-            # Marcar como 'error' con mensaje de shutdown ordenado
-            cursor.execute("""
-                UPDATE worker_tasks
-                SET status = 'error',
-                    completed_at = %s,
-                    error_message = 'Shutdown ordenado - tarea revertida a pending'
-                WHERE status IN ('assigned', 'started')
-            """, (datetime.utcnow().isoformat(),))
-            conn.commit()
-            
-            logger.info(f"✅ {total_active} registros de worker_tasks marcados como 'error' (shutdown ordenado):")
-            for row in active_worker_tasks:
-                logger.info(f"   - {row['worker_type']}/{row['task_type']}: {row['count']} workers")
-        else:
-            logger.info("ℹ️  No hay worker_tasks activos para limpiar")
-        
-        # PASO 4: Verificar y corregir documentos en estados intermedios
-        # Documentos que están en upload_pending o _processing (legacy: processing/queued)
-        cursor.execute("""
-            SELECT processing_stage, status, COUNT(*) as count
-            FROM document_status
-            WHERE status IN (%s, %s, %s, %s, %s)
-            AND processing_stage IS NOT NULL
-            GROUP BY processing_stage, status
-        """, (
-            DocStatus.UPLOAD_PENDING, DocStatus.OCR_PROCESSING,
-            DocStatus.CHUNKING_PROCESSING, DocStatus.INDEXING_PROCESSING,
-            DocStatus.INSIGHTS_PROCESSING,
-        ))
-        intermediate_docs = cursor.fetchall()
-        
-        if intermediate_docs:
-            logger.info("📄 Documentos en estados intermedios (se mantendrán para reprocesamiento):")
-            for row in intermediate_docs:
-                logger.info(f"   - {row['processing_stage']}/{row['status']}: {row['count']} documentos")
-        
-        # PASO 5: Verificar que no queden inconsistencias
-        # Tareas en processing_queue con status 'processing' pero sin worker activo
+        # PASO 3: Limpiar worker_tasks activos
         cursor.execute("""
             SELECT COUNT(*) as count
-            FROM processing_queue pq
-            WHERE pq.status = 'processing'
-            AND NOT EXISTS (
-                SELECT 1 FROM worker_tasks wt
-                WHERE wt.document_id = pq.document_id
-                AND wt.task_type = pq.task_type
-                AND wt.status IN ('assigned', 'started')
-            )
+            FROM worker_tasks
+            WHERE status IN ('assigned', 'started')
         """)
-        orphaned_tasks = cursor.fetchone()['count']
+        result = cursor.fetchone()
+        total_active = result['count'] if result else 0
         
-        if orphaned_tasks > 0:
-            logger.warning(f"⚠️  Encontradas {orphaned_tasks} tareas huérfanas (processing sin worker), corrigiendo...")
+        if total_active > 0:
+            logger.info(f"🧹 Limpiando {total_active} worker_tasks activos...")
             cursor.execute("""
-                UPDATE processing_queue
-                SET status = 'pending'
-                WHERE status = 'processing'
-                AND NOT EXISTS (
-                    SELECT 1 FROM worker_tasks wt
-                    WHERE wt.document_id = processing_queue.document_id
-                    AND wt.task_type = processing_queue.task_type
-                    AND wt.status IN ('assigned', 'started')
-                )
+                DELETE FROM worker_tasks
+                WHERE status IN ('assigned', 'started')
             """)
             conn.commit()
-            logger.info(f"✅ {orphaned_tasks} tareas huérfanas corregidas")
+            logger.info(f"✅ {total_active} worker_tasks limpiados")
         
         conn.close()
-
-        import insights_pipeline_control as _ipc_shutdown
-        _ipc_shutdown.apply_worker_shutdown_pauses()
-        logger.info("✅ Pausas de pipeline persistidas en BD (todos los pasos) tras shutdown de workers")
-
-        logger.info("✅ Shutdown ordenado completado exitosamente")
-
+        
         return {
             "status": "success",
-            "message": "Shutdown ordenado completado; pipeline en pausa persistida (reanudar desde UI o PUT /api/admin/insights-pipeline)",
-            "details": {
-                "tasks_rolled_back": total_processing,
-                "worker_tasks_cleaned": total_active,
-                "orphaned_tasks_fixed": orphaned_tasks,
-                "tasks_by_type": {row['task_type']: row['count'] for row in processing_tasks} if processing_tasks else {},
-                "pipeline_pauses_persisted": True,
-            }
+            "message": "Workers shutdown completado",
+            "actions_taken": [
+                f"Pipeline pausas activadas (detiene dispatch)",
+                f"{total_processing} tareas revertidas a pending",
+                f"{total_active} worker_tasks limpiados"
+            ],
+            "note": "Para reactivar: POST /api/admin/insights-pipeline con todas las pausas en false"
         }
-        
+    
     except Exception as e:
-        logger.error(f"❌ Error en shutdown ordenado: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error en shutdown ordenado: {str(e)}")
+        logger.error(f"❌ Error en shutdown: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
-
-# ============================================================================
-# ROOT
-# ============================================================================
 
 @app.get("/")
 async def root():
