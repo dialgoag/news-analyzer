@@ -144,39 +144,32 @@ workers_health_check()                  # Health checks
 
 ---
 
-## 🎯 PLAN DE ACCIÓN PRIORIZADO
+## 🎯 PLAN DE ACCIÓN ACTUALIZADO (Post-Fase 5C)
 
-### **FASE 5B: Scheduler + Queue Management** 🔴 CRÍTICA
+### ✅ **FASE 5C: COMPLETADA** 
 
-**Objetivo**: Eliminar SQL directo en schedulers, usar repositories
+**Resultado**: Eliminado GenericWorkerPool (~550 líneas)
 
-**Tareas**:
-1. **Refactorizar `run_document_ocr_queue_job_parallel()`**:
-   ```python
-   # ANTES (SQL directo)
-   cursor.execute("SELECT * FROM processing_queue WHERE status='pending' AND task_type='ocr'")
-   
-   # DESPUÉS (repository)
-   pending_tasks = await document_repository.list_by_status(
-       PipelineStatus.create(StageEnum.OCR, StateEnum.PENDING)
-   )
-   ```
+**Hallazgo clave**: Master scheduler YA usaba workers refactorizados (Fase 5A).
+GenericWorkerPool era código legacy no usado.
 
-2. **Crear `QueueRepository` o usar `WorkerRepository`**:
-   - Queries de `processing_queue` table
-   - Worker assignment logic
-
-3. **Migrar `detect_crashed_workers()`**:
-   - Usar `worker_repository.list_stuck()`
-   - Usar `document_repository.update_status()`
-
-**Impacto**: 🔴 ALTO - Schedulers son el corazón del pipeline
-
-**Tiempo estimado**: 3-4 horas
+**Arquitectura final**:
+```
+master_pipeline_scheduler() (único orquestador)
+├─ Cleanup + Transitions + Reconciliation
+└─ Dispatch directo a workers refactorizados
+```
 
 ---
 
-### **FASE 5C: Unificar Sistemas de Workers** 🔴 CRÍTICA
+### ~~**FASE 5B: NO NECESARIA**~~
+
+**Razón**: Master scheduler (línea 1008-1160) YA despacha workers refactorizados directamente.
+No hay schedulers individuales que migrar - fueron eliminados en Fase 5C.
+
+---
+
+### **FASE 5E: Migrar DocumentStatusStore** 🟡 SIGUIENTE
 
 **Objetivo**: Resolver duplicación de 2 sistemas de workers coexistentes
 
