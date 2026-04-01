@@ -3916,5 +3916,56 @@ docker logs rag-ocr-service --tail 20 2>&1
 - [x] Mapeo status bidireccional funciona correctamente
 - [x] 96 tests unitarios passing (100%)
 - [x] Connection pooling implementado
+- [x] Verificado: `ocr_done` != `completed` (sin confusión entre estados de etapa y terminales)
+
+---
+
+## 🎯 REQ-021 - Progreso Global del Refactor
+
+### ✅ Fases Completadas (2/7)
+
+| Fase | Estado | Fecha | Archivos | Tests | Descripción |
+|------|--------|-------|----------|-------|-------------|
+| **0** | ✅ | 2026-03-31 | 1 | - | Documentación arquitectura (HEXAGONAL_ARCHITECTURE.md) |
+| **1** | ✅ | 2026-03-31 | 12 | 85 | Domain Model (Entities + Value Objects + PipelineStatus composable) |
+| **2** | ✅ | 2026-03-31 | 8 | 96 | Repositories (Ports + Adapters PostgreSQL + Connection pooling) |
+| **3** | ✅ | Previo | - | - | LLM Infrastructure (LangChain/LangGraph/LangMem - ya implementado) |
+| **5** | 🎯 | Next | - | - | Workers + Scheduler (refactorizar para usar repositories) |
+| **6** | ⏳ | Futuro | - | - | API Routers (extraer de app.py, usar repositories) |
+| **7** | ⏳ | Futuro | - | - | Testing + Deprecar database.py |
+
+### 📊 Métricas del Refactor
+
+**Antes**:
+- `app.py`: 6,718 líneas (monolito)
+- `database.py`: 1,495 líneas (acoplamiento alto)
+- Tests sin domain model
+
+**Después (Fase 1-2)**:
+- Domain layer: 12 archivos bien organizados
+- Repositories: 8 archivos (ports + adapters)
+- 96 tests unitarios (100% passing)
+- Arquitectura hexagonal funcional
+- Coexistencia: `database.py` (legacy) + repositories (nuevo)
+
+**Objetivo Final (Fase 7)**:
+- `app.py`: <200 líneas (solo setup)
+- `database.py`: ELIMINADO (deprecated)
+- 150+ tests (unit + integration)
+- 100% hexagonal + DDD
+
+### 🚀 Próximo Paso: Fase 5 - Workers + Scheduler
+
+**Objetivo**: Migrar workers para usar repositories en lugar de database.py
+
+**Plan**:
+1. OCR Worker → `DocumentRepository`
+2. Chunking/Indexing Workers → `DocumentRepository`
+3. Insights Worker → `NewsItemRepository`
+4. Master Scheduler → Repositories
+5. Verificar y deprecar `database.py`
+
+**Tiempo estimado**: 4-5 horas
+**Impacto**: Desacopla lógica de negocio de persistencia en código crítico
 
 
