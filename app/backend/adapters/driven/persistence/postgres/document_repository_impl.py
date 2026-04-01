@@ -437,3 +437,31 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             conn.commit()
         finally:
             self.get_connection_pool().putconn(conn)
+    
+    def get_by_id_sync(self, document_id: str) -> Optional[dict]:
+        """SYNC version - Get document by ID (returns dict for legacy compat)."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM document_status WHERE document_id = %s", (document_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self.map_row_to_dict(cursor, row)
+        finally:
+            self.get_connection_pool().putconn(conn)
+    
+    def list_all_sync(self, skip: int = 0, limit: int = 100) -> List[dict]:
+        """SYNC version - List all documents (returns dicts for legacy compat)."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM document_status
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            """, (limit, skip))
+            rows = cursor.fetchall()
+            return [self.map_row_to_dict(cursor, row) for row in rows]
+        finally:
+            self.get_connection_pool().putconn(conn)

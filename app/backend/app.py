@@ -3466,7 +3466,7 @@ async def get_segmentation_diagnostic(
     """
     try:
         # Get document info
-        doc = document_status_store.get(document_id)
+        doc = document_repository.get_by_id_sync(document_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
         
@@ -3673,7 +3673,7 @@ async def requeue_document(
     """
     try:
         # Get document info
-        doc = document_status_store.get(document_id)
+        doc = document_repository.get_by_id_sync(document_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
         
@@ -5100,7 +5100,7 @@ async def get_parallel_coordinates_data(
     max_news_per_doc = max(1, min(max_news_per_doc, 50))
 
     try:
-        rows = document_status_store.get_all()
+        rows = document_repository.list_all_sync()
         selected_docs = rows[:limit]
         doc_ids = [row["document_id"] for row in selected_docs]
         news_totals = news_item_store.get_counts_by_document_ids(doc_ids) if doc_ids else {}
