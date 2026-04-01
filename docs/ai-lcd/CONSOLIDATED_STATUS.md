@@ -3918,6 +3918,65 @@ docker logs rag-ocr-service --tail 20 2>&1
 - [x] Connection pooling implementado
 - [x] Verificado: `ocr_done` != `completed` (sin confusión entre estados de etapa y terminales)
 
+### 113. REQ-021 Fase 5C: Eliminado GenericWorkerPool redundante ✅
+**Fecha**: 2026-03-31
+**Ubicación**: `backend/app.py` (~6250 líneas, antes ~6800)
+**Problema**: 2 sistemas de dispatch compitiendo por mismas tareas:
+1. **GenericWorkerPool**: 25 workers polling DB, ejecutaban `_handle_*_task()` (SQL directo ❌)
+2. **Schedulers individuales**: Spawn on-demand, ejecutaban `_*_worker_task()` (repositories ✅)
+→ Ambos procesaban tareas simultáneamente, causando confusión y duplicación
+
+**Solución**: Eliminado sistema redundante, unificado en master scheduler:
+**Eliminado (~550 líneas)**:
+- ❌ `worker_pool.py` → `.legacy`
+- ❌ `generic_task_dispatcher()` + `_handle_ocr_task()`, `_handle_chunking_task()`, `_handle_indexing_task()`, `_handle_insights_task()`, `_handle_indexing_insights_task()`
+- ❌ `run_document_ocr_queue_job_parallel()`, `run_document_chunking_queue_job()`, `run_document_indexing_queue_job()`  
+- ❌ `workers_health_check()` (auto-start pool)
+- ❌ `generic_worker_pool` global variable
+
+**Arquitectura final**:
+```
+master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
+├─ PASO 0: Cleanup (workers crashed, orphans)
+├─ PASO 1-2: Transitions (ocr_done → chunking task)
+├─ PASO 3-4: Reconciliation (insights faltantes)
+├─ PASO 5: DISPATCH directo:
+│  ├─ Lee processing_queue (SELECT FOR UPDATE)
+│  ├─ Verifica límites por tipo (env vars)
+│  ├─ assign_worker() (semáforo DB)
+│  ├─ Spawns Thread:
+│  │  ├─ _ocr_worker_task() ✅ (repository)
+│  │  ├─ _chunking_worker_task() ✅ (repository)
+│  │  ├─ _indexing_worker_task() ✅ (repository)
+│  │  └─ _insights_worker_task() ✅ (service)
+│  └─ Respeta prioridades (OCR → Chunking → Indexing → Insights)
+```
+
+**Impacto**:
+- Single source of truth para dispatch
+- No más competencia entre workers
+- Arquitectura simplificada
+- ~550 líneas eliminadas
+- Master scheduler YA USABA workers refactorizados (Fase 5A)
+
+**⚠️ NO rompe**:
+- Master scheduler sigue despachando ✅
+- Workers usan repositories ✅ (Fase 5A)
+- Límites por tipo respetados ✅
+- Prioridades funcionan ✅
+- Dashboard ✅, Insights ✅
+
+**Endpoints actualizados**:
+- `POST /api/workers/start` → Info only (no manual start)
+- `POST /api/workers/shutdown` → Activa pausas + cleanup
+
+**Verificación**:
+- [x] worker_pool.py eliminado
+- [x] 5 _handle_*_task() eliminados
+- [x] 3 schedulers individuales eliminados  
+- [x] Código compila sin errores
+- [ ] Test de integración (próximo paso)
+
 ### 112. REQ-021 Fase 5A: Workers migrados a Repositories ✅
 **Fecha**: 2026-03-31
 **Ubicación**: `backend/app.py` (líneas ~2992-3320: OCR/Chunking/Indexing workers)

@@ -3226,6 +3226,68 @@ Usuario solicita 4 mejoras de UX para el dashboard. Se documentan como REQ-014 p
 
 ## 2026-03-31
 
+### Cambio: REQ-021 Fase 5C - Eliminado GenericWorkerPool
+**Decisión**: Eliminar sistema redundante de dispatch (GenericWorkerPool)
+
+**Motivación**:
+- 2 sistemas despachando workers simultáneamente:
+  1. GenericWorkerPool (worker_pool.py): 25 workers polling, SQL directo
+  2. Schedulers individuales: Spawn on-demand, usan repositories
+- Master scheduler YA despachaba directamente workers refactorizados (Fase 5A)
+- GenericWorkerPool nunca fue actualizado para usar repositories
+
+**Hallazgo crítico**:
+Al analizar `master_pipeline_scheduler()` (línea 1008-1160), descubrimos que:
+```python
+# PASO 6: Dispatch workers directamente
+_task_handlers = {
+    TaskType.OCR: lambda: asyncio.run(_ocr_worker_task(...)),      # ✅ USA REPOSITORY
+    TaskType.CHUNKING: lambda: asyncio.run(_chunking_worker_task(...)),
+    TaskType.INDEXING: lambda: asyncio.run(_indexing_worker_task(...)),
+}
+# Spawns Thread directamente
+```
+→ Master scheduler YA usaba los workers refactorizados de Fase 5A
+
+**Alternativas consideradas**:
+1. **Refactorizar GenericWorkerPool** para usar repositories
+   - ❌ Duplica lógica que ya funciona
+   - ❌ Más complejo (pool threads + asyncio + DB polling)
+2. **Eliminar master scheduler**, usar solo GenericWorkerPool
+   - ❌ Pierde orchestración centralizada (transitions, reconciliation)
+   - ❌ GenericWorkerPool requiere refactor total
+3. **Eliminar GenericWorkerPool** (elegida)
+   - ✅ Master scheduler ya hace dispatch completo
+   - ✅ Workers ya usan repositories
+   - ✅ Single source of truth
+   - ✅ ~550 líneas eliminadas
+
+**Implementación**:
+Eliminado:
+- worker_pool.py → .legacy
+- generic_task_dispatcher() + 5 _handle_*_task()
+- 3 schedulers individuales (redundantes)
+- workers_health_check() (auto-start pool)
+
+Mantenido:
+- master_pipeline_scheduler() ✅ (orquestador único)
+- _ocr_worker_task(), _chunking_worker_task(), etc. ✅ (ya refactorizados)
+
+**Impacto en roadmap**:
+- ~~Fase 5B~~: NO NECESARIA (master scheduler ya usa repositories)
+- Fase 5E: Migrar usos restantes de `document_status_store`
+- Fase 6: API Endpoints
+
+**Riesgo**:
+- BAJO: Master scheduler ya despachaba correctamente
+- Eliminamos código que NO se estaba usando
+- Workers siguen siendo los mismos (refactorizados en 5A)
+
+**Verificación**:
+- Código compila ✅
+- ~550 líneas eliminadas ✅
+- [Pendiente] Test de integración con pipeline real
+
 ### Cambio: REQ-021 Fase 5A - Workers migrados a Repositories
 **Decisión**: Refactorizar OCR/Chunking/Indexing workers para usar `DocumentRepository` en lugar de SQL directo.
 
