@@ -422,24 +422,32 @@ backend/
   * `core/domain/entities/` → Document, NewsItem, Worker (3 files)
   * `core/domain/value_objects/` → DocumentId, TextHash, PipelineStatus (3 files)
   * `tests/unit/` → test_entities.py, test_value_objects.py (48 tests, 100% pass)
-- 🔄 **FASE 2**: Infrastructure - Repositories (3h) 🎯 SIGUIENTE
-  * Crear interfaces de repositories (Ports)
-  * Migrar Stores a Repositories (Adapters)
-  * Usar entities en lugar de dicts
-- ⏳ **FASE 3**: Infrastructure - LLM (LangChain/LangGraph) (4-5h)
-  * ✅ Parcialmente completado (Sesión 47-48)
-  * Chains: ExtractionChain, AnalysisChain, InsightsChain
-  * Graphs: InsightsGraph (LangGraph StateGraph)
-  * Memory: InsightMemory (LangMem PostgreSQL-backed)
-- ⏳ **FASE 4**: Application - Commands/Queries (OPCIONAL - CQRS diferido)
-- ⏳ **FASE 5**: Workers + Scheduler (3h)
-  * ✅ Insights worker integrado (Sesión 48)
-  * ⏳ OCR worker, Indexing worker (pendientes)
-- ⏳ **FASE 6**: Interfaces - API Routers (2h)
+- ✅ **FASE 2**: Infrastructure - Repositories — Fix #111
+  * Interfaces de repositories (Ports) ✅
+  * Postgres Repositories (Adapters) ✅
+  * Bidirectional status mapping ✅
+  * 96 tests passing ✅
+- ✅ **FASE 3**: Infrastructure - LLM (LangChain/LangGraph) — Fix #87, #88, #89, #93
+  * Chains: ExtractionChain, AnalysisChain, InsightsChain ✅
+  * Graphs: InsightsGraph (LangGraph StateGraph) ✅
+  * Memory: InsightMemory (LangMem PostgreSQL-backed) ✅
+- 🔄 **FASE 5A**: Workers migrados a Repositories — Fix #112 ✅
+  * OCR Worker refactorizado ✅
+  * Chunking Worker refactorizado ✅
+  * Indexing Worker refactorizado ✅
+- ⏳ **FASE 5B**: Scheduler queries con repository (SIGUIENTE)
+  * Refactor scheduler queries
+  * Worker assignment con `worker_repository.create()`
+- ⏳ **FASE 5C**: Insights Worker (OPCIONAL)
+  * Ya usa `InsightsWorkerService`
+  * Migrar news_item a repository (opcional)
+- ⏳ **FASE 6**: Interfaces - API Routers
   * Migrar endpoints de app.py a routers/
-- ⏳ **FASE 7**: Testing + Verificación (2h)
+- ⏳ **FASE 7**: Testing + Verificación
+  * Integration tests con pipeline real
+  * Verificar no rompe funcionalidades
 
-**Estimación total**: 20-25 horas (múltiples sesiones)
+**Estimación restante**: 8-12 horas (Fase 5B → Fase 7)
 
 **Alternativas Consideradas**:
 1. ❌ **Solo extraer utils** - No resuelve problema de fondo
