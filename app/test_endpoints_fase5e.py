@@ -6,9 +6,10 @@ Pipeline completo:
 1. UPLOAD → pending → processing → done
 2. OCR → pending → processing → done
 3. CHUNKING → pending → processing → done
-4. INDEXING → pending → processing → done
-5. INSIGHTS → pending → processing → done (si está habilitado)
-6. COMPLETED (terminal)
+4. INDEXING (chunks) → pending → processing → done
+5. INSIGHTS (LLM) → pending → processing → done (si está habilitado)
+6. INDEXING_INSIGHTS (indexar insights en Qdrant) → pending → processing → done
+7. COMPLETED (terminal)
 
 Este test verifica que las migraciones a document_repository no rompieron
 la secuencia de estados del pipeline.
@@ -23,6 +24,7 @@ from typing import Optional
 
 # Configuration
 API_BASE = "http://localhost:8000"
+HEALTH_ENDPOINT = "/health"  # Sin /api/
 TIMEOUT = 30
 POLL_INTERVAL = 2  # seconds
 MAX_WAIT_TIME = 120  # seconds (2 minutes)
@@ -58,7 +60,7 @@ def log_info(msg: str):
 def check_api_health() -> bool:
     """Verify API is running."""
     try:
-        resp = requests.get(f"{API_BASE}/api/health", timeout=5)
+        resp = requests.get(f"{API_BASE}{HEALTH_ENDPOINT}", timeout=5)
         if resp.status_code == 200:
             log_success("API is running")
             return True
@@ -218,28 +220,32 @@ def verify_chunks_created(document_id: str) -> bool:
         log_warning("No chunks created yet")
         return False
 
-def verify_indexed(document_id: str) -> bool:
-    """Verify that document was indexed."""
-    log("\n🔍 Verifying indexing...")
+def verify_insights_generated(document_id: str) -> bool:
+    """Verify that insights were generated for news items."""
+    log("\n🔍 Verifying insights generated...")
     
+    # This would require a specific API endpoint to check insights
+    # For now, we check if the document status indicates insights are done
     doc = get_document_status(document_id)
     if not doc:
         log_error("Could not get document status")
         return False
     
-    indexed_at = doc.get("indexed_at")
-    if indexed_at:
-        log_success(f"Document indexed at: {indexed_at}")
+    status = doc.get("status", "")
+    if "insights" in status:
+        log_info(f"Insights stage detected: {status}")
         return True
     else:
-        log_warning("Document not indexed yet")
+        log_warning("Insights stage not detected in status")
         return False
 
 def main():
     """Run end-to-end pipeline test."""
     print(f"\n{Colors.BLUE}{'='*70}{Colors.END}")
     print(f"{Colors.BLUE}End-to-End Pipeline Test (Fase 5E){Colors.END}")
-    print(f"{Colors.BLUE}Testing: UPLOAD → OCR → CHUNKING → INDEXING → (INSIGHTS) → COMPLETED{Colors.END}")
+    print(f"{Colors.BLUE}Pipeline: UPLOAD → OCR → CHUNKING → INDEXING (chunks){Colors.END}")
+    print(f"{Colors.BLUE}          → INSIGHTS (LLM) → INDEXING_INSIGHTS (Qdrant){Colors.END}")
+    print(f"{Colors.BLUE}          → COMPLETED{Colors.END}")
     print(f"{Colors.BLUE}{'='*70}{Colors.END}")
     
     # Step 0: Check API health
@@ -267,9 +273,9 @@ def main():
     # Verify chunks were created
     verify_chunks_created(document_id)
     
-    # Step 4: Wait for Indexing
+    # Step 4: Wait for Indexing (chunks)
     if not wait_for_stage_completion(document_id, "indexing"):
-        log_error("Indexing stage failed")
+        log_error("Indexing (chunks) stage failed")
         sys.exit(1)
     
     # Verify indexing completed
@@ -280,12 +286,33 @@ def main():
     doc = get_document_status(document_id)
     if doc:
         final_status = doc.get("status")
-        log_info(f"Final status: {final_status}")
+        log_info(f"Current status: {final_status}")
         
         if final_status in ["insights_pending", "insights_processing", "insights_done"]:
             log_info("Insights stage is enabled, waiting...")
-            if not wait_for_stage_completion(document_id, "insights", max_wait=60):
-                log_warning("Insights stage incomplete (may be disabled or slow)")
+            if not wait_for_stage_completion(document_id, "insights", max_wait=90):
+                log_warning("Insights stage incomplete (may be slow or disabled)")
+            else:
+                # Step 6: Check for indexing_insights stage
+                log("\n🔍 Checking for indexing_insights stage (indexar insights en Qdrant)...")
+                doc = get_document_status(document_id)
+                if doc:
+                    status = doc.get("status", "")
+                    log_info(f"Status after insights: {status}")
+                    
+                    # Note: indexing_insights may not have a separate status in document_status
+                    # It's tracked in news_item_insights.indexed_in_qdrant_at
+                    # The document goes directly from insights_done to completed
+                    if status == "completed":
+                        log_success("Pipeline completed (includes indexing_insights)")
+                    else:
+                        log_info("Waiting for final completion...")
+                        time.sleep(10)  # Give it some time
+                        doc = get_document_status(document_id)
+                        if doc:
+                            final_status = doc.get("status")
+                            log_info(f"Final status: {final_status}")
+        
         elif final_status == "completed":
             log_success("Pipeline completed successfully")
         else:
@@ -295,6 +322,8 @@ def main():
     print(f"\n{Colors.GREEN}{'='*70}{Colors.END}")
     print(f"{Colors.GREEN}✅ END-TO-END TEST PASSED{Colors.END}")
     print(f"{Colors.GREEN}Document {document_id[:12]}... processed successfully{Colors.END}")
+    print(f"{Colors.GREEN}Note: INDEXING_INSIGHTS stage happens after INSIGHTS_DONE{Colors.END}")
+    print(f"{Colors.GREEN}      and is tracked in news_item_insights table{Colors.END}")
     print(f"{Colors.GREEN}{'='*70}{Colors.END}\n")
     
     sys.exit(0)

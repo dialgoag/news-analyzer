@@ -4,14 +4,43 @@
 > 
 > **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> **📋 ÚLTIMO**: Fix #111 — Fase 5E DocumentStatusStore→Repository ✅ (REQ-021). Fase 5 COMPLETA.
+> **📋 ÚLTIMO**: Fix #112 — Sistema Unificado de Timestamps ✅ (Migration 018). REQ-021 Fase 5 COMPLETA.
 
 **Última actualización**: 2026-04-01  
-**Versión**: 3.0.15 (Hexagonal Architecture - Fase 5 completa)
+**Versión**: 3.0.16 (Hexagonal Architecture - Sistema Timestamps Unificado)
 
 ---
 
 ## 🎯 REQ-021: Backend Refactor - FASE 5 COMPLETA ✅
+
+### [x] Fix #112: Sistema Unificado de Timestamps ✅ (2026-04-01)
+**Estado**: ESTABLE ✅  
+**Migration**: 018 aplicada
+
+**Implementación completada**:
+- ✅ Tabla `document_stage_timing` (document-level + news-level)
+- ✅ Entidad `StageTimingRecord` con `news_item_id` support
+- ✅ Repository `PostgresStageTimingRepository` (async + sync)
+- ✅ 4 workers integrados (OCR, Chunking, Indexing, Insights)
+- ✅ Backfill de 620 registros (320 upload + 300 indexing)
+- ✅ Triggers `updated_at` en 7 tablas
+- ✅ Fix `DocumentType` enum (CONTRACT + GENERIC_DOCUMENT)
+
+**Archivos modificados**:
+- `migrations/018_standardize_timestamps.py` (+360 líneas)
+- `core/domain/entities/stage_timing.py` (nueva entidad, +150)
+- `core/ports/repositories/stage_timing_repository.py` (nuevo port, +180)
+- `adapters/.../stage_timing_repository_impl.py` (implementación, +330)
+- `core/domain/entities/document.py` (enum DocumentType +2 valores)
+- `app.py` (4 workers integrados, ~40 líneas)
+
+**Queries habilitadas**:
+- Timeline completo por documento
+- Performance stats por stage (avg/min/max duration)
+- Detección de bottlenecks (stages atascados)
+- Tracking granular de insights (por news_item_id)
+
+Ver: CONSOLIDATED_STATUS.md § Fix #112, SESSION_LOG.md § Sesión 50
 
 ### [x] Fase 5E: DocumentStatusStore → Repository ✅ (2026-04-01)
 **Estado**: ESTABLE

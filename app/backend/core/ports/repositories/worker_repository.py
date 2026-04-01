@@ -6,7 +6,7 @@ Adapters implement this interface for different persistence mechanisms.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 
 from core.domain.entities.worker import Worker
@@ -16,6 +16,8 @@ from core.domain.value_objects.pipeline_status import PipelineStatus
 class WorkerRepository(ABC):
     """
     Port (interface) for worker task persistence.
+    
+    Includes both worker_tasks and processing_queue management.
     
     Implementations:
     - PostgresWorkerRepository (adapters/driven/persistence/postgres/)
@@ -188,4 +190,117 @@ class WorkerRepository(ABC):
         Returns:
             Number of active workers of that type
         """
+        pass
+    
+    # ========================================
+    # PROCESSING QUEUE MANAGEMENT
+    # (Migrated from ProcessingQueueStore)
+    # ========================================
+    
+    @abstractmethod
+    async def enqueue_task(
+        self, 
+        document_id: str, 
+        filename: str, 
+        task_type: str, 
+        priority: int = 0
+    ) -> bool:
+        """
+        Add a task to the processing queue.
+        
+        Args:
+            document_id: Document identifier
+            filename: Document filename
+            task_type: Task type (ocr, chunking, indexing, insights)
+            priority: Task priority (higher = more urgent)
+        
+        Returns:
+            True if task was enqueued successfully
+        """
+        pass
+    
+    @abstractmethod
+    async def mark_task_completed(
+        self, 
+        document_id: str, 
+        task_type: str
+    ) -> bool:
+        """
+        Mark a task as completed in the processing queue.
+        
+        Args:
+            document_id: Document identifier
+            task_type: Task type
+        
+        Returns:
+            True if task was marked completed
+        """
+        pass
+    
+    @abstractmethod
+    async def assign_worker_to_task(
+        self, 
+        worker_id: str, 
+        worker_type: str, 
+        document_id: str, 
+        task_type: str
+    ) -> bool:
+        """
+        Assign a task to a worker atomically.
+        
+        Uses database locks to prevent duplicate assignment.
+        
+        Args:
+            worker_id: Worker identifier
+            worker_type: Worker type (OCR, Chunking, Indexing, Insights)
+            document_id: Document identifier
+            task_type: Task type
+        
+        Returns:
+            True if assignment succeeded, False if already assigned
+        """
+        pass
+    
+    # ========================================
+    # SYNC methods for legacy scheduler compatibility
+    # TODO: Remove when master_pipeline_scheduler becomes async
+    # ========================================
+    
+    def enqueue_task_sync(
+        self, 
+        document_id: str, 
+        filename: str, 
+        task_type: str, 
+        priority: int = 0
+    ) -> bool:
+        """SYNC version - Enqueue task to processing queue."""
+        pass
+    
+    def mark_task_completed_sync(
+        self, 
+        document_id: str, 
+        task_type: str
+    ) -> bool:
+        """SYNC version - Mark task as completed."""
+        pass
+    
+    def assign_worker_to_task_sync(
+        self, 
+        worker_id: str, 
+        worker_type: str, 
+        document_id: str, 
+        task_type: str
+    ) -> bool:
+        """SYNC version - Assign worker to task."""
+        pass
+    
+    def update_worker_status_sync(
+        self,
+        worker_id: str,
+        document_id: str,
+        task_type: str,
+        status: str,
+        error_message: Optional[str] = None
+    ) -> bool:
+        """SYNC version - Update worker task status."""
         pass

@@ -66,6 +66,7 @@ from adapters.driven.persistence.postgres import (
     PostgresNewsItemRepository,
     PostgresWorkerRepository
 )
+from adapters.driven.persistence.postgres.stage_timing_repository_impl import PostgresStageTimingRepository
 from core.domain.value_objects.document_id import DocumentId
 from core.domain.value_objects.pipeline_status import PipelineStatus, StageEnum, StateEnum, TerminalStateEnum
 
@@ -332,6 +333,7 @@ processing_queue_store = ProcessingQueueStore()
 document_repository = PostgresDocumentRepository()
 news_item_repository = PostgresNewsItemRepository()
 worker_repository = PostgresWorkerRepository()
+stage_timing_repository = PostgresStageTimingRepository()
 
 # Cache for Tika health status (avoid blocking on health checks)
 _tika_health_cache = {
@@ -607,7 +609,7 @@ def _initialize_processing_queue():
 
         if pending_docs:
             for row in pending_docs:
-                processing_queue_store.enqueue_task(
+                worker_repository.enqueue_task_sync(
                     row['document_id'], row['filename'],
                     TaskType.OCR, priority=0,
                 )
@@ -799,7 +801,8 @@ def master_pipeline_scheduler():
                     filename = doc['filename']
                     
                     # Verificar si ya está en la cola de procesamiento
-                    conn_temp = processing_queue_store.get_connection()
+                    # TODO Fase 5F: Migrar esta query a worker_repository method
+                    conn_temp = document_status_store.get_connection()
                     cursor_temp = conn_temp.cursor()
                     cursor_temp.execute("""
                         SELECT COUNT(*) FROM processing_queue
@@ -812,7 +815,7 @@ def master_pipeline_scheduler():
                     conn_temp.close()
                     
                     if not in_queue:
-                        processing_queue_store.enqueue_task(doc_id, filename, TaskType.OCR, priority=10)
+                        worker_repository.enqueue_task_sync(doc_id, filename, TaskType.OCR, priority=10)
                         logger.info(f"   ✅ Enqueued {filename} for reprocessing")
                     else:
                         logger.debug(f"   ⏳ {filename} already in queue, skipping")
@@ -862,7 +865,7 @@ def master_pipeline_scheduler():
         if pending_for_ocr:
             for row in pending_for_ocr:
                 doc_id, filename = row['document_id'], row['filename']
-                processing_queue_store.enqueue_task(doc_id, filename, TaskType.OCR, priority=1)
+                worker_repository.enqueue_task_sync(doc_id, filename, TaskType.OCR, priority=1)
             logger.info(f"✅ Created {len(pending_for_ocr)} OCR tasks from pending documents")
         else:
             if debug_mode:
@@ -896,7 +899,7 @@ def master_pipeline_scheduler():
         if ready_for_chunking:
             for row in ready_for_chunking:
                 doc_id, filename = row['document_id'], row['filename']
-                processing_queue_store.enqueue_task(doc_id, filename, TaskType.CHUNKING, priority=1)
+                worker_repository.enqueue_task_sync(doc_id, filename, TaskType.CHUNKING, priority=1)
             logger.info(f"✅ Created {len(ready_for_chunking)} Chunking tasks")
         
         # PASO 3: Documentos listos para Indexing sin task en cola → Crear Indexing tasks
@@ -917,7 +920,7 @@ def master_pipeline_scheduler():
         if ready_for_indexing:
             for row in ready_for_indexing:
                 doc_id, filename = row['document_id'], row['filename']
-                processing_queue_store.enqueue_task(doc_id, filename, TaskType.INDEXING, priority=1)
+                worker_repository.enqueue_task_sync(doc_id, filename, TaskType.INDEXING, priority=1)
             logger.info(f"✅ Created {len(ready_for_indexing)} Indexing tasks")
         
         # PASO 3.5: Reconciliación — news_items de docs indexados/completed sin registro en news_item_insights
@@ -1109,7 +1112,7 @@ def master_pipeline_scheduler():
                         
                         # CRITICAL: Primero intentar asignar worker (verifica duplicados atómicamente con SELECT FOR UPDATE)
                         # Esto actúa como semáforo centralizado - solo UN worker puede asignarse por documento/tarea
-                        assigned = processing_queue_store.assign_worker(
+                        assigned = worker_repository.assign_worker_to_task_sync(
                             worker_id, task_type.upper(), assign_doc_id, task_type
                         )
                         
@@ -1162,7 +1165,7 @@ def master_pipeline_scheduler():
                                 cursor.execute("UPDATE processing_queue SET status = %s WHERE id = %s", (QueueStatus.COMPLETED, task_id))
                                 conn.commit()
                                 # assign_doc_id contiene "insight_{news_item_id}" que se obtuvo arriba
-                                processing_queue_store.update_worker_status(
+                                worker_repository.update_worker_status_sync(
                                     worker_id, assign_doc_id, 'insights', 'error',
                                     error_message="No insights row found"
                                 )
@@ -2446,12 +2449,22 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
     - LangGraph workflow (extraction + analysis + validation + retry)
     - Provider fallback (OpenAI → Ollama)
     - Token tracking
+    
+    REQ-021 Phase 5F: Added stage timing tracking (records at document-level)
     """
     try:
         logger.info(f"[{worker_id}] Assigned insights for: {title or 'untitled'}")
         
-        # Mark as started
-        processing_queue_store.update_worker_status(
+        # 1. RECORD STAGE START for this specific news_item (NEW: stage timing)
+        stage_timing_repository.record_stage_start_sync(
+            document_id=document_id,
+            news_item_id=news_item_id,  # Tracking individual news_item
+            stage='insights',
+            metadata={'worker_id': worker_id, 'news_item_id': news_item_id, 'title': title}
+        )
+        
+        # 2. Mark as started
+        worker_repository.update_worker_status_sync(
             worker_id, f"insight_{news_item_id}", 'insights', 'started'
         )
         
@@ -2479,10 +2492,19 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
                     content=existing["content"],
                     llm_source=existing.get("llm_source", "dedup")
                 )
-                processing_queue_store.update_worker_status(
+                
+                # RECORD STAGE END as done (dedup = done sin API call)
+                stage_timing_repository.record_stage_end_sync(
+                    document_id=document_id,
+                    news_item_id=news_item_id,
+                    stage='insights',
+                    status='done'
+                )
+                
+                worker_repository.update_worker_status_sync(
                     worker_id, f"insight_{news_item_id}", 'insights', 'completed'
                 )
-                processing_queue_store.mark_task_completed(f"insight_{news_item_id}", 'insights')
+                worker_repository.mark_task_completed_sync(f"insight_{news_item_id}", 'insights')
                 logger.info(
                     f"[{worker_id}] ♻️ Reused insight via text_hash dedup for {news_item_id} "
                     f"(saved API call)"
@@ -2496,16 +2518,26 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
         chunks = qdrant_connector.get_chunks_by_news_item_ids([news_item_id], max_chunks=500)
         if not chunks:
             logger.warning(f"[{worker_id}] No chunks found for {news_item_id}")
+            
+            # RECORD STAGE END with error
+            stage_timing_repository.record_stage_end_sync(
+                document_id=document_id,
+                news_item_id=news_item_id,
+                stage='insights',
+                status='error',
+                error_message="No chunks"
+            )
+            
             news_item_insights_store.set_status(
                 news_item_id, 
                 news_item_insights_store.STATUS_ERROR, 
                 error_message="No chunks"
             )
-            processing_queue_store.update_worker_status(
+            worker_repository.update_worker_status_sync(
                 worker_id, f"insight_{news_item_id}", 'insights', 'error',
                 error_message="No chunks"
             )
-            processing_queue_store.mark_task_completed(f"insight_{news_item_id}", 'insights')
+            worker_repository.mark_task_completed_sync(f"insight_{news_item_id}", 'insights')
             return
         
         # Build context
@@ -2559,10 +2591,18 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
             llm_source=llm_source
         )
         
-        processing_queue_store.update_worker_status(
+        # 3. RECORD STAGE END as done (NEW: stage timing)
+        stage_timing_repository.record_stage_end_sync(
+            document_id=document_id,
+            news_item_id=news_item_id,
+            stage='insights',
+            status='done'
+        )
+        
+        worker_repository.update_worker_status_sync(
             worker_id, f"insight_{news_item_id}", 'insights', 'completed'
         )
-        processing_queue_store.mark_task_completed(f"insight_{news_item_id}", 'insights')
+        worker_repository.mark_task_completed_sync(f"insight_{news_item_id}", 'insights')
         
         logger.info(
             f"[{worker_id}] ✅ Insights generated for {news_item_id}: "
@@ -2573,16 +2613,26 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
         logger.error(f"[{worker_id}] Insights error: {e}", exc_info=True)
         try:
             err_msg = str(e)[:200]
+            
+            # RECORD STAGE END with error (NEW: stage timing)
+            stage_timing_repository.record_stage_end_sync(
+                document_id=document_id,
+                news_item_id=news_item_id,
+                stage='insights',
+                status='error',
+                error_message=err_msg
+            )
+            
             news_item_insights_store.set_status(
                 news_item_id,
                 news_item_insights_store.STATUS_ERROR,
                 error_message=err_msg
             )
-            processing_queue_store.update_worker_status(
+            worker_repository.update_worker_status_sync(
                 worker_id, f"insight_{news_item_id}", 'insights', 'error',
                 error_message=err_msg
             )
-            processing_queue_store.mark_task_completed(f"insight_{news_item_id}", 'insights')
+            worker_repository.mark_task_completed_sync(f"insight_{news_item_id}", 'insights')
         except Exception as e2:
             logger.error(f"[{worker_id}] Failed to mark error: {e2}")
 
@@ -2677,7 +2727,7 @@ def run_news_item_insights_queue_job_parallel():
         # CRITICAL: Primero intentar asignar worker (verifica duplicados atómicamente con SELECT FOR UPDATE)
         # Esto actúa como semáforo centralizado - solo UN worker puede asignarse por news_item_id
         # Usamos "insight_{news_item_id}" como document_id único para insights
-        assigned = processing_queue_store.assign_worker(
+        assigned = worker_repository.assign_worker_to_task_sync(
             worker_id, 'Insights', f"insight_{news_item_id}", 'insights'
         )
         
@@ -2711,7 +2761,7 @@ def run_news_item_insights_queue_job_parallel():
         except Exception as e:
             logger.error(f"Failed to start insights worker thread: {e}", exc_info=True)
             # Revertir asignación si falla el spawn
-            processing_queue_store.update_worker_status(
+            worker_repository.update_worker_status_sync(
                 worker_id, f"insight_{news_item_id}", 'insights', 'error',
                 error_message=f"Failed to start thread: {str(e)[:200]}"
             )
@@ -2735,12 +2785,20 @@ async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
     If worker crashes, task is marked 'started' with worker_id for recovery.
     
     REQ-021 Fase 5: Refactored to use DocumentRepository (Hexagonal Architecture)
+    REQ-021 Phase 5F: Added stage timing tracking with document_stage_timing
     """
     try:
         logger.info(f"[{worker_id}] Assigned OCR task for: {filename}")
         
-        # Mark as started (worker_id identifies this worker's progress)
-        processing_queue_store.update_worker_status(
+        # 1. RECORD STAGE START (NEW: stage timing)
+        stage_timing_repository.record_stage_start_sync(
+            document_id=document_id,
+            stage='ocr',
+            metadata={'worker_id': worker_id, 'filename': filename}
+        )
+        
+        # 2. Mark as started (worker_id identifies this worker's progress)
+        worker_repository.update_worker_status_sync(
             worker_id, document_id, 'ocr', 'started'
         )
         
@@ -2750,11 +2808,17 @@ async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
         
         if not document:
             logger.error(f"[{worker_id}] Document not in status table: {document_id}")
-            processing_queue_store.update_worker_status(
+            
+            # RECORD STAGE END with error
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'ocr', 'error', error_message="Document not found in DB"
+            )
+            
+            worker_repository.update_worker_status_sync(
                 worker_id, document_id, 'ocr', 'error',
                 error_message="Document not found in DB"
             )
-            processing_queue_store.mark_task_completed(document_id, 'ocr')
+            worker_repository.mark_task_completed_sync(document_id, 'ocr')
             return
         
         # Resolve actual file path (handles .pdf extension, Fix #95)
@@ -2762,6 +2826,11 @@ async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
             file_path = resolve_file_path(document_id, UPLOAD_DIR)
         except FileNotFoundError as e:
             logger.error(f"[{worker_id}] File not found: {e}")
+            
+            # RECORD STAGE END with error
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'ocr', 'error', error_message="File not found"
+            )
             
             # Update document status to error using repository
             error_status = PipelineStatus.terminal(TerminalStateEnum.ERROR)
@@ -2771,11 +2840,11 @@ async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
                 error_message="File not found"
             )
             
-            processing_queue_store.update_worker_status(
+            worker_repository.update_worker_status_sync(
                 worker_id, document_id, 'ocr', 'error',
                 error_message="File not found"
             )
-            processing_queue_store.mark_task_completed(document_id, 'ocr')
+            worker_repository.mark_task_completed_sync(document_id, 'ocr')
             return
         
         logger.info(f"[{worker_id}] Processing OCR: {filename} ({len(open(file_path, 'rb').read()) / 1024 / 1024:.1f}MB)")
@@ -2806,6 +2875,11 @@ async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
             conn.commit()
             conn.close()
             
+            # 3. RECORD STAGE END as done (NEW: stage timing)
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'ocr', 'done'
+            )
+            
             logger.info(f"[{worker_id}] ✅ OCR completed: {filename}")
             
         except Exception as e:
@@ -2813,10 +2887,10 @@ async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
             raise
         
         # Mark completed (slot freed automatically for next worker)
-        processing_queue_store.update_worker_status(
+        worker_repository.update_worker_status_sync(
             worker_id, document_id, 'ocr', 'completed'
         )
-        processing_queue_store.mark_task_completed(document_id, 'ocr')
+        worker_repository.mark_task_completed_sync(document_id, 'ocr')
         
         logger.info(f"[{worker_id}] ✅ OCR completed: {filename}")
         
@@ -2824,6 +2898,11 @@ async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
         logger.error(f"[{worker_id}] OCR worker error: {e}", exc_info=True)
         try:
             err_msg = str(e)[:200]
+            
+            # RECORD STAGE END with error (NEW: stage timing)
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'ocr', 'error', error_message=err_msg
+            )
             
             # Update status using repository
             error_status = PipelineStatus.terminal(TerminalStateEnum.ERROR)
@@ -2834,11 +2913,11 @@ async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
                 error_message=err_msg
             )
             
-            processing_queue_store.update_worker_status(
+            worker_repository.update_worker_status_sync(
                 worker_id, document_id, 'ocr', 'error',
                 error_message=err_msg
             )
-            processing_queue_store.mark_task_completed(document_id, 'ocr')
+            worker_repository.mark_task_completed_sync(document_id, 'ocr')
         except Exception as e2:
             logger.error(f"[{worker_id}] Failed to mark error: {e2}")
 
@@ -2854,12 +2933,20 @@ async def _chunking_worker_task(document_id: str, filename: str, worker_id: str)
     this worker was dispatched. This ensures only ONE worker processes each document.
     
     REQ-021 Fase 5: Refactored to use DocumentRepository (Hexagonal Architecture)
+    REQ-021 Phase 5F: Added stage timing tracking with document_stage_timing
     """
     try:
         logger.info(f"[{worker_id}] Assigned Chunking task for: {filename}")
         
-        # Mark as started (assign_worker already marked as 'assigned' atomically)
-        processing_queue_store.update_worker_status(
+        # 1. RECORD STAGE START (NEW: stage timing)
+        stage_timing_repository.record_stage_start_sync(
+            document_id=document_id,
+            stage='chunking',
+            metadata={'worker_id': worker_id, 'filename': filename}
+        )
+        
+        # 2. Mark as started (assign_worker already marked as 'assigned' atomically)
+        worker_repository.update_worker_status_sync(
             worker_id, document_id, 'chunking', 'started'
         )
         
@@ -2870,6 +2957,11 @@ async def _chunking_worker_task(document_id: str, filename: str, worker_id: str)
         if not document or not document.ocr_text:
             logger.error(f"[{worker_id}] No OCR text found for {document_id}")
             
+            # RECORD STAGE END with error
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'chunking', 'error', error_message="No OCR text"
+            )
+            
             error_status = PipelineStatus.terminal(TerminalStateEnum.ERROR)
             await document_repository.update_status(
                 doc_id,
@@ -2877,15 +2969,15 @@ async def _chunking_worker_task(document_id: str, filename: str, worker_id: str)
                 error_message="No OCR text for chunking"
             )
             
-            processing_queue_store.update_worker_status(
+            worker_repository.update_worker_status_sync(
                 worker_id, document_id, 'chunking', 'error',
                 error_message="No OCR text"
             )
-            processing_queue_store.mark_task_completed(document_id, 'chunking')
+            worker_repository.mark_task_completed_sync(document_id, 'chunking')
             return
         
         ocr_text = document.ocr_text
-        doc_type = document.doc_type or "unknown"
+        doc_type = document.document_type.value if document.document_type else "unknown"
         
         logger.info(f"[{worker_id}] Starting chunking for {filename}...")
         
@@ -2909,6 +3001,11 @@ async def _chunking_worker_task(document_id: str, filename: str, worker_id: str)
             conn.commit()
             conn.close()
             
+            # 3. RECORD STAGE END as done (NEW: stage timing)
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'chunking', 'done'
+            )
+            
             logger.info(f"[{worker_id}] ✅ Chunking completed: {len(chunk_records)} chunks created")
             
         except Exception as e:
@@ -2916,15 +3013,20 @@ async def _chunking_worker_task(document_id: str, filename: str, worker_id: str)
             raise
         
         # Mark completed
-        processing_queue_store.update_worker_status(
+        worker_repository.update_worker_status_sync(
             worker_id, document_id, 'chunking', 'completed'
         )
-        processing_queue_store.mark_task_completed(document_id, 'chunking')
+        worker_repository.mark_task_completed_sync(document_id, 'chunking')
         
     except Exception as e:
         logger.error(f"[{worker_id}] Chunking worker error: {e}", exc_info=True)
         try:
             err_msg = str(e)[:200]
+            
+            # RECORD STAGE END with error
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'chunking', 'error', error_message=err_msg
+            )
             
             # Update status using repository
             error_status = PipelineStatus.terminal(TerminalStateEnum.ERROR)
@@ -2935,11 +3037,11 @@ async def _chunking_worker_task(document_id: str, filename: str, worker_id: str)
                 error_message=err_msg
             )
             
-            processing_queue_store.update_worker_status(
+            worker_repository.update_worker_status_sync(
                 worker_id, document_id, 'chunking', 'error',
                 error_message=err_msg
             )
-            processing_queue_store.mark_task_completed(document_id, 'chunking')
+            worker_repository.mark_task_completed_sync(document_id, 'chunking')
         except Exception as e2:
             logger.error(f"[{worker_id}] Failed to mark error: {e2}")
 
@@ -2952,11 +3054,20 @@ async def _indexing_worker_task(document_id: str, filename: str, worker_id: str)
     this worker was dispatched. This ensures only ONE worker processes each document.
     
     REQ-021 Fase 5: Refactored to use DocumentRepository (Hexagonal Architecture)
+    REQ-021 Phase 5F: Added stage timing tracking with document_stage_timing
     """
     try:
         logger.info(f"[{worker_id}] Assigned Indexing task for: {filename}")
         
-        processing_queue_store.update_worker_status(
+        # 1. RECORD STAGE START (NEW: stage timing)
+        stage_timing_repository.record_stage_start_sync(
+            document_id=document_id,
+            stage='indexing',
+            metadata={'worker_id': worker_id, 'filename': filename}
+        )
+        
+        # 2. Mark as started
+        worker_repository.update_worker_status_sync(
             worker_id, document_id, TaskType.INDEXING, WorkerStatus.STARTED
         )
         
@@ -2965,14 +3076,22 @@ async def _indexing_worker_task(document_id: str, filename: str, worker_id: str)
         document = await document_repository.get_by_id(doc_id)
         
         if not document or not document.ocr_text:
+            # RECORD STAGE END with error
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'indexing', 'error', error_message="No OCR text available"
+            )
             raise ValueError("No OCR text available for indexing")
         
         ocr_text = document.ocr_text
-        doc_type = document.doc_type or "unknown"
+        doc_type = document.document_type.value if document.document_type else "unknown"
         
         chunk_records = await asyncio.to_thread(_perform_chunking, ocr_text, document_id, filename, doc_type)
         
         if not chunk_records:
+            # RECORD STAGE END with error
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'indexing', 'error', error_message="No chunks generated"
+            )
             raise ValueError("No chunk records generated for indexing")
         
         logger.info(f"[{worker_id}] Indexing {len(chunk_records)} chunks into Qdrant...")
@@ -2995,6 +3114,11 @@ async def _indexing_worker_task(document_id: str, filename: str, worker_id: str)
         conn.commit()
         conn.close()
         
+        # 3. RECORD STAGE END as done (NEW: stage timing)
+        stage_timing_repository.record_stage_end_sync(
+            document_id, 'indexing', 'done'
+        )
+        
         await document_repository.mark_for_reprocessing(doc_id, requested=False)
         
         if INSIGHTS_QUEUE_ENABLED and rag_pipeline:
@@ -3013,16 +3137,21 @@ async def _indexing_worker_task(document_id: str, filename: str, worker_id: str)
             except Exception as eq_err:
                 logger.warning(f"[{worker_id}] Insights enqueue failed: {eq_err}")
         
-        processing_queue_store.update_worker_status(
+        worker_repository.update_worker_status_sync(
             worker_id, document_id, TaskType.INDEXING, WorkerStatus.COMPLETED
         )
-        processing_queue_store.mark_task_completed(document_id, TaskType.INDEXING)
+        worker_repository.mark_task_completed_sync(document_id, TaskType.INDEXING)
         logger.info(f"[{worker_id}] ✅ Indexing completed: {len(chunk_records)} chunks indexed")
         
     except Exception as e:
         logger.error(f"[{worker_id}] Indexing worker error: {e}", exc_info=True)
         try:
             err_msg = str(e)[:200]
+            
+            # RECORD STAGE END with error
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'indexing', 'error', error_message=err_msg
+            )
             
             # Update status using repository
             error_status = PipelineStatus.terminal(TerminalStateEnum.ERROR)
@@ -3033,11 +3162,11 @@ async def _indexing_worker_task(document_id: str, filename: str, worker_id: str)
                 error_message=err_msg
             )
             
-            processing_queue_store.update_worker_status(
+            worker_repository.update_worker_status_sync(
                 worker_id, document_id, TaskType.INDEXING, WorkerStatus.ERROR,
                 error_message=err_msg
             )
-            processing_queue_store.mark_task_completed(document_id, TaskType.INDEXING)
+            worker_repository.mark_task_completed_sync(document_id, TaskType.INDEXING)
         except Exception as e2:
             logger.error(f"[{worker_id}] Failed to mark error: {e2}")
 
@@ -3715,7 +3844,7 @@ async def requeue_document(
                 clear_indexed_at=True,
                 clear_error_message=True,
             )
-            processing_queue_store.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
+            await worker_repository.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
             logger.info(f"   ✓ Retry indexing only (ocr_text exists)")
         else:
             document_status_store.update_status(
@@ -3728,7 +3857,7 @@ async def requeue_document(
             )
             await document_repository.store_ocr_text(DocumentId(document_id), None)
             await document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
-            processing_queue_store.enqueue_task(document_id, filename, TaskType.OCR, priority=10)
+            await worker_repository.enqueue_task(document_id, filename, TaskType.OCR, priority=10)
             logger.info(f"   ✓ Reset to OCR and marked for reprocessing")
         logger.info(f"   ✓ Added to processing queue")
         
@@ -3874,7 +4003,7 @@ async def retry_error_workers(
                     )
                     await document_repository.store_ocr_text(DocumentId(document_id), None)
                     await document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
-                    processing_queue_store.enqueue_task(document_id, filename, TaskType.OCR, priority=10)
+                    await worker_repository.enqueue_task(document_id, filename, TaskType.OCR, priority=10)
                     logger.info(f"   → Retry OCR (no ocr_text or stage={stage})")
                 elif stage == 'chunking':
                     # Chunking falló (ej. Server disconnected) → retry chunking
@@ -3885,7 +4014,7 @@ async def retry_error_workers(
                         clear_indexed_at=True,
                         clear_error_message=True,
                     )
-                    processing_queue_store.enqueue_task(document_id, filename, TaskType.CHUNKING, priority=10)
+                    await worker_repository.enqueue_task(document_id, filename, TaskType.CHUNKING, priority=10)
                     logger.info(f"   → Retry chunking (stage=chunking)")
                 else:
                     # Indexing falló o stage=indexing → retry indexing
@@ -3896,7 +4025,7 @@ async def retry_error_workers(
                         clear_indexed_at=True,
                         clear_error_message=True,
                     )
-                    processing_queue_store.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
+                    await worker_repository.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
                     logger.info(f"   → Retry indexing only (ocr+chunking done)")
                 
                 retried_count += 1
@@ -4078,7 +4207,7 @@ def _run_reindex_all():
                 clear_indexed_at=True,
                 clear_error_message=True,
             )
-            processing_queue_store.enqueue_task(doc_id, filename, TaskType.INDEXING, priority=10)
+            worker_repository.enqueue_task_sync(doc_id, filename, TaskType.INDEXING, priority=10)
             if (i + 1) % 10 == 0 or i == 0:
                 logger.info(f"   ✓ Queued {i + 1}/{len(docs)}: {filename[:50]}...")
         except Exception as e:

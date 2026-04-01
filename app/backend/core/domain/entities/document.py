@@ -22,6 +22,8 @@ class DocumentType(str, Enum):
     PDF = "pdf"
     TEXT = "txt"
     DOCX = "docx"
+    CONTRACT = "CONTRACT"  # Legacy value from production data
+    GENERIC_DOCUMENT = "GENERIC_DOCUMENT"  # Legacy value from production data
     UNKNOWN = "unknown"
 
 
@@ -51,30 +53,62 @@ class Document:
         >>> doc.mark_terminal(TerminalStateEnum.COMPLETED)
     """
     
+    # ========================================
+    # REQUIRED FIELDS (no defaults) - MUST BE FIRST
+    # ========================================
+    
     # Identity
     id: DocumentId
     
-    # Attributes
+    # Attributes (required)
     filename: str
     original_filename: str
     sha256: str
     file_size: int  # bytes
     document_type: DocumentType
     
-    # Status (composable)
+    # Status (required - composable)
     status: PipelineStatus
+    
+    # ========================================
+    # OPTIONAL FIELDS (with defaults)
+    # ========================================
+    
+    # Metadata (from DB)
+    source: str = "web"  # Document source (web, upload, api, etc.)
+    news_date: Optional[datetime] = None  # Date of the news content
+    processing_stage: Optional[str] = None  # Current pipeline stage
     
     # OCR results
     total_pages: Optional[int] = None
     total_news_items: Optional[int] = None
+    ocr_text: Optional[str] = None  # Full OCR text
     ocr_text_length: Optional[int] = None
     
-    # Timestamps
-    uploaded_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    # Indexing
+    num_chunks: int = 0  # Number of chunks/news items
+    indexed_at: Optional[datetime] = None  # LEGACY: Use document_stage_timing table instead
+    
+    # Reprocessing
+    reprocess_requested: bool = False  # Flag for manual reprocessing
+    
+    # Content hash (for deduplication)
+    content_hash: Optional[TextHash] = None  # SHA256 of file content
     
     # Error handling
     error_message: Optional[str] = None
+    
+    # ========================================
+    # TIMESTAMPS: Document-level (applies to entire entity)
+    # ========================================
+    created_at: datetime = field(default_factory=datetime.utcnow)  # Document first entered system
+    updated_at: datetime = field(default_factory=datetime.utcnow)  # Last modification (auto-trigger)
+    
+    # ========================================
+    # LEGACY COMPATIBILITY (deprecated - use document_stage_timing table)
+    # ========================================
+    ingested_at: datetime = field(default_factory=datetime.utcnow)  # LEGACY: = upload completion time
+    uploaded_at: datetime = field(default_factory=datetime.utcnow)  # LEGACY: = created_at (for backward compat)
     
     @classmethod
     def create(

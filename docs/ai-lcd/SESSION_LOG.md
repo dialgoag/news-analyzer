@@ -2,8 +2,105 @@
 
 > Decisiones, cambios importantes, y contexto entre sesiones
 
-**Última actualización**: 2026-03-31  
-**Sesión**: 49 (REQ-021 — Fase 1: Domain Entities + Value Objects)
+**Última actualización**: 2026-04-01  
+**Sesión**: 50 (REQ-021 — Sistema Unificado de Timestamps)
+
+---
+
+## Sesión 50: Sistema Unificado de Timestamps (2026-04-01)
+
+### Contexto: Auditabilidad y Performance Analytics
+
+Después de completar migración DocumentStatusStore→Repository (Sesión 49), usuario solicitó **estandarización global de timestamps** con semántica clara:
+- `created_at` = cuando inicia un paso/proceso
+- `updated_at` = cuando finaliza o se modifica
+
+### Decisión 1: Tabla Unificada para Document-Level + News-Level
+
+**Problema inicial**: Propuse agregar columnas prefijadas a `document_status` (upload_created_at, ocr_created_at, etc.). Usuario pidió revisión completa.
+
+**Solución final**: Nueva tabla `document_stage_timing` con soporte para:
+- **Document-level stages** (news_item_id=NULL): upload, ocr, chunking, indexing
+- **News-level stages** (news_item_id!=NULL): insights, insights_indexing
+
+**Por qué una tabla unificada**:
+- Usuario clarificó: "El propósito de la app es sobre **news**, no documentos"
+- Documento es solo el **contenedor inicial** hasta extraer news
+- Triada única: `(document_id, COALESCE(news_item_id, ''), stage)`
+- Permite queries de performance por stage con y sin news_item_id
+
+### Decisión 2: Semántica Temporal Clara
+
+**Antes**: Campos ad-hoc (`ingested_at`, `uploaded_at`, `indexed_at`) sin patrón consistente
+
+**Después**: Patrón universal en 2 niveles:
+
+**Nivel 1: Document-level** (`document_status` table):
+- `created_at`: Documento entra al sistema (upload)
+- `updated_at`: Última modificación (auto-trigger)
+
+**Nivel 2: Stage-level** (`document_stage_timing` table):
+- `created_at`: Stage INICIA (worker empieza trabajo)
+- `updated_at`: Stage TERMINA (done/error) o se modifica
+
+### Decisión 3: Workers Integrados con Stage Timing
+
+**4 workers actualizados**:
+1. `_ocr_worker_task`: `record_stage_start('ocr')` → `record_stage_end('ocr', 'done'/'error')`
+2. `_chunking_worker_task`: `record_stage_start('chunking')` → `record_stage_end('chunking', 'done'/'error')`
+3. `_indexing_worker_task`: `record_stage_start('indexing')` → `record_stage_end('indexing', 'done'/'error')`
+4. `_insights_worker_task`: `record_stage_start('insights', news_item_id)` → `record_stage_end('insights', news_item_id, 'done'/'error')`
+
+**Pattern**:
+```python
+# Document-level
+stage_timing_repository.record_stage_start_sync(document_id, 'ocr')
+# ... process ...
+stage_timing_repository.record_stage_end_sync(document_id, 'ocr', 'done')
+
+# News-level
+stage_timing_repository.record_stage_start_sync(document_id, 'insights', news_item_id)
+# ... process ...
+stage_timing_repository.record_stage_end_sync(document_id, 'insights', news_item_id, 'done')
+```
+
+### Decisión 4: Queries Habilitadas (antes imposibles)
+
+**Timeline completo de documento**:
+```sql
+SELECT stage, news_item_id, created_at, updated_at, status
+FROM document_stage_timing
+WHERE document_id = 'doc-123'
+ORDER BY created_at ASC;
+```
+
+**Performance promedio por stage**:
+```sql
+-- Document-level stages
+SELECT stage, AVG(EXTRACT(EPOCH FROM (updated_at - created_at))) as avg_seconds
+FROM document_stage_timing
+WHERE news_item_id IS NULL AND status = 'done'
+GROUP BY stage;
+
+-- News-level stages
+SELECT stage, AVG(EXTRACT(EPOCH FROM (updated_at - created_at))) as avg_seconds
+FROM document_stage_timing
+WHERE news_item_id IS NOT NULL AND stage = 'insights'
+GROUP BY stage;
+```
+
+### Impacto en Roadmap
+
+- ✅ Migration 018 aplicada (tabla creada + backfill de 620 registros)
+- ✅ Habilitada observabilidad granular de pipeline
+- ✅ Performance analytics por stage
+- ✅ Base para dashboards de timing en frontend
+
+### Riesgo: BAJO
+
+- Legacy fields mantenidos (`ingested_at`, `uploaded_at`, `indexed_at`)
+- Código existente NO se rompe (backward compatibility)
+- Workers mejorados con tracking automático
 
 ---
 

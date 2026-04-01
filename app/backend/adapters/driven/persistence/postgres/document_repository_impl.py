@@ -7,7 +7,7 @@ Maps between database rows and Domain entities.
 from typing import Optional, List
 from datetime import datetime
 
-from core.domain.entities.document import Document
+from core.domain.entities.document import Document, DocumentType
 from core.domain.value_objects.document_id import DocumentId
 from core.domain.value_objects.text_hash import TextHash
 from core.domain.value_objects.pipeline_status import PipelineStatus, StageEnum, StateEnum
@@ -33,6 +33,7 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
                 """
                 SELECT document_id, filename, source, status, ingested_at, 
                        news_date, file_hash, ocr_text, doc_type, error_message,
+                       processing_stage, num_chunks, indexed_at, reprocess_requested,
                        created_at, updated_at
                 FROM document_status
                 WHERE document_id = %s
@@ -57,6 +58,7 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
                 """
                 SELECT document_id, filename, source, status, ingested_at, 
                        news_date, file_hash, ocr_text, doc_type, error_message,
+                       processing_stage, num_chunks, indexed_at, reprocess_requested,
                        created_at, updated_at
                 FROM document_status
                 WHERE file_hash = %s
@@ -89,12 +91,15 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             
             if exists:
                 # Update existing
+                # NOTE: Update ALL relevant fields from Document entity
+                # Trigger handles updated_at automatically
                 cursor.execute(
                     """
                     UPDATE document_status
                     SET filename = %s, source = %s, status = %s, 
                         news_date = %s, file_hash = %s, ocr_text = %s,
-                        doc_type = %s, error_message = %s, updated_at = %s
+                        doc_type = %s, error_message = %s, processing_stage = %s,
+                        num_chunks = %s, indexed_at = %s, reprocess_requested = %s
                     WHERE document_id = %s
                     """,
                     (
@@ -102,22 +107,27 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
                         document.source,
                         status_str,
                         document.news_date,
-                        document.content_hash.value if document.content_hash else None,
+                        document.content_hash.value if document.content_hash else document.sha256,
                         document.ocr_text,
-                        document.doc_type,
+                        document.document_type.value,
                         document.error_message,
-                        datetime.now(),
+                        document.processing_stage,
+                        document.num_chunks,
+                        document.indexed_at,
+                        1 if document.reprocess_requested else 0,
                         document.id.value
                     )
                 )
             else:
                 # Insert new
+                # NOTE: Map document fields to DB (NO stage timestamps - those go to document_stage_timing)
                 cursor.execute(
                     """
                     INSERT INTO document_status
                     (document_id, filename, source, status, ingested_at, news_date, 
-                     file_hash, ocr_text, doc_type, error_message, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     file_hash, ocr_text, doc_type, error_message, processing_stage, 
+                     num_chunks, indexed_at, reprocess_requested, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         document.id.value,
@@ -126,10 +136,14 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
                         status_str,
                         document.ingested_at,
                         document.news_date,
-                        document.content_hash.value if document.content_hash else None,
+                        document.content_hash.value if document.content_hash else document.sha256,
                         document.ocr_text,
-                        document.doc_type,
+                        document.document_type.value,
                         document.error_message,
+                        document.processing_stage,
+                        document.num_chunks,
+                        document.indexed_at,  # LEGACY
+                        1 if document.reprocess_requested else 0,
                         document.created_at,
                         document.updated_at
                     )
@@ -154,6 +168,7 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             query = """
                 SELECT document_id, filename, source, status, ingested_at, 
                        news_date, file_hash, ocr_text, doc_type, error_message,
+                       processing_stage, num_chunks, indexed_at, reprocess_requested,
                        created_at, updated_at
                 FROM document_status
                 WHERE status = %s
@@ -183,6 +198,7 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             query = """
                 SELECT document_id, filename, source, status, ingested_at, 
                        news_date, file_hash, ocr_text, doc_type, error_message,
+                       processing_stage, num_chunks, indexed_at, reprocess_requested,
                        created_at, updated_at
                 FROM document_status
                 WHERE status LIKE '%_pending' 
@@ -218,6 +234,7 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
                 """
                 SELECT document_id, filename, source, status, ingested_at, 
                        news_date, file_hash, ocr_text, doc_type, error_message,
+                       processing_stage, num_chunks, indexed_at, reprocess_requested,
                        created_at, updated_at
                 FROM document_status
                 ORDER BY ingested_at DESC
@@ -246,10 +263,10 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             cursor.execute(
                 """
                 UPDATE document_status
-                SET status = %s, error_message = %s, updated_at = %s
+                SET status = %s, error_message = %s
                 WHERE document_id = %s
                 """,
-                (status_str, error_message, datetime.now(), document_id.value)
+                (status_str, error_message, document_id.value)
             )
             
             if cursor.rowcount == 0:
@@ -312,19 +329,42 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
         )
         
         # Create Document entity
+        # NOTE: Complete mapping of ALL document_status fields
+        # Stage timing (upload_created_at, ocr_updated_at, etc.) is now in separate table
+        # Use StageTimingRepository to query stage-level timestamps
         return Document(
+            # REQUIRED FIELDS
             id=DocumentId(row_dict["document_id"]),
             filename=row_dict["filename"],
-            source=row_dict["source"],
+            original_filename=row_dict["filename"],
+            sha256=row_dict.get("file_hash", ""),
+            file_size=0,  # Not stored in document_status yet (TODO: add if needed)
+            document_type=DocumentType(row_dict.get("doc_type", "unknown")),
             status=status,
-            ingested_at=row_dict["ingested_at"],
+            
+            # OPTIONAL FIELDS
+            source=row_dict.get("source", "web"),
             news_date=row_dict.get("news_date"),
-            content_hash=TextHash(row_dict["file_hash"]) if row_dict.get("file_hash") else None,
+            processing_stage=row_dict.get("processing_stage"),
+            total_pages=None,  # Not in document_status
+            total_news_items=row_dict.get("num_chunks"),
             ocr_text=row_dict.get("ocr_text"),
-            doc_type=row_dict.get("doc_type"),
-            error_message=row_dict.get("error_message"),
-            created_at=row_dict.get("created_at") or row_dict["ingested_at"],
-            updated_at=row_dict.get("updated_at") or row_dict["ingested_at"]
+            ocr_text_length=len(row_dict.get("ocr_text") or ""),
+            num_chunks=row_dict.get("num_chunks", 0),
+            indexed_at=row_dict.get("indexed_at"),  # LEGACY
+            reprocess_requested=bool(row_dict.get("reprocess_requested", 0)),
+            content_hash=TextHash(row_dict["file_hash"]) if row_dict.get("file_hash") else None,
+            
+            # DOCUMENT-LEVEL TIMESTAMPS
+            created_at=row_dict.get("created_at") or datetime.now(),
+            updated_at=row_dict.get("updated_at") or datetime.now(),
+            
+            # LEGACY COMPATIBILITY
+            ingested_at=row_dict.get("ingested_at") or datetime.now(),
+            uploaded_at=row_dict.get("created_at") or datetime.now(),
+            
+            # ERROR HANDLING
+            error_message=row_dict.get("error_message")
         )
     
     async def list_pending_reprocess(self) -> List[Document]:
@@ -353,10 +393,9 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE document_status
-                SET reprocess_requested = %s,
-                    updated_at = %s
+                SET reprocess_requested = %s
                 WHERE document_id = %s
-            """, (requested, datetime.utcnow().isoformat(), str(document_id)))
+            """, (requested, str(document_id)))
             conn.commit()
         finally:
             self.release_connection(conn)
@@ -372,10 +411,9 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE document_status
-                SET ocr_text = %s,
-                    updated_at = %s
+                SET ocr_text = %s
                 WHERE document_id = %s
-            """, (ocr_text, datetime.utcnow().isoformat(), str(document_id)))
+            """, (ocr_text, str(document_id)))
             conn.commit()
         finally:
             self.release_connection(conn)
@@ -411,10 +449,9 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE document_status
-                SET reprocess_requested = %s,
-                    updated_at = %s
+                SET reprocess_requested = %s
                 WHERE document_id = %s
-            """, (requested, datetime.utcnow().isoformat(), document_id))
+            """, (requested, document_id))
             conn.commit()
         finally:
             self.get_connection_pool().putconn(conn)
@@ -430,10 +467,9 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE document_status
-                SET ocr_text = %s,
-                    updated_at = %s
+                SET ocr_text = %s
                 WHERE document_id = %s
-            """, (ocr_text, datetime.utcnow().isoformat(), document_id))
+            """, (ocr_text, document_id))
             conn.commit()
         finally:
             self.get_connection_pool().putconn(conn)

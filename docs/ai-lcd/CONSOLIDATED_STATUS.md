@@ -1,9 +1,67 @@
 # 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-04-01
 
-> **Versión definitiva**: Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
+> **Versión definitiva**: Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
 **Última actualización**: 2026-04-01  
 **Prioridad**: REQ-021 — Backend Refactor: Hexagonal + DDD + LangChain/LangGraph/LangMem
+
+---
+
+### 112. Sistema Unificado de Timestamps (Migration 018) ✅
+**Fecha**: 2026-04-01  
+**Ubicación**:
+- `migrations/018_standardize_timestamps.py` (nueva migration)
+- `core/domain/entities/stage_timing.py` (nueva entidad con news_item_id)
+- `core/ports/repositories/stage_timing_repository.py` (nuevo port)
+- `adapters/.../stage_timing_repository_impl.py` (implementación)
+- `app.py` líneas 2475, 2494, 2517, 2568, 2585, 2794, 2942, 3081 (workers integrados)
+
+**Problema**: 
+No existía auditabilidad granular de timing por pipeline stage (upload, ocr, chunking, indexing, insights). Los timestamps estaban dispersos en varias tablas sin modelo unificado.
+
+**Solución**:
+Nueva tabla `document_stage_timing` con diseño unificado para rastrear **document-level** (news_item_id=NULL) y **news-level** (news_item_id!=NULL) stages:
+
+**Schema**:
+```sql
+document_stage_timing:
+  document_id VARCHAR(255) NOT NULL
+  news_item_id VARCHAR(255) NULL  -- NULL=document-level, NOT NULL=news-level
+  stage VARCHAR(50) NOT NULL
+  status VARCHAR(50) NOT NULL
+  created_at TIMESTAMP NOT NULL  -- Stage START
+  updated_at TIMESTAMP NOT NULL  -- Stage END (auto-trigger)
+  UNIQUE(document_id, COALESCE(news_item_id, ''), stage)
+```
+
+**Workers integrados**:
+- OCR/Chunking/Indexing: `record_stage_start/end(document_id, stage)` (document-level)
+- Insights: `record_stage_start/end(document_id, news_item_id, stage)` (news-level)
+
+**Impacto**: 
+- ✅ Auditabilidad completa de timing por stage
+- ✅ Métricas de performance por stage (avg, min, max duration)
+- ✅ Detección de documentos/news atascados
+- ✅ Backfill de 320 docs (upload) + 300 docs (indexing)
+- ✅ Triggers automáticos para `updated_at` en 7 tablas
+
+**⚠️ NO rompe**: 
+- OCR pipeline ✅ (document-level tracking)
+- Chunking pipeline ✅ (document-level tracking)
+- Indexing pipeline ✅ (document-level tracking)
+- Insights pipeline ✅ (news-level tracking)
+- Dashboard ✅ (usa `ingested_at` legacy field mantenido)
+- API endpoints ✅ (`/api/documents` retorna `created_at`/`updated_at`)
+
+**Verificación**:
+- [x] Migration aplicada sin errores
+- [x] Tabla `document_stage_timing` creada con 631 registros
+- [x] Backfill exitoso (320 upload + 300 indexing)
+- [x] Triggers `updated_at` funcionando en todas las tablas
+- [x] Workers integrando `record_stage_start/end` sin errores
+- [x] Endpoints `/api/documents` retornando correctamente
+- [x] Docker build exitoso
+- [x] Compilación Python exitosa
 
 ---
 

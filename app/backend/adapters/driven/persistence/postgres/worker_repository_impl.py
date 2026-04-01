@@ -367,3 +367,274 @@ class PostgresWorkerRepository(BasePostgresRepository, WorkerRepository):
             created_at=row_dict.get("created_at") or datetime.now(),
             updated_at=row_dict.get("updated_at") or datetime.now()
         )
+    
+    # ========================================
+    # PROCESSING QUEUE MANAGEMENT
+    # (Migrated from ProcessingQueueStore - Fase 5F)
+    # ========================================
+    
+    async def enqueue_task(
+        self, 
+        document_id: str, 
+        filename: str, 
+        task_type: str, 
+        priority: int = 0
+    ) -> bool:
+        """Add a task to the processing queue."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO processing_queue 
+                (document_id, filename, task_type, priority, created_at, status)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (document_id, task_type) 
+                DO UPDATE SET priority = EXCLUDED.priority, status = EXCLUDED.status
+            """, (document_id, filename, task_type, priority, datetime.utcnow().isoformat(), 'pending'))
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            import logging
+            logging.getLogger(__name__).error(f"Error enqueueing task: {e}")
+            return False
+        finally:
+            self.release_connection(conn)
+    
+    async def mark_task_completed(
+        self, 
+        document_id: str, 
+        task_type: str
+    ) -> bool:
+        """Mark a task as completed in the processing queue."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE processing_queue
+                SET status = 'completed', processed_at = %s
+                WHERE document_id = %s AND task_type = %s
+            """, (datetime.utcnow().isoformat(), document_id, task_type))
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            import logging
+            logging.getLogger(__name__).error(f"Error marking task completed: {e}")
+            return False
+        finally:
+            self.release_connection(conn)
+    
+    async def assign_worker_to_task(
+        self, 
+        worker_id: str, 
+        worker_type: str, 
+        document_id: str, 
+        task_type: str
+    ) -> bool:
+        """
+        Assign a task to a worker atomically.
+        
+        Uses pg_advisory_xact_lock and SELECT FOR UPDATE to prevent race conditions.
+        Returns True if assignment succeeded, False if already assigned.
+        """
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Advisory lock to serialize assignment
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s::text), hashtext(%s::text))",
+                (document_id, task_type),
+            )
+            
+            # Check if already assigned
+            cursor.execute("""
+                SELECT worker_id FROM worker_tasks
+                WHERE document_id = %s AND task_type = %s AND status IN ('assigned', 'started')
+                FOR UPDATE
+                LIMIT 1
+            """, (document_id, task_type))
+            
+            existing_worker = cursor.fetchone()
+            if existing_worker:
+                conn.rollback()
+                return False
+            
+            # Assign worker
+            now_iso = datetime.utcnow().isoformat()
+            cursor.execute("""
+                INSERT INTO worker_tasks
+                (worker_id, worker_type, document_id, task_type, status, assigned_at, error_message, completed_at)
+                VALUES (%s, %s, %s, %s, 'assigned', %s, NULL, NULL)
+                ON CONFLICT (worker_id, document_id, task_type) DO UPDATE SET
+                    status = 'assigned', assigned_at = EXCLUDED.assigned_at,
+                    error_message = NULL, completed_at = NULL, started_at = NULL
+            """, (worker_id, worker_type, document_id, task_type, now_iso))
+            conn.commit()
+            return True
+            
+        except Exception as e:
+            conn.rollback()
+            import logging
+            logging.getLogger(__name__).error(f"Error assigning worker: {e}")
+            return False
+        finally:
+            self.release_connection(conn)
+    
+    # ========================================
+    # SYNC methods for legacy scheduler compatibility
+    # ========================================
+    
+    def enqueue_task_sync(
+        self, 
+        document_id: str, 
+        filename: str, 
+        task_type: str, 
+        priority: int = 0
+    ) -> bool:
+        """SYNC version - Enqueue task to processing queue."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO processing_queue 
+                (document_id, filename, task_type, priority, created_at, status)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (document_id, task_type) 
+                DO UPDATE SET priority = EXCLUDED.priority, status = EXCLUDED.status
+            """, (document_id, filename, task_type, priority, datetime.utcnow().isoformat(), 'pending'))
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            import logging
+            logging.getLogger(__name__).error(f"Error enqueueing task (sync): {e}")
+            return False
+        finally:
+            self.get_connection_pool().putconn(conn)
+    
+    def mark_task_completed_sync(
+        self, 
+        document_id: str, 
+        task_type: str
+    ) -> bool:
+        """SYNC version - Mark task as completed."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE processing_queue
+                SET status = 'completed', processed_at = %s
+                WHERE document_id = %s AND task_type = %s
+            """, (datetime.utcnow().isoformat(), document_id, task_type))
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            import logging
+            logging.getLogger(__name__).error(f"Error marking task completed (sync): {e}")
+            return False
+        finally:
+            self.get_connection_pool().putconn(conn)
+    
+    def assign_worker_to_task_sync(
+        self, 
+        worker_id: str, 
+        worker_type: str, 
+        document_id: str, 
+        task_type: str
+    ) -> bool:
+        """SYNC version - Assign worker to task."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            
+            # Advisory lock
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s::text), hashtext(%s::text))",
+                (document_id, task_type),
+            )
+            
+            # Check if already assigned
+            cursor.execute("""
+                SELECT worker_id FROM worker_tasks
+                WHERE document_id = %s AND task_type = %s AND status IN ('assigned', 'started')
+                FOR UPDATE
+                LIMIT 1
+            """, (document_id, task_type))
+            
+            existing_worker = cursor.fetchone()
+            if existing_worker:
+                conn.rollback()
+                return False
+            
+            # Assign worker
+            now_iso = datetime.utcnow().isoformat()
+            cursor.execute("""
+                INSERT INTO worker_tasks
+                (worker_id, worker_type, document_id, task_type, status, assigned_at, error_message, completed_at)
+                VALUES (%s, %s, %s, %s, 'assigned', %s, NULL, NULL)
+                ON CONFLICT (worker_id, document_id, task_type) DO UPDATE SET
+                    status = 'assigned', assigned_at = EXCLUDED.assigned_at,
+                    error_message = NULL, completed_at = NULL, started_at = NULL
+            """, (worker_id, worker_type, document_id, task_type, now_iso))
+            conn.commit()
+            return True
+            
+        except Exception as e:
+            conn.rollback()
+            import logging
+            logging.getLogger(__name__).error(f"Error assigning worker (sync): {e}")
+            return False
+        finally:
+            self.get_connection_pool().putconn(conn)
+    
+    def update_worker_status_sync(
+        self,
+        worker_id: str,
+        document_id: str,
+        task_type: str,
+        status: str,
+        error_message: Optional[str] = None
+    ) -> bool:
+        """SYNC version - Update worker task status."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            now = datetime.utcnow().isoformat()
+            
+            if status == 'started':
+                cursor.execute("""
+                    UPDATE worker_tasks
+                    SET status = %s, started_at = %s
+                    WHERE worker_id = %s AND document_id = %s AND task_type = %s
+                """, (status, now, worker_id, document_id, task_type))
+            elif status == 'completed':
+                cursor.execute("""
+                    UPDATE worker_tasks
+                    SET status = %s, completed_at = %s
+                    WHERE worker_id = %s AND document_id = %s AND task_type = %s
+                """, (status, now, worker_id, document_id, task_type))
+            elif status == 'error':
+                cursor.execute("""
+                    UPDATE worker_tasks
+                    SET status = %s, completed_at = %s, error_message = %s
+                    WHERE worker_id = %s AND document_id = %s AND task_type = %s
+                """, (status, now, error_message, worker_id, document_id, task_type))
+            else:
+                cursor.execute("""
+                    UPDATE worker_tasks
+                    SET status = %s
+                    WHERE worker_id = %s AND document_id = %s AND task_type = %s
+                """, (status, worker_id, document_id, task_type))
+            
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            import logging
+            logging.getLogger(__name__).error(f"Error updating worker status (sync): {e}")
+            return False
+        finally:
+            self.get_connection_pool().putconn(conn)

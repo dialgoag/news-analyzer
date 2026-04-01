@@ -2,9 +2,9 @@
 
 > **Propósito**: Rastrear TODAS las peticiones del usuario con trazabilidad completa
 > 
-> **Última actualización**: 2026-03-31  
+> **Última actualización**: 2026-04-01  
 > **Total peticiones**: 21  
-> **Completadas**: 18 | Pendientes: 3 (REQ-014, REQ-021, otros) | Rechazadas: 0
+> **Completadas**: 19 | Pendientes: 2 (REQ-014, REQ-021 parcial) | Rechazadas: 0
 
 > **Pendientes técnicos** (mejoras, fixes): ver `PENDING_BACKLOG.md` (fuente única).
 
@@ -34,7 +34,7 @@
 | **REQ-018** | 2026-03-16 | "BUG: Crashed workers loop — recovery a None" | ✅ **COMPLETADA** | v3.0.3 | **#64** |
 | **REQ-019** | 2026-03-27 | "Doc AI-LCD + workers OCR duplicados + login + shutdown/rebuild" | ✅ **COMPLETADA** | v3.0.12 | **#96–#98** |
 | **REQ-020** | 2026-03-28 | "Pausar pasos pipeline insights + elegir proveedor LLM (OpenAI/Perplexity/local)" | ✅ **COMPLETADA** | v3.0.14 | **#99, #100** |
-| **REQ-021** | 2026-03-31 | "Refactor Backend SOLID + Hexagonal + DDD + LangChain/LangGraph" | 🔄 **EN PROGRESO** | v4.0.0 | #110, #111 |
+| **REQ-021** | 2026-03-31 | "Refactor Backend SOLID + Hexagonal + DDD + LangChain/LangGraph" | 🔄 **EN PROGRESO** | v4.0.0 | #110, #111, **#112** |
 | **REQ-021** | 2026-03-30 | **Spike**: análisis LLM local vs API para **calidad** de insights (sin producto obligatorio) | ✅ **COMPLETADA** (doc) | — | **#103** (doc spike) |
 
 ---
