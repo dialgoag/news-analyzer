@@ -3977,6 +3977,15 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 - [x] Código compila sin errores
 - [ ] Test de integración (próximo paso)
 
+### 114. REQ-021 Fase 5E Part 1: DocumentStatusStore Migration ✅
+**Fecha**: 2026-03-31
+**Ubicación**: `core/ports/repositories/document_repository.py`, `adapters/.../document_repository_impl.py`, `app.py`
+**Problema**: document_status_store usado en 55+ lugares
+**Solución**: Agregados 3 métodos al repository + migrados async workers
+**Impacto**: Reducido de 55 a 48 usos
+**⚠️ NO rompe**: OCR ✅, Chunking ✅, Indexing ✅, Dashboard ✅
+**Verificación**: [x] Compilación OK, [x] Workers usan repos
+
 ### 112. REQ-021 Fase 5A: Workers migrados a Repositories ✅
 **Fecha**: 2026-03-31
 **Ubicación**: `backend/app.py` (líneas ~2992-3320: OCR/Chunking/Indexing workers)
