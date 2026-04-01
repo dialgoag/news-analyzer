@@ -334,8 +334,8 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM document_status
-                WHERE reprocess_requested = TRUE
-                ORDER BY created_at ASC
+                WHERE reprocess_requested = 1
+                ORDER BY ingested_at ASC
             """)
             rows = cursor.fetchall()
             return [self._map_row_to_entity(cursor, row) for row in rows]
@@ -392,8 +392,8 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM document_status
-                WHERE reprocess_requested = TRUE
-                ORDER BY created_at ASC
+                WHERE reprocess_requested = 1
+                ORDER BY ingested_at ASC
             """)
             rows = cursor.fetchall()
             return [self.map_row_to_dict(cursor, row) for row in rows]

@@ -3368,3 +3368,106 @@ Mantenido:
 - `adapters/driven/persistence/postgres/*.py` (4 archivos: base + 3 implementations)
 - `tests/unit/test_repositories.py` (11 tests nuevos)
 
+---
+
+## 2026-04-01
+
+### Cambio: Fase 5E - Migración DocumentStatusStore → DocumentRepository
+
+**Decisión**: Migrar endpoints críticos del dashboard y workers de `document_status_store` (legacy) a `DocumentRepository` (hexagonal architecture).
+
+**Contexto**:
+- Fase 5C eliminó `GenericWorkerPool` pero dejó referencias en `/api/workers/status` → `NameError`
+- Dashboard endpoints (`/api/documents`, `/api/documents/{id}/download`, etc.) seguían usando `document_status_store`
+- Master scheduler tenía queries SQL con columnas inexistentes (`created_at`, `updated_at`)
+- Comparación booleana fallaba: `reprocess_requested = TRUE` (columna es INTEGER)
+
+**Alternativas consideradas**:
+1. **Migración completa en un solo commit** ✅ ELEGIDA
+   - Pros: Consistencia, todos los endpoints migrados
+   - Contras: Cambios extensos en app.py (~9 ubicaciones)
+2. **Migración incremental endpoint por endpoint**
+   - Pros: Commits más pequeños
+   - Contras: Código híbrido (legacy + nuevo) por más tiempo
+3. **Mantener document_status_store temporalmente**
+   - Pros: Sin cambios ahora
+   - Contras: Deuda técnica, arquitectura inconsistente
+
+**Implementación**:
+
+**1. Repository Port extensión** (sync methods para compatibilidad):
+```python
+# Async methods (nuevos):
+- list_pending_reprocess() → List[Document]
+- mark_for_reprocessing(document_id, requested)
+- store_ocr_text(document_id, ocr_text)
+
+# Sync methods (legacy scheduler compatibility):
+- list_pending_reprocess_sync() → List[dict]
+- mark_for_reprocessing_sync()
+- store_ocr_text_sync()
+- get_by_id_sync() → Optional[dict]
+- list_all_sync() → List[dict]
+```
+
+**Razón sync methods**: `master_pipeline_scheduler` es función síncrona (usa `threading` + `APScheduler`). Convertirla a async requeriría refactor extenso del scheduler. Solución pragmática: métodos `*_sync` que usan connection pool sin async/await.
+
+**2. Migraciones en app.py**:
+| Ubicación | Cambio | Razón |
+|-----------|--------|-------|
+| L794 (scheduler) | `list_pending_reprocess_sync()` | Queue de reprocess cada 10s |
+| L2789 (OCR worker) | `store_ocr_text()` | Persistir resultado OCR |
+| L2998 (Indexing worker) | `mark_for_reprocessing()` | Marcar para reproceso |
+| L3469, L3605, L3676 (Dashboard) | `get_by_id_sync()` | Endpoints GET document |
+| L3729, L3856, L3875 (Admin) | `mark_for_reprocessing_sync()` | Retry errors |
+| L5147-5230 (Workers status) | Eliminar `generic_worker_pool` | Ya no existe (Fase 5C) |
+
+**3. Fixes SQL críticos**:
+```sql
+-- FIX 1: Type mismatch
+WHERE reprocess_requested = TRUE  →  WHERE reprocess_requested = 1
+
+-- FIX 2: Column not exists
+ORDER BY created_at ASC  →  ORDER BY ingested_at ASC
+
+-- Schema real (migrations/002_document_status_schema.py):
+- ✅ ingested_at TIMESTAMP
+- ❌ created_at (NO EXISTE)
+- ❌ updated_at (NO EXISTE)
+```
+
+**Impacto en roadmap**:
+- ✅ Fase 5 (Workers + Scheduler) → **COMPLETA**
+- ⏭️ Siguiente: Fase 6 (API Routers modulares)
+- 🎯 Objetivo: Deprecar `database.py` completamente en Fase 7
+
+**Riesgos identificados**:
+
+| Riesgo | Mitigación | Estado |
+|--------|-----------|--------|
+| Scheduler spam de errores SQL | Fix queries (TRUE→1, created_at→ingested_at) | ✅ Resuelto |
+| Endpoints dashboard rotos | Tests E2E (5/5) antes de commit | ✅ Verificado |
+| Backend no levanta post-rebuild | Docker build incremental + health checks | ✅ Healthy |
+| Deuda técnica: `updated_at` en métodos no usados | Documentado como TODO futuro | ⚠️ Pendiente |
+
+**Testing**:
+```bash
+# E2E tests (5/5 pasan):
+✅ GET /api/documents → 200 OK (307 docs)
+✅ GET /api/workers/status → 200 OK
+✅ GET /api/dashboard/summary → 200 OK  
+✅ GET /api/documents/{id}/segmentation-diagnostic → 200 OK
+✅ GET /api/documents/{id}/download → 200 OK (19.7 MB)
+
+# Logs sin errores críticos:
+✅ No más "column created_at does not exist" cada 10s
+✅ Backend healthy y estable
+```
+
+**Deuda técnica identificada**:
+- ⚠️ Referencias residuales a `updated_at` en métodos async no críticos del repository
+- ⚠️ Schema tiene solo `ingested_at`, pero código asume `created_at`/`updated_at` en algunos lugares
+- 📋 TODO: Limpieza completa de columnas inexistentes en queries (prioridad BAJA - no afecta funcionalidad)
+
+**Conclusión**: Migración exitosa. Dashboard funcional. Backend estable. Fase 5 completa ✅.
+

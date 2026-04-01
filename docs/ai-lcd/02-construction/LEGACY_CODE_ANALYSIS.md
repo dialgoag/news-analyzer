@@ -144,7 +144,31 @@ workers_health_check()                  # Health checks
 
 ---
 
-## 🎯 PLAN DE ACCIÓN ACTUALIZADO (Post-Fase 5C)
+## 🎯 PLAN DE ACCIÓN ACTUALIZADO (Post-Fase 5E - 2026-04-01)
+
+### ✅ **FASE 5E: COMPLETADA** ✅
+
+**Resultado**: Migración DocumentStatusStore → DocumentRepository  
+**Fix**: #111 (2026-04-01)
+
+**Cambios aplicados**:
+- ✅ 9 endpoints/workers migrados: scheduler + OCR/Indexing workers + dashboard endpoints
+- ✅ Eliminada referencia `generic_worker_pool` en `/api/workers/status`
+- ✅ SQL fixes: `TRUE→1` (reprocess_requested), `created_at→ingested_at`
+- ✅ 5/5 tests E2E pasan
+
+**Arquitectura final**:
+```
+master_pipeline_scheduler() (único orquestador)
+├─ list_pending_reprocess_sync() → document_repository ✅
+├─ OCR Worker → document_repository.store_ocr_text() ✅
+├─ Indexing Worker → document_repository.mark_for_reprocessing() ✅
+└─ Dashboard endpoints → document_repository.get_by_id_sync() ✅
+```
+
+Ver: CONSOLIDATED_STATUS.md § Fix #111
+
+---
 
 ### ✅ **FASE 5C: COMPLETADA** 
 

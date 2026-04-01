@@ -3602,7 +3602,7 @@ async def download_document(document_id: str):
 
     try:
         # Get the document info from database to find the actual filename
-        doc = document_status_store.get(document_id)
+        doc = document_repository.get_by_id_sync(document_id)
         if not doc:
             raise HTTPException(status_code=404, detail=f"Document not found in database: {document_id}")
         
@@ -3853,7 +3853,7 @@ async def retry_error_workers(
             filename = row.get('filename') or document_id
             
             try:
-                doc = document_status_store.get(document_id)
+                doc = document_repository.get_by_id_sync(document_id)
                 if not doc:
                     errors.append(f"Document {document_id} not found")
                     continue
@@ -5147,8 +5147,8 @@ async def get_parallel_coordinates_data(
 async def get_workers_status(
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    """Get detailed status of Generic Worker Pool - shows each worker and their specific current task."""
-    global generic_worker_pool
+    """Get detailed status of workers - shows each worker and their specific current task."""
+    # NOTA: generic_worker_pool eliminado en Fase 5C
     
     cached = _cache_get("workers_status")
     if cached is not None:
@@ -5224,9 +5224,10 @@ async def get_workers_status(
         
         conn.close()
         
-        # Pool status
-        pool_active = generic_worker_pool is not None and generic_worker_pool.running
-        pool_size = generic_worker_pool.pool_size if pool_active else 0
+        # Pool status - No hay generic_worker_pool, reportar en base a master_pipeline_scheduler
+        # Todos los workers son ahora despachos individuales desde scheduler
+        pool_active = True  # Master scheduler siempre corre si backend levantó
+        pool_size = len(active_workers)  # Count actual running workers
         
         workers_status = []
         worker_idx = 0

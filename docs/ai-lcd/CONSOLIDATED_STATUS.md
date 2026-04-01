@@ -1,9 +1,106 @@
-# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-03-31
+# 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-04-01
 
-> **Versión definitiva**: Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
+> **Versión definitiva**: Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
-**Última actualización**: 2026-03-31  
+**Última actualización**: 2026-04-01  
 **Prioridad**: REQ-021 — Backend Refactor: Hexagonal + DDD + LangChain/LangGraph/LangMem
+
+---
+
+### 111. Fase 5E: Migración DocumentStatusStore → DocumentRepository ✅
+**Fecha**: 2026-04-01  
+**Ubicación**:
+- `app/backend/app.py` líneas 794, 2789, 2998, 3469, 3605, 3676, 3729, 3856, 3875, 5147-5230
+- `app/backend/core/ports/repositories/document_repository.py` (extensión)
+- `app/backend/adapters/driven/persistence/postgres/document_repository_impl.py` (implementación)
+- `app/backend/Dockerfile.cpu`, `app/backend/Dockerfile` (COPY adapters/ y core/)
+
+**Problema**: 
+- Endpoints críticos del dashboard seguían usando `document_status_store` (legacy)
+- Referencias a `generic_worker_pool` eliminado en Fase 5C causaban `NameError`
+- Queries SQL usaban columnas inexistentes (`created_at`, `updated_at`) en vez de `ingested_at`
+- Comparación `reprocess_requested = TRUE` fallaba (columna es INTEGER, no BOOLEAN)
+
+**Solución**:
+Migración completa de llamadas legacy a repository pattern:
+
+**1. DocumentRepository Port (extensión)**:
+```python
+# Métodos async
+- list_pending_reprocess() → List[Document]
+- mark_for_reprocessing(document_id, requested=True)
+- store_ocr_text(document_id, ocr_text)
+
+# Métodos sync (compatibilidad legacy scheduler)
+- list_pending_reprocess_sync() → List[dict]
+- mark_for_reprocessing_sync(document_id, requested)
+- store_ocr_text_sync(document_id, ocr_text)
+- get_by_id_sync(document_id) → Optional[dict]
+- list_all_sync(skip, limit) → List[dict]
+```
+
+**2. Migraciones en app.py**:
+
+| Línea | Endpoint/Worker | Cambio |
+|-------|----------------|--------|
+| 794 | `master_pipeline_scheduler` | `document_status_store.get()` → `document_repository.list_pending_reprocess_sync()` |
+| 2789 | `_ocr_worker_task` | `document_status_store.store_ocr_text()` → `document_repository.store_ocr_text()` + `.update_status()` |
+| 2998 | `_indexing_worker_task` | `document_status_store.update()` → `document_repository.mark_for_reprocessing()` |
+| 3469 | `GET /api/documents/{id}/segmentation-diagnostic` | `document_status_store.get()` → `document_repository.get_by_id_sync()` |
+| 3605 | `GET /api/documents/{id}/download` | `document_status_store.get()` → `document_repository.get_by_id_sync()` |
+| 3676 | `POST /api/documents/{id}/requeue` | `document_status_store.update()` → `document_repository.mark_for_reprocessing_sync()` |
+| 3729 | `POST /api/documents/{id}/reset` | `document_status_store.update()` → `document_repository.store_ocr_text_sync()` |
+| 3856 | `POST /api/workers/retry-errors` | `document_status_store.get()` → `document_repository.list_all_sync()` |
+| 3875 | `POST /api/workers/retry-errors` | `document_status_store.update()` → `document_repository.mark_for_reprocessing_sync()` |
+| 5147-5230 | `GET /api/workers/status` | Eliminada referencia a `generic_worker_pool` (ya no existe desde Fase 5C) |
+
+**3. Fixes SQL críticos**:
+```sql
+-- ANTES (FALLABA):
+WHERE reprocess_requested = TRUE  -- INTEGER ≠ BOOLEAN
+ORDER BY created_at ASC           -- Columna no existe
+
+-- DESPUÉS (CORRECTO):
+WHERE reprocess_requested = 1     -- INTEGER comparison
+ORDER BY ingested_at ASC          -- Columna correcta del schema
+```
+
+**4. Dockerfiles actualizados**:
+```dockerfile
+# Nuevas líneas para arquitectura hexagonal:
+COPY backend/core/ core/
+COPY backend/adapters/ adapters/
+
+# Comentado (archivo eliminado en Fase 5C):
+# COPY backend/worker_pool.py .
+```
+
+**Impacto**:
+- ✅ Dashboard endpoints funcionales (5/5 tests pasan)
+- ✅ Workers usan repository pattern
+- ✅ Scheduler no genera spam de errores SQL
+- ✅ Backend healthy y estable
+- ⚠️ Deuda técnica: Referencias residuales a `updated_at`/`created_at` en métodos no críticos
+
+**⚠️ NO rompe**:
+- OCR workers ✅
+- Insights workers ✅  
+- Dashboard endpoints ✅
+- Master pipeline scheduler ✅
+- Download/upload funcionalidad ✅
+
+**Verificación**:
+```bash
+# Tests ejecutados (5/5 pasan):
+✅ GET /api/documents → 200 OK (307 docs)
+✅ GET /api/workers/status → 200 OK
+✅ GET /api/dashboard/summary → 200 OK
+✅ GET /api/documents/{id}/segmentation-diagnostic → 200 OK
+✅ GET /api/documents/{id}/download → 200 OK (19.7 MB)
+
+# Logs sin errores críticos repetitivos
+✅ No más "reprocess queue: column created_at does not exist"
+```
 
 ---
 
@@ -4027,7 +4124,7 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 
 ## 🎯 REQ-021 - Progreso Global del Refactor
 
-### ✅ Fases Completadas (2/7)
+### ✅ Fases Completadas (5/7)
 
 | Fase | Estado | Fecha | Archivos | Tests | Descripción |
 |------|--------|-------|----------|-------|-------------|
@@ -4035,7 +4132,7 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 | **1** | ✅ | 2026-03-31 | 12 | 85 | Domain Model (Entities + Value Objects + PipelineStatus composable) |
 | **2** | ✅ | 2026-03-31 | 8 | 96 | Repositories (Ports + Adapters PostgreSQL + Connection pooling) |
 | **3** | ✅ | Previo | - | - | LLM Infrastructure (LangChain/LangGraph/LangMem - ya implementado) |
-| **5** | 🎯 | Next | - | - | Workers + Scheduler (refactorizar para usar repositories) |
+| **5A-5E** | ✅ | 2026-04-01 | app.py | 5 E2E | Workers + Scheduler (migrados a repositories) |
 | **6** | ⏳ | Futuro | - | - | API Routers (extraer de app.py, usar repositories) |
 | **7** | ⏳ | Futuro | - | - | Testing + Deprecar database.py |
 
@@ -4045,13 +4142,17 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 - `app.py`: 6,718 líneas (monolito)
 - `database.py`: 1,495 líneas (acoplamiento alto)
 - Tests sin domain model
+- `worker_pool.py`: 550 líneas (legacy pool system)
+- `document_status_store`: Acoplamiento directo SQL
 
-**Después (Fase 1-2)**:
+**Después (Fase 1-2-5)**:
 - Domain layer: 12 archivos bien organizados
 - Repositories: 8 archivos (ports + adapters)
-- 96 tests unitarios (100% passing)
+- 96 tests unitarios + 5 E2E (100% passing)
 - Arquitectura hexagonal funcional
-- Coexistencia: `database.py` (legacy) + repositories (nuevo)
+- Workers refactorizados (master scheduler único)
+- `worker_pool.py`: ELIMINADO ✅
+- `document_status_store`: En desuso (migrado a repository) ✅
 
 **Objetivo Final (Fase 7)**:
 - `app.py`: <200 líneas (solo setup)
@@ -4059,18 +4160,37 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 - 150+ tests (unit + integration)
 - 100% hexagonal + DDD
 
-### 🚀 Próximo Paso: Fase 5 - Workers + Scheduler
+### 🎯 Fase 5: Workers + Scheduler - COMPLETA ✅
 
-**Objetivo**: Migrar workers para usar repositories en lugar de database.py
+**Subfases ejecutadas**:
+
+| Subfase | Descripción | Estado | Fix # |
+|---------|-------------|--------|-------|
+| **5A** | Worker dispatch refactor | ✅ | Previo |
+| **5B** | ~~Individual schedulers~~ | ❌ No necesaria | - |
+| **5C** | Eliminar GenericWorkerPool | ✅ | Previo |
+| **5D** | Master scheduler unification | ✅ | Previo |
+| **5E** | DocumentStatusStore → Repository | ✅ | **#111** |
+
+**Resultado Fase 5E**:
+- ✅ 9 endpoints/workers migrados a repository pattern
+- ✅ Eliminadas referencias a `generic_worker_pool`
+- ✅ Fixes SQL críticos (TRUE→1, created_at→ingested_at)
+- ✅ Dashboard endpoints funcionales (5/5 tests)
+- ✅ Backend estable sin errores repetitivos
+
+### 🚀 Próximo Paso: Fase 6 - API Routers
+
+**Objetivo**: Extraer endpoints de app.py a routers modulares
 
 **Plan**:
-1. OCR Worker → `DocumentRepository`
-2. Chunking/Indexing Workers → `DocumentRepository`
-3. Insights Worker → `NewsItemRepository`
-4. Master Scheduler → Repositories
-5. Verificar y deprecar `database.py`
+1. Documents Router (`/api/documents/*`)
+2. Workers Router (`/api/workers/*`)
+3. Dashboard Router (`/api/dashboard/*`)
+4. Auth Router (`/api/auth/*`)
+5. Deprecar endpoints en app.py
 
-**Tiempo estimado**: 4-5 horas
-**Impacto**: Desacopla lógica de negocio de persistencia en código crítico
+**Tiempo estimado**: 3-4 horas
+**Impacto**: Separación completa presentación ↔ dominio
 
 

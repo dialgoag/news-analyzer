@@ -4,10 +4,55 @@
 > 
 > **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> **📋 ÚLTIMO**: Fix #103 — spike **REQ-021** (`SPIKE_REQ021_LOCAL_LLM_INSIGHTS_QUALITY.md`) + registro en `REQUESTS_REGISTRY.md`. Fix #100–102 siguen vigentes.
+> **📋 ÚLTIMO**: Fix #111 — Fase 5E DocumentStatusStore→Repository ✅ (REQ-021). Fase 5 COMPLETA.
 
-**Última actualización**: 2026-03-28  
-**Versión**: 3.0.14 (Pipeline KV persistente)
+**Última actualización**: 2026-04-01  
+**Versión**: 3.0.15 (Hexagonal Architecture - Fase 5 completa)
+
+---
+
+## 🎯 REQ-021: Backend Refactor - FASE 5 COMPLETA ✅
+
+### [x] Fase 5E: DocumentStatusStore → Repository ✅ (2026-04-01)
+**Estado**: ESTABLE
+**Fix**: #111
+
+**Migración completada**:
+- ✅ 9 endpoints/workers migrados a `DocumentRepository`
+- ✅ Eliminada referencia `generic_worker_pool`
+- ✅ Fixes SQL: `TRUE→1`, `created_at→ingested_at`
+- ✅ 5/5 tests E2E pasan
+- ✅ Backend healthy sin spam de errores
+
+**Archivos afectados**:
+- `app/backend/app.py` (L794, L2789, L2998, L3469, L3605, L3676, L3729, L3856, L3875, L5147-5230)
+- `app/backend/core/ports/repositories/document_repository.py`
+- `app/backend/adapters/driven/persistence/postgres/document_repository_impl.py`
+- `app/backend/Dockerfile.cpu`, `app/backend/Dockerfile`
+
+Ver: CONSOLIDATED_STATUS.md § Fix #111, SESSION_LOG.md § 2026-04-01
+
+### ✅ Fase 0-5: COMPLETADAS
+
+| Fase | Estado | Fecha | Descripción |
+|------|--------|-------|-------------|
+| **0** | ✅ | 2026-03-31 | Documentación arquitectura hexagonal |
+| **1** | ✅ | 2026-03-31 | Domain Model (Entities + Value Objects) |
+| **2** | ✅ | 2026-03-31 | Repositories (Ports + Adapters) |
+| **3** | ✅ | Previo | LLM Infrastructure (LangChain/Graph/Mem) |
+| **5A-5E** | ✅ | 2026-04-01 | Workers + Scheduler (repositories) |
+
+### 🚀 SIGUIENTE: Fase 6 - API Routers
+
+**Objetivo**: Extraer endpoints de `app.py` a routers modulares
+
+**Plan**:
+1. Documents Router (`/api/documents/*`)
+2. Workers Router (`/api/workers/*`)
+3. Dashboard Router (`/api/dashboard/*`)
+4. Auth Router (`/api/auth/*`)
+
+**Impacto**: Separación completa presentación ↔ dominio
 
 ---
 
