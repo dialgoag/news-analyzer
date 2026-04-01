@@ -3223,3 +3223,41 @@ Usuario solicita 4 mejoras de UX para el dashboard. Se documentan como REQ-014 p
 
 ---
 
+
+## 2026-03-31
+
+### Cambio: REQ-021 Fase 2 — Repositories (Hexagonal + DDD)
+
+**Decisión**: Implementar patrón Repository con interfaces (ports) + adaptadores PostgreSQL para desacoplar `database.py`
+
+**Alternativas consideradas**:
+1. **Migrar `database.py` directamente**: Descartado - muy riesgoso, rompe todo
+2. **Crear repositories que envuelvan database.py**: Descartado - no mejora arquitectura
+3. **✅ Coexistencia temporal**: Repositories nuevos + database.py legacy hasta migración completa
+
+**Razones de la decisión**:
+- Migración incremental sin romper código en producción
+- Testeable sin I/O (mock repositories en tests)
+- Base para Fase 5 (Workers) y Fase 6 (API Routers)
+- Respeta Hexagonal Architecture + DDD
+
+**Impacto en roadmap**:
+- Fase 2 (Repositories) ✅ COMPLETADA
+- Fase 3 (LLM adapters) ya completada en sesiones previas
+- Fase 5 (Workers) depende de Fase 2 - usará repositories en lugar de database.py
+- Fase 6 (API Routers) depende de Fase 2 - endpoints usarán repositories
+
+**Riesgo**: 
+- Coexistencia temporal de 2 capas de persistencia (database.py + repositories)
+- Mitigación: Migrar gradualmente en Fase 5, deprecar database.py solo cuando todo use repositories
+
+**Detalles técnicos**:
+- Mapeo status bidireccional: DB (string) ↔ Domain (PipelineStatus)
+- Connection pooling: 2-20 conexiones concurrentes
+- 96 tests unitarios (100% passing)
+
+**Archivos creados**:
+- `core/ports/repositories/*.py` (3 ports)
+- `adapters/driven/persistence/postgres/*.py` (4 archivos: base + 3 implementations)
+- `tests/unit/test_repositories.py` (11 tests nuevos)
+
