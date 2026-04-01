@@ -3878,3 +3878,43 @@ docker logs rag-ocr-service --tail 20 2>&1
 **⚠️ NO rompe**: Compose; respeta `COMPOSE_FILE` en `app/.env`
 **Verificación**:
 - [x] `make help` ejecuta
+
+### 111. REQ-021 Fase 2: Repositories (Hexagonal + DDD) ✅
+**Fecha**: 2026-03-31
+**Ubicación**: `core/ports/repositories/*.py`, `adapters/driven/persistence/postgres/*.py`, `tests/unit/test_repositories.py`
+**Problema**: Desacoplar `database.py` (1,495 líneas) para mejorar testabilidad y maintainability. Migración incremental sin romper código existente.
+**Solución**: Implementado patrón Repository con Hexagonal Architecture:
+1. **Ports (Interfaces)** en `core/ports/repositories/`:
+   - `DocumentRepository` - 12 métodos (get_by_id, save, list_by_status, update_status, count, exists, etc.)
+   - `NewsItemRepository` - 11 métodos (get_by_id, get_by_document_id, list_pending_insights, update_insights, etc.)
+   - `WorkerRepository` - 13 métodos (get_active_by_document, list_stuck, delete_old_completed, etc.)
+2. **Adapters (Implementaciones PostgreSQL)** en `adapters/driven/persistence/postgres/`:
+   - `BasePostgresRepository` - Connection pooling + mapeo status bidireccional
+   - `PostgresDocumentRepository` - Implementa DocumentRepository
+   - `PostgresNewsItemRepository` - Implementa NewsItemRepository
+   - `PostgresWorkerRepository` - Implementa WorkerRepository
+3. **Mapeo Status**: DB (str) ↔ Domain (PipelineStatus)
+   - `map_status_to_domain("ocr_processing")` → `PipelineStatus(stage=OCR, state=PROCESSING)`
+   - `map_status_from_domain(status)` → `"ocr_processing"`
+   - Soporta composable, terminal, insight, y worker statuses
+4. **Tests Unitarios**: 11 nuevos tests en `test_repositories.py`
+   - Test mapeo bidireccional (8 tests)
+   - Test roundtrip consistency
+   - Test connection pooling
+**Impacto**: 
+- Base para desacoplar `database.py` gradualmente
+- Repositories usan PipelineStatus composable (Fase 1)
+- Connection pooling singleton (20 connections max)
+- **96 tests unitarios passing** (85 existentes + 11 nuevos)
+**⚠️ NO rompe**: 
+- `database.py` sigue funcionando (coexiste con repositories)
+- Nada usa repositories todavía (migración incremental en Fase 5)
+- Dashboard ✅, Pipeline OCR/Insights ✅, Workers ✅
+**Verificación**:
+- [x] 3 repository ports creados
+- [x] 3 repository adapters implementados
+- [x] Mapeo status bidireccional funciona correctamente
+- [x] 96 tests unitarios passing (100%)
+- [x] Connection pooling implementado
+
+
