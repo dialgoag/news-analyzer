@@ -326,3 +326,114 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             created_at=row_dict.get("created_at") or row_dict["ingested_at"],
             updated_at=row_dict.get("updated_at") or row_dict["ingested_at"]
         )
+    
+    async def list_pending_reprocess(self) -> List[Document]:
+        """List documents marked for reprocessing."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM document_status
+                WHERE reprocess_requested = TRUE
+                ORDER BY created_at ASC
+            """)
+            rows = cursor.fetchall()
+            return [self._map_row_to_entity(cursor, row) for row in rows]
+        finally:
+            self.release_connection(conn)
+    
+    async def mark_for_reprocessing(
+        self,
+        document_id: DocumentId,
+        requested: bool = True
+    ) -> None:
+        """Mark document for reprocessing."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE document_status
+                SET reprocess_requested = %s,
+                    updated_at = %s
+                WHERE document_id = %s
+            """, (requested, datetime.utcnow().isoformat(), str(document_id)))
+            conn.commit()
+        finally:
+            self.release_connection(conn)
+    
+    async def store_ocr_text(
+        self,
+        document_id: DocumentId,
+        ocr_text: Optional[str]
+    ) -> None:
+        """Store OCR text for document."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE document_status
+                SET ocr_text = %s,
+                    updated_at = %s
+                WHERE document_id = %s
+            """, (ocr_text, datetime.utcnow().isoformat(), str(document_id)))
+            conn.commit()
+        finally:
+            self.release_connection(conn)
+    
+    # ========================================
+    # SYNC methods for legacy scheduler compatibility
+    # TODO: Remove when master_pipeline_scheduler becomes async
+    # ========================================
+    
+    def list_pending_reprocess_sync(self) -> List[dict]:
+        """SYNC version - List documents pending reprocessing."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM document_status
+                WHERE reprocess_requested = TRUE
+                ORDER BY created_at ASC
+            """)
+            rows = cursor.fetchall()
+            return [self.map_row_to_dict(cursor, row) for row in rows]
+        finally:
+            self.get_connection_pool().putconn(conn)
+    
+    def mark_for_reprocessing_sync(
+        self,
+        document_id: str,
+        requested: bool = True
+    ) -> None:
+        """SYNC version - Mark document for reprocessing."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE document_status
+                SET reprocess_requested = %s,
+                    updated_at = %s
+                WHERE document_id = %s
+            """, (requested, datetime.utcnow().isoformat(), document_id))
+            conn.commit()
+        finally:
+            self.get_connection_pool().putconn(conn)
+    
+    def store_ocr_text_sync(
+        self,
+        document_id: str,
+        ocr_text: Optional[str]
+    ) -> None:
+        """SYNC version - Store OCR text."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE document_status
+                SET ocr_text = %s,
+                    updated_at = %s
+                WHERE document_id = %s
+            """, (ocr_text, datetime.utcnow().isoformat(), document_id))
+            conn.commit()
+        finally:
+            self.get_connection_pool().putconn(conn)

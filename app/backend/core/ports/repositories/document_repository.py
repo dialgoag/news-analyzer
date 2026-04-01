@@ -155,3 +155,68 @@ class DocumentRepository(ABC):
             True if document exists, False otherwise
         """
         pass
+    
+    @abstractmethod
+    async def list_pending_reprocess(self) -> List[Document]:
+        """
+        List documents marked for reprocessing.
+        
+        Returns:
+            List of documents pending reprocessing
+        """
+        pass
+    
+    @abstractmethod
+    async def mark_for_reprocessing(
+        self,
+        document_id: DocumentId,
+        requested: bool = True
+    ) -> None:
+        """
+        Mark document for reprocessing.
+        
+        Args:
+            document_id: Document identifier
+            requested: Whether reprocessing was manually requested
+        """
+        pass
+    
+    @abstractmethod
+    async def store_ocr_text(
+        self,
+        document_id: DocumentId,
+        ocr_text: Optional[str]
+    ) -> None:
+        """
+        Store OCR text for document.
+        
+        Args:
+            document_id: Document identifier
+            ocr_text: OCR extracted text (None to clear)
+        """
+        pass
+    
+    # ========================================
+    # SYNC methods for legacy scheduler compatibility
+    # TODO: Remove when master_pipeline_scheduler is async
+    # ========================================
+    
+    def list_pending_reprocess_sync(self) -> List[dict]:
+        """SYNC version - List documents pending reprocessing (returns dicts)."""
+        pass
+    
+    def mark_for_reprocessing_sync(
+        self,
+        document_id: str,
+        requested: bool = True
+    ) -> None:
+        """SYNC version - Mark document for reprocessing."""
+        pass
+    
+    def store_ocr_text_sync(
+        self,
+        document_id: str,
+        ocr_text: Optional[str]
+    ) -> None:
+        """SYNC version - Store OCR text."""
+        pass

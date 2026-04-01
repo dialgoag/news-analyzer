@@ -791,7 +791,7 @@ def master_pipeline_scheduler():
         
         # PASO 1: Documentos marcados para reprocesamiento
         try:
-            docs_to_reprocess = document_status_store.get_documents_pending_reprocess()
+            docs_to_reprocess = document_repository.list_pending_reprocess_sync()
             if docs_to_reprocess:
                 logger.info(f"🔄 Found {len(docs_to_reprocess)} documents marked for reprocessing")
                 for doc in docs_to_reprocess:
@@ -2786,7 +2786,7 @@ async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
             text, doc_type, content_hash = await asyncio.to_thread(_extract_ocr_only, file_path, document_id, filename)
             
             # Store OCR text in database (CRITICAL: chunking worker needs this)
-            document_status_store.store_ocr_text(document_id, text)
+            await document_repository.store_ocr_text(doc_id, text)
             
             # Update document status to OCR done using repository
             ocr_done_status = PipelineStatus.create(StageEnum.OCR, StateEnum.DONE)
@@ -2995,7 +2995,7 @@ async def _indexing_worker_task(document_id: str, filename: str, worker_id: str)
         conn.commit()
         conn.close()
         
-        document_status_store.mark_for_reprocessing(document_id, requested=False)
+        await document_repository.mark_for_reprocessing(doc_id, requested=False)
         
         if INSIGHTS_QUEUE_ENABLED and rag_pipeline:
             try:
@@ -3726,8 +3726,8 @@ async def requeue_document(
                 clear_indexed_at=True,
                 clear_error_message=True,
             )
-            document_status_store.store_ocr_text(document_id, None)
-            document_status_store.mark_for_reprocessing(document_id, requested=True)
+            await document_repository.store_ocr_text(DocumentId(document_id), None)
+            await document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
             processing_queue_store.enqueue_task(document_id, filename, TaskType.OCR, priority=10)
             logger.info(f"   ✓ Reset to OCR and marked for reprocessing")
         logger.info(f"   ✓ Added to processing queue")
@@ -3872,8 +3872,8 @@ async def retry_error_workers(
                         clear_indexed_at=True,
                         clear_error_message=True,
                     )
-                    document_status_store.store_ocr_text(document_id, None)
-                    document_status_store.mark_for_reprocessing(document_id, requested=True)
+                    await document_repository.store_ocr_text(DocumentId(document_id), None)
+                    await document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
                     processing_queue_store.enqueue_task(document_id, filename, TaskType.OCR, priority=10)
                     logger.info(f"   → Retry OCR (no ocr_text or stage={stage})")
                 elif stage == 'chunking':
