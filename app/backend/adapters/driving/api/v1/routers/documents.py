@@ -1,19 +1,23 @@
 """
-Documents router — list, status, insights, diagnostics, news items, download.
+Documents router — list, status, insights, diagnostics, news items, download, upload, requeue, delete.
 
 Legacy helpers (_cache_*, segment_news_items_from_text, document_repository) are
 accessed via lazy `import app` inside handlers to avoid circular imports during
 app module load.
+
+Complex endpoints (upload, requeue, delete) migrated from app.py for completeness.
 """
 from datetime import datetime
+import hashlib
 import logging
 import os
 import re
 import traceback
+from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi.responses import FileResponse, JSONResponse
 
 from database import (
     document_insights_store,
@@ -21,8 +25,8 @@ from database import (
     news_item_insights_store,
     news_item_store,
 )
-from file_ingestion_service import resolve_file_path
-from middleware import CurrentUser, get_current_user
+from file_ingestion_service import resolve_file_path, check_duplicate, compute_sha256, ingest_from_upload
+from middleware import CurrentUser, get_current_user, require_admin, require_upload_permission, require_delete_permission
 from pipeline_states import DocStatus
 
 from adapters.driving.api.v1.schemas.document_schemas import (
@@ -31,8 +35,24 @@ from adapters.driving.api.v1.schemas.document_schemas import (
     DocumentStatusItem,
 )
 
+# Domain
+from core.domain.value_objects import DocumentId, TaskType
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# CONSTANTS FOR UPLOAD
+# ============================================================================
+ALLOWED_EXTENSIONS = {
+    ".pdf", ".docx", ".pptx", ".xlsx", ".odt", ".rtf",
+    ".html", ".xml", ".json", ".csv",
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff"
+}
+MAX_UPLOAD_SIZE_MB = 50
+CHUNK_SIZE = 2000
+CHUNK_OVERLAP = 300
 
 
 def _upload_dir() -> str:
@@ -372,3 +392,239 @@ async def download_document(document_id: str):
         logger.error(f"❌ Download error: {str(e)}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# COMPLEX ENDPOINTS: UPLOAD, REQUEUE, DELETE
+# ============================================================================
+
+@router.post("/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None,
+    current_user: CurrentUser = Depends(require_upload_permission)
+):
+    """
+    Upload a document (any format) and process it in the background
+    Supported formats: PDF, DOCX, PPTX, XLSX, ODT, RTF, HTML, XML, JSON, CSV, Images
+
+    Requires: SUPER_USER or ADMIN role
+    """
+    import app as app_module
+
+    if not app_module.ocr_service or not app_module.embeddings_service or not app_module.rag_pipeline:
+        raise HTTPException(
+            status_code=503,
+            detail="Services not initialized. Check /health"
+        )
+
+    # Check file extension
+    file_ext = Path(file.filename).suffix.lower()
+
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Format '{file_ext}' not supported. Supported: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+        )
+
+    # Check file size before reading entire content
+    content = await file.read()
+    file_size_mb = len(content) / (1024 * 1024)
+
+    if file_size_mb > MAX_UPLOAD_SIZE_MB:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large: {file_size_mb:.1f}MB. Maximum allowed: {MAX_UPLOAD_SIZE_MB}MB"
+        )
+
+    try:
+        file_hash = compute_sha256(data=content)
+        existing = check_duplicate(file_hash)
+        if existing:
+            logger.info(f"📋 Duplicate detected: '{file.filename}' already exists as '{existing['filename']}'")
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "message": "Duplicate file detected, not reprocessed",
+                    "status": "duplicate",
+                    "existing_document_id": existing['document_id'],
+                    "existing_filename": existing['filename'],
+                    "file_hash": file_hash
+                }
+            )
+
+        upload_dir = _upload_dir()
+        document_id, file_hash = ingest_from_upload(content, file.filename, upload_dir)
+        
+        # Resolve actual file path (handles .pdf extension, Fix #95)
+        file_path = resolve_file_path(document_id, upload_dir)
+
+        logger.info(f"📄 File received: '{file.filename}' ({len(content)} bytes)")
+        logger.info(f"   Document ID: {document_id}")
+        logger.info(f"   File path: {file_path}")
+        logger.info(f"   File hash: {file_hash[:16]}...")
+
+        background_tasks.add_task(
+            app_module._process_document_sync,
+            file_path,
+            document_id,
+            file.filename
+        )
+
+        return JSONResponse(
+            status_code=202,
+            content={
+                "message": "Document received, processing in progress",
+                "document_id": document_id,
+                "filename": file.filename,
+                "size_bytes": len(content),
+                "file_hash": file_hash
+            }
+        )
+
+    except ValueError as ve:
+        return JSONResponse(status_code=200, content={"message": str(ve), "status": "duplicate"})
+    except Exception as e:
+        logger.error(f"❌ Upload error: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{document_id}/requeue")
+async def requeue_document(
+    document_id: str,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Requeue a document for reprocessing (OCR + Chunking + Indexing).
+    
+    IMPORTANT: This will NOT delete news_items or insights. Instead:
+    - Existing news items are preserved (matched by text_hash)
+    - New news items detected will be added
+    - Insights are only generated for new items that don't have insights yet
+    
+    This will:
+    1. Delete chunks from Qdrant (will be re-indexed)
+    2. Keep news_items and news_item_insights (preserve historical data)
+    3. Mark document status as 'processing' with stage 'ocr'
+    4. Add document to processing queue
+    5. During reprocessing:
+       - OCR text is extracted again
+       - News segmentation detects items
+       - For each detected item:
+         * Check if text_hash matches existing item → skip if exists
+         * Add new items that don't exist yet
+       - Insights are generated only for new items without insights
+    
+    Requires: Authentication
+    """
+    import app as app_module
+
+    try:
+        # Get document info
+        doc = app_module.document_repository.get_by_id_sync(document_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        filename = doc['filename']
+        
+        logger.info(f"🔄 Requeuing document for reprocessing: {filename} ({document_id})")
+        logger.info(f"   ⚠️  Preserving existing news_items and insights (will match by text_hash)")
+        
+        # Get existing news items for logging
+        existing_items = news_item_store.list_by_document_id(document_id)
+        logger.info(f"   📰 Existing news items: {len(existing_items)} (will be preserved)")
+        
+        # Get existing insights for logging
+        existing_insights = news_item_insights_store.get_progress_by_document_ids([document_id])
+        insight_stats = existing_insights.get(document_id, {})
+        logger.info(f"   💡 Existing insights: {insight_stats.get('done', 0)} done, {insight_stats.get('pending', 0)} pending")
+        
+        # 1. Delete ONLY chunks from Qdrant (vectors will be re-indexed)
+        if app_module.qdrant_connector:
+            try:
+                app_module.qdrant_connector.delete_document(document_id)
+                logger.info(f"   ✓ Deleted chunks from Qdrant (will re-index)")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Could not delete from Qdrant: {e}")
+        
+        # 2. DO NOT delete news_items or insights - they will be preserved!
+        logger.info(f"   ✓ Preserving news_items and insights (no deletion)")
+        
+        # 3. If ocr_text exists and doc failed at indexing → retry indexing only
+        has_ocr = doc.get('ocr_text') and len(str(doc.get('ocr_text') or '').strip()) > 0
+        if has_ocr:
+            document_status_store.update_status(
+                document_id,
+                DocStatus.CHUNKING_DONE,
+                processing_stage="chunking",
+                clear_indexed_at=True,
+                clear_error_message=True,
+            )
+            await app_module.worker_repository.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
+            logger.info(f"   ✓ Retry indexing only (ocr_text exists)")
+        else:
+            document_status_store.update_status(
+                document_id,
+                DocStatus.OCR_PROCESSING,
+                processing_stage="ocr",
+                num_chunks=0,
+                clear_indexed_at=True,
+                clear_error_message=True,
+            )
+            await app_module.document_repository.store_ocr_text(DocumentId(document_id), None)
+            await app_module.document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
+            await app_module.worker_repository.enqueue_task(document_id, filename, TaskType.OCR, priority=10)
+            logger.info(f"   ✓ Reset to OCR and marked for reprocessing")
+        logger.info(f"   ✓ Added to processing queue")
+        
+        logger.info(f"✅ Document requeued successfully: {filename}")
+        if has_ocr:
+            logger.info(f"   Retry indexing only (OCR+chunking already done)")
+        else:
+            logger.info(f"   Full reprocessing: OCR → chunking → indexing")
+        
+        return {
+            "message": f"Document {filename} requeued" + (" (indexing only)" if has_ocr else " for full reprocessing") + f" (preserving {len(existing_items)} news items)",
+            "document_id": document_id,
+            "status": DocStatus.CHUNKING_DONE if has_ocr else DocStatus.OCR_PROCESSING,
+            "stage": "indexing" if has_ocr else "ocr",
+            "preserved_items": len(existing_items),
+            "preserved_insights": insight_stats.get('done', 0)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Requeue error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{document_id}")
+async def delete_document(
+    document_id: str,
+    current_user: CurrentUser = Depends(require_delete_permission)
+):
+    """
+    Delete document from index
+
+    Requires: SUPER_USER or ADMIN role
+    """
+    import app as app_module
+
+    if not app_module.qdrant_connector:
+        raise HTTPException(status_code=503, detail="Qdrant not connected")
+
+    try:
+        logger.info(f"🗑️  Deleting document: {document_id}")
+        app_module.qdrant_connector.delete_document(document_id)
+        document_status_store.delete(document_id)
+        document_insights_store.delete(document_id)
+        news_item_insights_store.delete_by_document_id(document_id)
+        news_item_store.delete_by_document_id(document_id)
+        logger.info(f"✅ Document deleted: {document_id}")
+        return {"message": f"Document {document_id} deleted"}
+    except Exception as e:
+        logger.error(f"Deletion error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
