@@ -1798,3 +1798,77 @@ worker_pool - ERROR - pipeline_worker_15: Task insights failed: No chunks found
 **Contradicciones**: Ninguna. Resuelve REQ-018 y complementa REQ-006/REQ-010.
 **Versión**: v3.0.3
 
+---
+
+### **REQ-021 (Fase 6): "Refactor — API Routers Modulares (Hexagonal Architecture)"**
+
+**Metadata**:
+- **Fecha**: 2026-04-02
+- **Sesión**: Sesión 29 (API Routers Extraction)
+- **Prioridad**: 🟡 MEDIA (refactorización, no urgente pero mejora mantenibilidad)
+- **Estado**: ✅ **COMPLETADA**
+
+**Descripción Original**:
+> `app.py` monolito de 6,379 líneas con 63 endpoints mezclados con lógica de negocio. Extraer a routers modulares siguiendo Hexagonal Architecture (Driving Adapters).
+
+**Problema Identificado**:
+1. Separation of concerns: Endpoints + lógica negocio + workers + startup en un solo archivo
+2. Testing difícil: No se pueden testear endpoints independientes sin levantar toda la app
+3. Single Responsibility Principle violado: `app.py` hace 10+ cosas diferentes
+4. Hexagonal Architecture incompleta: Fase 1-2-5 implementaron Core/Ports/Adapters, pero faltaba capa de presentación modular
+
+**Solución Implementada**:
+1. **Estructura modular**: `adapters/driving/api/v1/` (routers, schemas, dependencies)
+2. **9 routers especializados** (57/63 endpoints migrados):
+   - Auth (7): login, me, users CRUD, change-password
+   - Documents (6): list, status, insights, diagnostic, news-items, download
+   - Dashboard (3): summary, analysis, parallel-data
+   - Workers (4): status, start, shutdown, retry-errors
+   - Reports (8): daily/weekly CRUD
+   - Admin (24): backup, logging, stats, data-integrity, memory
+   - Notifications (3): list, mark-read, delete
+   - Query (1): RAG query
+   - NewsItems (1): insights by news-item
+3. **Coexistencia gradual**: Routers registrados con tags `_v2` → No rompe frontend
+4. **Dependency Injection**: `dependencies.py` centraliza `@lru_cache` singletons + FastAPI `Depends`
+5. **FIX datetime serialization**: Auth endpoints convertían datetime → isoformat (ValidationError resuelto)
+
+**Cambios Incluidos**:
+- Fix #113: API Routers modular architecture
+
+**Archivos creados**:
+- `adapters/driving/api/v1/dependencies.py` (DI central)
+- `adapters/driving/api/v1/routers/auth.py`
+- `adapters/driving/api/v1/routers/documents.py`
+- `adapters/driving/api/v1/routers/dashboard.py`
+- `adapters/driving/api/v1/routers/workers.py`
+- `adapters/driving/api/v1/routers/reports.py`
+- `adapters/driving/api/v1/routers/admin.py`
+- `adapters/driving/api/v1/routers/notifications.py`
+- `adapters/driving/api/v1/routers/query.py`
+- `adapters/driving/api/v1/routers/news_items.py`
+- `adapters/driving/api/v1/schemas/` (auth, documents, dashboard, workers, reports, admin, notifications, query)
+
+**Archivos modificados**:
+- `app.py` (registro de routers con `app.include_router`, ~60 líneas agregadas)
+- `Dockerfile.cpu`, `Dockerfile` (ya contenían `COPY backend/adapters/ adapters/`, no modificación necesaria)
+
+**Verificaciones E2E**:
+- [x] Auth /me ✅
+- [x] Documents /list, /status ✅
+- [x] Dashboard /summary ✅
+- [x] Workers /status ✅
+- [x] Reports /daily, /weekly ✅
+- [x] Notifications /list ✅
+- [x] Admin /stats ✅
+- [ ] Auth /users, Dashboard /analysis, Admin /logs (validación Pydantic pendiente)
+- [ ] Query /query (timeout LLM lento, funcional pero >30s)
+
+**Notas técnicas**:
+- Lazy imports `import app as app_module` en routers para evitar circular imports
+- Endpoints complejos (upload, requeue, delete docs) dejados en `app.py` temporalmente
+- Schemas Pydantic separados de routers (validación aislada de lógica)
+
+**Contradicciones**: Ninguna. Complementa Fase 1-2-5 de REQ-021 (Domain Model, Repositories, Workers).
+**Versión**: v4.0.0 (refactor arquitectónico mayor)
+

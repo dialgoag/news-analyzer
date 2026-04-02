@@ -503,6 +503,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ============================================================================
+# HEXAGONAL ARCHITECTURE - API ROUTERS (REQ-021 Fase 6)
+# ============================================================================
+# Register modular routers from adapters/driving/api/v1/routers/
+# These routers coexist with legacy endpoints in app.py during transition
+try:
+    from adapters.driving.api.v1.routers import auth as auth_router
+    from adapters.driving.api.v1.routers import documents as documents_router
+    from adapters.driving.api.v1.routers import dashboard as dashboard_router
+    from adapters.driving.api.v1.routers import workers as workers_router
+    from adapters.driving.api.v1.routers import reports as reports_router
+    from adapters.driving.api.v1.routers import notifications as notifications_router
+    from adapters.driving.api.v1.routers import query as query_router
+    from adapters.driving.api.v1.routers import admin as admin_router
+    from adapters.driving.api.v1.routers import news_items as news_items_router
+    
+    # Register all routers
+    app.include_router(auth_router.router, prefix="/api/auth", tags=["auth_v2"])
+    app.include_router(documents_router.router, prefix="/api/documents", tags=["documents_v2"])
+    app.include_router(dashboard_router.router, prefix="/api/dashboard", tags=["dashboard_v2"])
+    app.include_router(workers_router.router, prefix="/api/workers", tags=["workers_v2"])
+    app.include_router(reports_router.router, prefix="/api/reports", tags=["reports_v2"])
+    app.include_router(notifications_router.router, prefix="/api/notifications", tags=["notifications_v2"])
+    app.include_router(query_router.router, prefix="/api", tags=["query_v2"])
+    app.include_router(admin_router.router, prefix="/api/admin", tags=["admin_v2"])
+    app.include_router(news_items_router.router, prefix="/api/news-items", tags=["news-items_v2"])
+    
+    logger.info("✅ Registered 9 modular routers (v2 - Hexagonal Architecture)")
+    logger.info("   Auth (7), Documents (6), Dashboard (3), Workers (4), Reports (8),")
+    logger.info("   Notifications (3), Query (1), Admin (24), NewsItems (1)")
+    logger.info("   Total: 57 endpoints in modular routers")
+except ImportError as e:
+    logger.warning(f"⚠️ Could not load modular routers: {e}")
+    logger.warning("   Legacy endpoints in app.py will continue to work")
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
@@ -3412,298 +3447,7 @@ def run_inbox_scan():
         logger.info(f"Inbox: queued {queued}/{len(files_to_queue)} files, {duplicates} duplicates skipped")
 
 
-@app.get("/api/documents", response_model=DocumentsListResponse)
-async def list_documents(
-    status: Optional[str] = None,
-    source: Optional[str] = None,
-):
-    """List all documents with status. DB is source of truth (no Qdrant scroll)."""
-    cache_key = f"documents_list:{status or ''}:{source or ''}"
-    cached = _cache_get(cache_key) if not status and not source else None
-    if cached is not None:
-        return cached
-    try:
-        rows = document_status_store.get_all(status_filter=status, source_filter=source)
-        by_id = {}
-        for r in rows:
-            # Convert datetime objects to strings for PostgreSQL compatibility
-            ingested_at = r["ingested_at"]
-            if isinstance(ingested_at, datetime):
-                ingested_at = ingested_at.isoformat()
-            
-            indexed_at = r.get("indexed_at")
-            if isinstance(indexed_at, datetime):
-                indexed_at = indexed_at.isoformat()
-            
-            news_date = r.get("news_date")
-            if isinstance(news_date, datetime):
-                news_date = news_date.isoformat()
-            
-            by_id[r["document_id"]] = DocumentMetadata(
-                filename=r["filename"],
-                upload_date=ingested_at or "",
-                document_id=r["document_id"],
-                num_chunks=r["num_chunks"] or 0,
-                status=r["status"],
-                source=r.get("source"),
-                indexed_at=indexed_at,
-                error_message=r.get("error_message"),
-                news_date=news_date,
-                processing_stage=r.get("processing_stage"),
-                insights_status=None,
-                insights_progress=None,
-            )
-        doc_ids = list(by_id.keys())
-        # Preferir insights por noticia (news_item_insights) cuando existan items para el documento.
-        item_counts = news_item_store.get_counts_by_document_ids(doc_ids) if doc_ids else {}
-        item_progress = news_item_insights_store.get_progress_by_document_ids(doc_ids) if doc_ids else {}
-        legacy_map = document_insights_store.get_status_by_document_ids(doc_ids) if doc_ids else {}
-
-        total_units = 0
-        done_units = 0
-
-        for doc_id, meta in by_id.items():
-            total_items = int(item_counts.get(doc_id, 0) or 0)
-            prog = item_progress.get(doc_id) or {}
-            done = int(prog.get("done", 0) or 0)
-            generating = int(prog.get("generating", 0) or 0)
-            queued = int(prog.get("queued", 0) or 0)
-            pending = int(prog.get("pending", 0) or 0)
-            error = int(prog.get("error", 0) or 0)
-
-            if total_items > 0:
-                meta.insights_progress = f"{done}/{total_items}"
-                if done >= total_items:
-                    meta.insights_status = "done"
-                elif generating > 0:
-                    meta.insights_status = "generating"
-                elif queued > 0:
-                    meta.insights_status = "queued"
-                elif pending > 0:
-                    meta.insights_status = "pending"
-                elif error > 0:
-                    meta.insights_status = "error"
-                else:
-                    meta.insights_status = "pending"
-
-                if meta.status == DocStatus.INDEXING_DONE:
-                    total_units += total_items
-                    done_units += min(done, total_items)
-            else:
-                # Legacy: 1 doc = 1 insights
-                info = legacy_map.get(doc_id, {})
-                meta.insights_status = info.get("status")
-                meta.insights_progress = info.get("progress", "0/1")
-                if meta.status == DocStatus.INDEXING_DONE:
-                    total_units += 1
-                    done_units += 1 if meta.insights_status == document_insights_store.STATUS_DONE else 0
-        docs = list(by_id.values())
-        docs.sort(key=lambda x: x.upload_date or "", reverse=True)
-        total_indexed = total_units
-        with_insights_done = done_units
-        resp = DocumentsListResponse(
-            documents=docs,
-            total=len(docs),
-            insights_summary={"total_indexed": total_indexed, "with_insights_done": with_insights_done},
-        )
-        if not status and not source:
-            _cache_set("documents_list::", resp)
-        return resp
-    except Exception as e:
-        logger.error(f"Error listing documents: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/documents/status", response_model=List[DocumentStatusItem])
-async def get_documents_status():
-    """
-    Endpoint específico para DocumentsTable.jsx del frontend.
-    Retorna status de documentos con campos esperados por el dashboard.
-    """
-    cached = _cache_get("documents_status")
-    if cached is not None:
-        return cached
-    try:
-        rows = document_status_store.get_all(status_filter=None, source_filter=None)
-        
-        # Obtener IDs de documentos
-        doc_ids = [r["document_id"] for r in rows]
-        
-        # Obtener counts de news_items por documento
-        item_counts = news_item_store.get_counts_by_document_ids(doc_ids) if doc_ids else {}
-        
-        # Obtener progreso de insights por documento
-        item_progress = news_item_insights_store.get_progress_by_document_ids(doc_ids) if doc_ids else {}
-        
-        # Construir respuesta
-        result = []
-        for r in rows:
-            doc_id = r["document_id"]
-            
-            # Convertir uploaded_at a ISO string
-            uploaded_at = r.get("ingested_at")
-            if isinstance(uploaded_at, datetime):
-                uploaded_at = uploaded_at.isoformat()
-            
-            # Obtener news_items_count
-            news_items_count = int(item_counts.get(doc_id, 0) or 0)
-            
-            # Obtener insights progress
-            prog = item_progress.get(doc_id) or {}
-            insights_done = int(prog.get("done", 0) or 0)
-            insights_total = news_items_count if news_items_count > 0 else 0
-            
-            result.append(DocumentStatusItem(
-                document_id=doc_id,
-                filename=r["filename"],
-                status=r["status"],
-                uploaded_at=uploaded_at or "",
-                news_items_count=news_items_count,
-                insights_done=insights_done,
-                insights_total=insights_total
-            ))
-        
-        result.sort(key=lambda x: x.uploaded_at or "", reverse=True)
-        
-        _cache_set("documents_status", result)
-        return result
-    except Exception as e:
-        logger.error(f"Error getting documents status: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/documents/{document_id}/insights")
-async def get_document_insights(
-    document_id: str,
-    current_user: CurrentUser = Depends(get_current_user)
-):
-    """Legacy: insights por documento (reporte por archivo). Para PDFs multi-noticia usar /news-items."""
-    row = document_insights_store.get_by_document_id(document_id)
-    if not row or row.get("status") != document_insights_store.STATUS_DONE:
-        raise HTTPException(status_code=404, detail="Insights not available for this document")
-    return {"document_id": document_id, "filename": row.get("filename", ""), "content": row.get("content") or ""}
-
-
-@app.get("/api/documents/{document_id}/segmentation-diagnostic")
-async def get_segmentation_diagnostic(
-    document_id: str,
-    current_user: CurrentUser = Depends(get_current_user)
-):
-    """
-    Diagnostic endpoint: Shows how the document was segmented into news items.
-    Returns raw OCR text excerpt, detected titles, and segmentation statistics.
-    """
-    try:
-        # Get document info
-        doc = document_repository.get_by_id_sync(document_id)
-        if not doc:
-            raise HTTPException(status_code=404, detail="Document not found")
-        
-        # Get OCR text
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT ocr_text FROM document_status WHERE document_id = %s", (document_id,))
-        result = cursor.fetchone()
-        conn.close()
-        
-        if not result or not result['ocr_text']:
-            raise HTTPException(status_code=404, detail="OCR text not available")
-        
-        ocr_text = result['ocr_text']
-        
-        # Re-run segmentation to see what it detects
-        items = segment_news_items_from_text(ocr_text)
-        
-        # Get actual stored news items
-        stored_items = news_item_store.list_by_document_id(document_id)
-        
-        # Analyze text characteristics
-        lines = ocr_text.split("\n")
-        total_lines = len(lines)
-        non_empty_lines = len([l for l in lines if l.strip()])
-        avg_line_length = sum(len(l) for l in lines) / max(1, len(lines))
-        
-        # Find potential title candidates
-        title_candidates = []
-        for i, line in enumerate(lines[:100]):  # First 100 lines
-            stripped = line.strip()
-            if len(stripped) >= 12 and len(stripped) <= 140:
-                letters = re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", stripped)
-                if letters:
-                    upper = sum(1 for ch in letters if ch.isupper())
-                    upper_ratio = upper / len(letters)
-                    if upper_ratio >= 0.5:  # Mostly uppercase
-                        title_candidates.append({
-                            "line_number": i + 1,
-                            "text": stripped,
-                            "upper_ratio": round(upper_ratio, 2)
-                        })
-        
-        return {
-            "document_id": document_id,
-            "filename": doc.get("filename"),
-            "ocr_stats": {
-                "total_chars": len(ocr_text),
-                "total_lines": total_lines,
-                "non_empty_lines": non_empty_lines,
-                "avg_line_length": round(avg_line_length, 2)
-            },
-            "ocr_excerpt": ocr_text[:2000] + ("..." if len(ocr_text) > 2000 else ""),
-            "segmentation_result": {
-                "detected_items": len(items),
-                "items_preview": [
-                    {
-                        "title": item.get("title"),
-                        "body_length": len(item.get("text", "")),
-                        "body_excerpt": item.get("text", "")[:200] + "..."
-                    }
-                    for item in items[:5]
-                ]
-            },
-            "stored_items": {
-                "count": len(stored_items),
-                "items": [
-                    {
-                        "news_item_id": item.get("news_item_id"),
-                        "item_index": item.get("item_index"),
-                        "title": item.get("title"),
-                        "status": item.get("status")
-                    }
-                    for item in stored_items
-                ]
-            },
-            "title_candidates": title_candidates[:20]
-        }
-        
-    except Exception as e:
-        logger.error(f"Segmentation diagnostic error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/documents/{document_id}/news-items")
-async def list_news_items_for_document(
-    document_id: str,
-    current_user: CurrentUser = Depends(get_current_user)
-):
-    """List news items detected for a document, with insights status per item."""
-    items = news_item_store.list_by_document_id(document_id)
-    insights = news_item_insights_store.list_by_document_id(document_id)
-    insights_by_id = {r["news_item_id"]: r for r in insights}
-    out = []
-    for it in items:
-        nid = it["news_item_id"]
-        ins = insights_by_id.get(nid, {})
-        out.append(
-            {
-                "news_item_id": nid,
-                "document_id": document_id,
-                "item_index": it.get("item_index"),
-                "title": it.get("title"),
-                "insights_status": ins.get("status"),
-                "error_message": ins.get("error_message"),
-            }
-        )
-    return {"document_id": document_id, "items": out, "total": len(out)}
+# Document list/status/insights/segmentation/news-items/download → adapters.driving.api.v1.routers.documents
 
 
 @app.get("/api/news-items/{news_item_id}/insights")
@@ -3721,55 +3465,6 @@ async def get_news_item_insights(
         "title": row.get("title") or "",
         "content": row.get("content") or "",
     }
-
-
-@app.get("/api/documents/{document_id}/download")
-async def download_document(document_id: str):
-    """Download the original uploaded document"""
-    from fastapi.responses import FileResponse
-    import glob
-
-    try:
-        # Get the document info from database to find the actual filename
-        doc = document_repository.get_by_id_sync(document_id)
-        if not doc:
-            raise HTTPException(status_code=404, detail=f"Document not found in database: {document_id}")
-        
-        # Get the filename from the database
-        filename = doc.get('filename')
-        if not filename:
-            raise HTTPException(status_code=404, detail=f"Filename not found for document: {document_id}")
-        
-        # Resolve file path using standard resolution (handles .pdf extension, Fix #95)
-        try:
-            file_path = resolve_file_path(document_id, UPLOAD_DIR)
-        except FileNotFoundError:
-            logger.error(f"❌ File not found for document {document_id}")
-            logger.error(f"   Filename from DB: {filename}")
-            raise HTTPException(status_code=404, detail=f"File not found: {filename}")
-
-        logger.info(f"📥 Download document: {document_id}")
-        logger.info(f"   Filename: {filename}")
-        logger.info(f"   Path: {file_path}")
-
-        # Use the original filename from DB for download
-        original_filename = filename
-
-        return FileResponse(
-            path=file_path,
-            media_type='application/pdf',  # Changed to PDF for browser preview
-            filename=original_filename,
-            headers={
-                'Content-Disposition': f'inline; filename="{original_filename}"'  # 'inline' for preview, 'attachment' for download
-            }
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Download error: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/documents/{document_id}/requeue")

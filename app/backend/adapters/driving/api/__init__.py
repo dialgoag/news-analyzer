@@ -1,0 +1,3 @@
+"""
+API adapters - REST endpoints
+"""
