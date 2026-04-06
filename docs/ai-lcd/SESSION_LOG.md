@@ -2,8 +2,77 @@
 
 > Decisiones, cambios importantes, y contexto entre sesiones
 
-**Última actualización**: 2026-04-01  
-**Sesión**: 50 (REQ-021 — Sistema Unificado de Timestamps)
+**Última actualización**: 2026-04-06  
+**Sesión**: 51 (documentación backlog memoria post-insights)
+
+---
+
+## 2026-04-06 — Backlog: memoria analítica tras insights y reportes
+
+### Decisión
+Documentar en `PLAN_AND_NEXT_STEP.md` la brecha entre (a) pipeline híbrido ya existente y (b) reportes diario/semanal que aún reconstruyen contexto desde chunks + LLM, sin usar datos estructurados post-insight como fuente principal para agregados.
+
+### Alternativas consideradas
+- Implementar ya mismo JSONB + refactor de reportes: aplazado; primero backlog explícito.
+- Un solo documento de diseño nuevo: se prefiere ampliar el plan existente para no dispersar el roadmap.
+
+### Impacto en roadmap
+Nuevo ítem **7** en backlog priorizado (`PLAN_AND_NEXT_STEP.md`): esquema para `extracted_data`/`analysis`, escritura desde worker, refactor de reportes, opcional `ReportService`, clarificación memoria conversacional vs analítica, verificación de coste.
+
+### Riesgo
+Bajo: solo documentación; no cambia runtime.
+
+---
+
+## 2026-04-06 — Hotfix runtime: pool + snapshot runtime KV
+
+### Cambio: Registro de incidentes en backlog (PEND-013/014/015)
+- **Decisión**: Formalizar errores observados en logs de producción local como tareas explícitas en `PENDING_BACKLOG.md` para no perder trazabilidad.
+- **Alternativas consideradas**: Resolver ad-hoc sin backlog (rechazada por riesgo de pérdida de contexto).
+- **Impacto en roadmap**: Prioridad inmediata para estabilidad backend antes de seguir con fases de refactor.
+- **Riesgo**: Bajo.
+
+### Cambio: `PoolError` en repositorios PostgreSQL (PEND-013)
+- **Decisión**: Endurecer `BasePostgresRepository` con pool compartido + lock de inicialización + fallback defensivo en `release_connection`.
+- **Alternativas consideradas**: Solo parchear `stage_timing_repository_impl.py` (rechazada por ser arreglo local y frágil).
+- **Impacto en roadmap**: Reduce caídas de workers OCR/Indexing bajo concurrencia.
+- **Riesgo**: Medio (manejo defensivo podría ocultar condiciones anómalas; se requiere monitoreo en carga).
+
+### Cambio: `pipeline_runtime_kv` tuple/dict mismatch (PEND-014)
+- **Decisión**: Hacer `pipeline_runtime_store` compatible con filas tuple y dict mediante helper interno `_row_get`.
+- **Alternativas consideradas**: Forzar `RealDictCursor` en todo el pool (rechazada por riesgo de romper mapeos tuple existentes).
+- **Impacto en roadmap**: Startup limpio de runtime controls (`refresh_from_db`) y menos ruido en logs.
+- **Riesgo**: Bajo.
+
+### Cambio: Incidente de trazabilidad en ingesta (`source='upload'`) + estandarización pendiente (PEND-016)
+- **Decisión**: Documentar explícitamente que el caso `test_upload.pdf` no es de hoy y entra por canal upload legacy (`ingested_at=2026-04-02`), pero se reactiva por flujos de retry/reprocess actuales.
+- **Alternativas consideradas**: Tratarlo como “ruido” aislado en logs (rechazada; afecta confianza operativa y puede repetir loops).
+- **Impacto en roadmap**: Añade tarea de estandarización del canal alterno (upload API) hacia el lifecycle operativo de inbox y política de cuarentena/retry para inválidos.
+- **Riesgo**: Medio (si no se corrige, reaparecen errores “fantasma” durante pruebas de producción local).
+
+### Cambio: Mitigación operativa PEND-016 (limpieza BD + cuarentena archivo)
+- **Decisión**: Ejecutar limpieza quirúrgica del caso `test_upload.pdf` para detener ruido inmediato mientras se implementa solución estructural.
+- **Alternativas consideradas**: Esperar al fix completo de retry/ingesta (rechazada por mantener el sistema con errores repetitivos en runtime).
+- **Impacto en roadmap**: Reduce ruido operativo hoy y habilita seguir con el siguiente error pendiente sin mezclar señales.
+- **Riesgo**: Bajo-Medio (es una mitigación manual; puede reaparecer con otros casos si no se estandariza upload/retry).
+
+### Cambio: Corrección puntual `File not found` por symlink desalineado (hash `91fafac5...`)
+- **Decisión**: Corregir symlink en `uploads` para que apunte al archivo real de `processed` y normalizar `filename` en BD para ese registro específico.
+- **Alternativas consideradas**: Borrar el registro completo (rechazada; el archivo existe y su hash coincide).
+- **Impacto en roadmap**: Mitiga error operativo inmediato y preserva trazabilidad del documento válido.
+- **Riesgo**: Bajo (ajuste quirúrgico sobre un único `document_id`).
+
+### Cambio: Script de sanity check symlink↔BD para ingesta
+- **Decisión**: Agregar `check_upload_symlink_db_consistency.py` en `app/backend/scripts/` para detectar desalineamientos entre symlink, `processed` y `filename` en BD.
+- **Alternativas consideradas**: Seguir con diagnóstico manual ad-hoc (rechazada por costo operativo y riesgo de repetición).
+- **Impacto en roadmap**: Reduce MTTR en incidentes de `File not found` y crea verificación reusable antes de reprocesos masivos.
+- **Riesgo**: Bajo (modo por defecto read-only; fixes solo con flags explícitos).
+
+### Cambio: Remediación automática ejecutada sobre dataset completo (symlinks=80)
+- **Decisión**: Ejecutar el script con flags de fix para cerrar hallazgos inequívocos tras el reporte global.
+- **Alternativas consideradas**: Corregir manualmente solo el caso puntual (rechazada por menor cobertura y repetición operativa).
+- **Impacto en roadmap**: Cierra un segundo caso real (`f14f2cf0...947b`) y valida el script como herramienta operativa efectiva.
+- **Riesgo**: Bajo (solo se aplicó fix en caso con candidato único + mismatch explícito de filename).
 
 ---
 
@@ -927,7 +996,7 @@ Durante análisis de logs, se detectó que el archivo `28-03-26-ABC.pdf` (17MB) 
 ### Cambio 3: Improvements 1,2,3 (Qdrant filter, recovery, GPU)
 - **1. Qdrant scroll_filter**: get_chunks_by_* usan Filter(must=[FieldCondition(key=..., match=MatchAny(any=ids))]) — server-side filter, O(k) no O(n).
 - **2. Recovery insights**: doc_id.startswith("insight_") + task_type None → inferir task_type=insights.
-- **3. GPU**: backend/Dockerfile con PyTorch CUDA 12.1; EMBEDDING_DEVICE env; docker-compose.nvidia.yml.
+- **3. GPU**: `backend/docker/cuda/Dockerfile` con PyTorch CUDA 12.1; EMBEDDING_DEVICE env; docker-compose.nvidia.yml.
 
 ### Cambio 4: Granularidad coherente en dashboard
 - **Decisión**: No cambiar pipeline; solo dashboard. Chunking/indexing muestran total_chunks y news_items_count.
@@ -3720,4 +3789,3 @@ curl -X POST /api/documents/{real_doc_id}/requeue
 - Todos usan lazy imports para evitar circular deps
 
 **Conclusión final**: Fase 6 **100% COMPLETA** ✅. Todos los endpoints de negocio migrados a routers modulares. Backend estable, arquitectura hexagonal implementada.
-

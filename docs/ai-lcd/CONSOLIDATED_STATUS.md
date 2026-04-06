@@ -2,8 +2,10 @@
 
 > **Versión definitiva**: Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
-**Última actualización**: 2026-04-01  
+**Última actualización**: 2026-04-06  
 **Prioridad**: REQ-021 — Backend Refactor: Hexagonal + DDD + LangChain/LangGraph/LangMem
+
+**Backlog (solo documentación, 2026-04-06)**: Pasos futuros para cerrar la brecha entre insights por noticia (LangGraph + `InsightMemory`) y reportes que aún arman contexto desde chunks — ver `PLAN_AND_NEXT_STEP.md` backlog ítem **7** y `SESSION_LOG.md` § 2026-04-06.
 
 ---
 
@@ -63,6 +65,157 @@ document_stage_timing:
 - [x] Docker build exitoso
 - [x] Compilación Python exitosa
 
+**Backfill opcional `upload` stage (histórico)**:
+- Script: `app/backend/scripts/backfill_upload_stage_timing.py`
+- Uso recomendado (mismo entorno que el backend):  
+  ```bash
+  cd app/backend
+  python scripts/backfill_upload_stage_timing.py --batch-size 1000
+  ```
+- Flags:
+  - `--limit N` para acotar documentos antiguos.
+  - `--dry-run` solo muestra cuántas filas faltan sin insertar.
+- Inserta `stage='upload'`, `status` derivado de `document_status.status`, `metadata.backfill = "upload_stage"`.
+- Útil si necesitas métricas previas a la migración; las ingestas nuevas ya escriben `document_stage_timing` en tiempo real.
+
+---
+
+### 118. Tooling Operativo: sanity check symlink vs BD para ingesta ✅
+**Fecha**: 2026-04-06  
+**Ubicación**:
+- `app/backend/scripts/check_upload_symlink_db_consistency.py`
+- `docs/ai-lcd/03-operations/INGEST_GUIDE.md`
+
+**Problema**:
+- La detección de desalineamientos entre `uploads/{document_id}.pdf`, `inbox/processed/*` y `document_status.filename` era manual y lenta.
+- Incidentes puntuales (`File not found`) requerían análisis ad-hoc para confirmar si era pérdida real o solo desajuste de nombre/symlink.
+
+**Solución**:
+- Nuevo script de diagnóstico que valida consistencia symlink↔archivo↔BD.
+- Modo por defecto read-only; fixes opcionales y explícitos: `--apply-symlink-fix`, `--apply-db-filename-fix`.
+- Guía operativa actualizada con comandos de uso y parámetros para host/contenedor.
+
+**Impacto**:
+- Reduce tiempo de diagnóstico y estandariza la respuesta operativa ante `File not found`.
+- Permite validar integridad antes de campañas de retry/reprocess.
+
+**⚠️ NO rompe**:
+- Pipeline de ingesta/OCR actual ✅
+- Contratos de DB existentes (`document_status`, `processing_queue`, `document_stage_timing`) ✅
+- Flujos de upload e inbox vigentes ✅
+
+**Verificación**:
+- [x] Script creado en `app/backend/scripts/`
+- [x] Sintaxis Python validada (`py_compile`)
+- [x] Documentación operativa actualizada (`INGEST_GUIDE.md`)
+- [x] Ejecución global (80 symlinks) en entorno backend
+- [x] 1 caso detectado y corregido automáticamente (`f14f2cf0...947b`: symlink + `filename` en BD)
+
+---
+
+### 117. Mitigación operativa PEND-016: limpieza BD + cuarentena de archivo legacy ✅
+**Fecha**: 2026-04-06  
+**Ubicación**:
+- `app/local-data/uploads/PEND-016/test_upload__a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae.pdf`
+- `docs/ai-lcd/PENDING_BACKLOG.md` (PEND-016)
+- `docs/ai-lcd/PLAN_AND_NEXT_STEP.md` (incidentes runtime activos)
+- `docs/ai-lcd/SESSION_LOG.md` (decisión de mitigación)
+
+**Problema**:
+- Caso legacy `test_upload.pdf` (`source='upload'`) seguía reintentándose en OCR y contaminaba logs de operación.
+- El archivo era inválido (13 bytes, no PDF real) y mantenía errores recurrentes.
+
+**Solución**:
+- Limpieza puntual en BD del `document_id` afectado (`a1fff0ff...dffae`) en tablas operativas y de log OCR.
+- Movimiento del archivo físico a carpeta de cuarentena nominal por tarea pendiente: `uploads/PEND-016/`.
+- Registro documental del estado como mitigación parcial mientras se implementa fix estructural.
+- Corrección puntual de symlink roto para `document_id=91fafac5...8423a` hacia `91fafac5_23-03-26-El Periodico Catalunya.pdf`.
+- Normalización en BD del mismo caso: `document_status.filename`, `processing_queue.filename` y `document_stage_timing.metadata.filename`.
+
+**Impacto**:
+- Se elimina el caso puntual del ciclo activo de workers/retry.
+- Baja el ruido de errores repetitivos asociados a `test_upload`.
+- Se conserva evidencia del archivo en cuarentena para análisis posterior.
+
+**⚠️ NO rompe**:
+- Flujo de ingesta inbox actual ✅
+- Documentos válidos y colas activas no relacionadas ✅
+- Hotfix previos de runtime (`PEND-013`, `PEND-014`) ✅
+
+**Verificación**:
+- [x] Conteos post-limpieza en BD para `a1fff0ff...dffae`: 0 (`document_status`, `processing_queue`, `worker_tasks`, `document_stage_timing`, `ocr_performance_log`)
+- [x] Archivo movido a `app/local-data/uploads/PEND-016/`
+- [x] Symlink `91fafac5...8423a.pdf` apunta a archivo existente en `/app/inbox/processed/`
+- [x] Registro específico en BD normalizado sin sufijo ` 2`
+- [x] Backlog/plan/session actualizados
+
+---
+
+### 116. Auditoría: Ingesta legacy por canal upload fuera de inbox ✅
+**Fecha**: 2026-04-06  
+**Ubicación**:
+- `docs/ai-lcd/PENDING_BACKLOG.md` (PEND-016)
+- `docs/ai-lcd/PLAN_AND_NEXT_STEP.md` (incidentes runtime activos)
+- `docs/ai-lcd/SESSION_LOG.md` (decisión y riesgo)
+
+**Problema**:
+- Apareció error OCR de `test_upload.pdf` durante pruebas de hoy, pese a no existir upload nuevo del usuario.
+- El documento corresponde a un registro legacy (`source='upload'`, 2026-04-02) que se reactivó por retry/reprocess.
+
+**Solución**:
+- Se documentó como incidente formal `PEND-016` con hipótesis, evidencia y alcance de remediación.
+- Se definió explícitamente la necesidad de estandarizar el canal upload al lifecycle operativo de inbox.
+- Se añadió lineamiento de cuarentena/retry para entradas inválidas y legacy.
+
+**Impacto**:
+- Queda trazable por qué aparecen errores “fuera de contexto temporal”.
+- Se evita perder el caso en memoria operativa y se prioriza su corrección.
+- Mejora la claridad entre “fallo de pipeline actual” vs “reintento de datos legacy”.
+
+**⚠️ NO rompe**:
+- Flujo actual de inbox y conteo de 6 procesados de hoy ✅
+- Hotfix runtime de pool/snapshot (`PEND-013`, `PEND-014`) ✅
+- Instrumentación de validación temprana no-PDF (`PEND-015`) ✅
+
+**Verificación**:
+- [x] `PENDING_BACKLOG.md` actualizado con `PEND-016`
+- [x] `PLAN_AND_NEXT_STEP.md` actualizado con incidente activo
+- [x] `SESSION_LOG.md` actualizado con decisión y riesgo
+
+---
+
+### 115. Hotfix Runtime: Pool PostgreSQL + Snapshot Runtime KV ✅
+**Fecha**: 2026-04-06  
+**Ubicación**:
+- `app/backend/adapters/driven/persistence/postgres/base.py`
+- `app/backend/pipeline_runtime_store.py`
+- `docs/ai-lcd/PENDING_BACKLOG.md`
+
+**Problema**:
+- Workers OCR/Indexing fallaban con `psycopg2.pool.PoolError: trying to put unkeyed connection`.
+- Startup mostraba `tuple indices must be integers or slices, not str` al cargar `pipeline_runtime_kv`.
+
+**Solución**:
+- `BasePostgresRepository`: pool compartido con lock de inicialización y fallback defensivo en `release_connection()` (close en `PoolError`).
+- `pipeline_runtime_store`: lectura robusta de filas tipo tuple/dict en `get_pause()`, `get_insights_llm()` y `load_full_snapshot()`.
+- Registro de incidentes en backlog: `PEND-013`, `PEND-014`, `PEND-015`.
+
+**Impacto**:
+- Startup limpia para runtime controls (`Pipeline runtime controls ... loaded from database`).
+- No se reprodujeron `PoolError` ni error de tuple/string en logs tras rebuild/redeploy.
+- Queda pendiente `PEND-015` (validación de archivos no PDF en OCR).
+
+**⚠️ NO rompe**:
+- Repositories hexagonales (`DocumentRepository`, `WorkerRepository`, `StageTimingRepository`) ✅
+- Scheduler master y workers existentes ✅
+- Persistencia de controles runtime (`pipeline_runtime_kv`) ✅
+
+**Verificación**:
+- [x] Rebuild + recreate backend (`docker compose ... build backend && up -d --force-recreate backend`)
+- [x] Logs de arranque sin `refresh_from_db: failed ... tuple indices...`
+- [x] Logs recientes sin `PoolError` / `trying to put unkeyed connection`
+- [x] `PENDING_BACKLOG.md` actualizado con tareas PEND-013/014/015
+
 ---
 
 ### 111. Fase 5E: Migración DocumentStatusStore → DocumentRepository ✅
@@ -71,7 +224,7 @@ document_stage_timing:
 - `app/backend/app.py` líneas 794, 2789, 2998, 3469, 3605, 3676, 3729, 3856, 3875, 5147-5230
 - `app/backend/core/ports/repositories/document_repository.py` (extensión)
 - `app/backend/adapters/driven/persistence/postgres/document_repository_impl.py` (implementación)
-- `app/backend/Dockerfile.cpu`, `app/backend/Dockerfile` (COPY adapters/ y core/)
+- `app/backend/Dockerfile.cpu`, `app/backend/docker/cuda/Dockerfile` (COPY adapters/ y core/)
 
 **Problema**: 
 - Endpoints críticos del dashboard seguían usando `document_status_store` (legacy)
@@ -110,6 +263,7 @@ Migración completa de llamadas legacy a repository pattern:
 | 3729 | `POST /api/documents/{id}/reset` | `document_status_store.update()` → `document_repository.store_ocr_text_sync()` |
 | 3856 | `POST /api/workers/retry-errors` | `document_status_store.get()` → `document_repository.list_all_sync()` |
 | 3875 | `POST /api/workers/retry-errors` | `document_status_store.update()` → `document_repository.mark_for_reprocessing_sync()` |
+| `file_ingestion_service.py` | `document_status_store.find_by_hash` → `document_repository.get_by_sha256_sync` | Deduplicación e inserción se hacen 100 % vía repositorio + stage timing |
 | 5147-5230 | `GET /api/workers/status` | Eliminada referencia a `generic_worker_pool` (ya no existe desde Fase 5C) |
 
 **3. Fixes SQL críticos**:
@@ -134,11 +288,12 @@ COPY backend/adapters/ adapters/
 ```
 
 **Impacto**:
-- ✅ Dashboard endpoints funcionales (5/5 tests pasan)
-- ✅ Workers usan repository pattern
-- ✅ Scheduler no genera spam de errores SQL
-- ✅ Backend healthy y estable
-- ⚠️ Deuda técnica: Referencias residuales a `updated_at`/`created_at` en métodos no críticos
+- ✅ Ingesta y requeue/reset críticos usan `DocumentRepository` + `StageTimingRepository`
+- ✅ Scheduler dejó de fallar por columnas inexistentes
+- ⚠️ _Reality check (2026-04-06)_: aún existen endpoints activos con `document_status_store` o SQL directo:
+  - `adapters/driving/api/v1/routers/admin.py` y `dashboard.py` importan el store legacy para stats e integridad
+  - `app/backend/app.py:1473-1526` (reportes diarios/semanales) continúan con helpers legacy
+- ➡️ Acción pendiente: migrar `routers/{admin,dashboard}.py` y los jobs de reportes para eliminar el `document_status_store` residual y exponer los métodos faltantes en los repositorios correspondientes.
 
 **⚠️ NO rompe**:
 - OCR workers ✅
@@ -148,17 +303,13 @@ COPY backend/adapters/ adapters/
 - Download/upload funcionalidad ✅
 
 **Verificación**:
-```bash
-# Tests ejecutados (5/5 pasan):
-✅ GET /api/documents → 200 OK (307 docs)
-✅ GET /api/workers/status → 200 OK
-✅ GET /api/dashboard/summary → 200 OK
-✅ GET /api/documents/{id}/segmentation-diagnostic → 200 OK
-✅ GET /api/documents/{id}/download → 200 OK (19.7 MB)
+- ✅ Última batería manual (2026-04-01) cubrió los endpoints anteriores y eliminó los errores de columnas inexistentes.
+- ⚠️ **Pendiente**: volver a correr `pytest` + smoke `/api/documents|workers|dashboard` tras la migración de routers. Registrar resultados en `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md`. (Ver **PEND-012**).
 
-# Logs sin errores críticos repetitivos
-✅ No más "reprocess queue: column created_at does not exist"
-```
+**5. Ingesta 100 % en repositorios**:
+- `file_ingestion_service` crea el `Document` mediante `document_repository.save_sync()` y registra el stage `upload` inmediatamente.
+- `check_duplicate()` utiliza `document_repository.get_by_sha256_sync()` para deduplicar sin tocar `document_status_store`.
+- Upload API y scanner de inbox ya no dependen de helpers legacy; toda la ingestión pasa por el puerto hexagonal.
 
 ---
 
@@ -1276,12 +1427,12 @@ Opcional antes de rebuild backend: `POST /api/workers/shutdown` con **Bearer tok
 
 ### 75. Improvements 1,2,3 — Qdrant filter + recovery insights + GPU ✅
 **Fecha**: 2026-03-17
-**Ubicación**: `qdrant_connector.py`, `app.py` PASO 0, `embeddings_service.py`, `backend/Dockerfile`, `docker-compose.nvidia.yml`
+**Ubicación**: `qdrant_connector.py`, `app.py` PASO 0, `embeddings_service.py`, `backend/docker/cuda/Dockerfile`, `docker-compose.nvidia.yml`
 **Problema**: Scroll Qdrant O(n) por request; recovery skip insights con task_type=None; GPU no documentada.
 **Solución**:
 - **1. Qdrant scroll_filter**: get_chunks_by_document_ids y get_chunks_by_news_item_ids usan Filter+MatchAny (server-side) — O(k) no O(n)
 - **2. Recovery insights**: Si doc_id empieza con "insight_" y task_type=None → inferir task_type=insights
-- **3. GPU**: backend/Dockerfile (CUDA 12.1); EMBEDDING_DEVICE env; nvidia compose con EMBEDDING_DEVICE=cuda
+- **3. GPU**: `backend/docker/cuda/Dockerfile` (CUDA 12.1); EMBEDDING_DEVICE env; nvidia compose con EMBEDDING_DEVICE=cuda
 **Impacto**: Menos carga Qdrant; recovery insights correcto; GPU lista para volumen alto
 **⚠️ NO rompe**: OCR ✅, Chunking ✅, Indexing ✅, Insights ✅
 **Verificación**: [ ] Rebuild backend; [ ] Con GPU: COMPOSE_FILE=...:docker-compose.nvidia.yml up
@@ -3381,9 +3532,9 @@ Performance: +40% vs SQLite
 ### 6b. Docker Build Performance 🚀
 **Problema**: Builds backend tomaban 10-15 minutos (PyTorch + Tika cada vez)  
 **Solución**:
-  - Creado `backend/Dockerfile.base` con all heavy dependencies
-  - Actualizado `backend/Dockerfile` para usar `FROM newsanalyzer-base:latest`
-  - Creado `build.sh` script para builds simples
+  - Creado `backend/docker/base/cpu|cuda` → `newsanalyzer-base:{cpu,cuda}` con los paquetes pesados
+  - `backend/Dockerfile.cpu` (CPU) y `backend/docker/cuda/Dockerfile` (CUDA) ahora usan esas bases
+  - `build.sh` / `complete_build.sh` detectan si la base existe y la construyen automáticamente
 **Impacto**: 
   - Primera construcción base: 20-30 min (one-time)
   - Rebuilds subsecuentes: 2-3 min (3-5x más rápido)
@@ -3403,28 +3554,45 @@ Performance: +40% vs SQLite
 
 ## 🏗️ DOCKER OPTIMIZATION ARCHITECTURE
 
-### Dockerfile.base (newsanalyzer-base:latest)
+### Dockerfile.base CPU (newsanalyzer-base:cpu)
 ```dockerfile
-FROM nvidia/cuda:12.9.0-runtime-ubuntu22.04
-# - Python 3.10, system deps (git, libsm6, tesseract, libtesseract-dev, poppler)
-# - JRE + Tika 3.2.3
-# - PyTorch 2.10 + torchvision + torchaudio (CUDA)
-# - Transformers, bge-m3, dependencies
+FROM python:3.11-slim
+# - System deps (git, libsm6, libxext6, libgomp1…)
 # - rclone
-# Size: ~3.5GB
+# - PyTorch 2.2.2 CPU wheels
+# Size: ~1.7GB
 # Build time: 20-30 min (first time)
 # Reuse: ✅ Yes (no changes expected until new PyTorch version)
 ```
 
-### Dockerfile (backend app)
+### Dockerfile.base CUDA (newsanalyzer-base:cuda)
 ```dockerfile
-FROM newsanalyzer-base:latest  # ← Reutiliza base
+FROM python:3.11-slim
+# - System deps + OpenJDK 17
+# - rclone
+# - PyTorch 2.2.2 CUDA wheels
+# Size: ~3.5GB
+# Build time: 20-30 min (first time)
+# Reuse: ✅ Yes
+```
+
+### Dockerfile.cpu (backend app)
+```dockerfile
+FROM newsanalyzer-base:cpu  # ← Reutiliza base
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/* .
 # Size: +150MB (small delta)
 # Build time: 2-3 min
 # Rebuild: ✅ Fast
+```
+
+### Dockerfile CUDA (backend/docker/cuda/Dockerfile)
+```dockerfile
+FROM newsanalyzer-base:cuda
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/* .
 ```
 
 ---
@@ -4287,5 +4455,3 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 - Endpoints de infraestructura (health, info, root) correctamente permanecen en `app.py`
 - Todos los endpoints de negocio migrados a routers modulares
 - **Migración 100% completa** ✅
-
-

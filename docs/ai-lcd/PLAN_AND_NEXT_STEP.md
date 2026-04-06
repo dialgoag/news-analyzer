@@ -6,8 +6,8 @@
 >
 > **📋 ÚLTIMO**: Fix #112 — Sistema Unificado de Timestamps ✅ (Migration 018). REQ-021 Fase 5 COMPLETA.
 
-**Última actualización**: 2026-04-01  
-**Versión**: 3.0.16 (Hexagonal Architecture - Sistema Timestamps Unificado)
+**Última actualización**: 2026-04-06  
+**Versión**: 3.0.17 (Hexagonal Architecture + backlog memoria post-insights)
 
 ---
 
@@ -57,7 +57,7 @@ Ver: CONSOLIDATED_STATUS.md § Fix #112, SESSION_LOG.md § Sesión 50
 - `app/backend/app.py` (L794, L2789, L2998, L3469, L3605, L3676, L3729, L3856, L3875, L5147-5230)
 - `app/backend/core/ports/repositories/document_repository.py`
 - `app/backend/adapters/driven/persistence/postgres/document_repository_impl.py`
-- `app/backend/Dockerfile.cpu`, `app/backend/Dockerfile`
+- `app/backend/Dockerfile.cpu`, `app/backend/docker/cuda/Dockerfile`
 
 Ver: CONSOLIDATED_STATUS.md § Fix #111, SESSION_LOG.md § 2026-04-01
 
@@ -83,7 +83,72 @@ Ver: CONSOLIDATED_STATUS.md § Fix #111, SESSION_LOG.md § 2026-04-01
 
 **Impacto**: Separación completa presentación ↔ dominio
 
+## 🟥 Auditoría 2026-04-06 – Brechas vs. AI-LCD
+
+| # | Brecha detectada | Prioridad | Archivos/Líneas | Detalle y siguiente paso |
+|---|-----------------|-----------|-----------------|---------------------------|
+| 1 | (Resuelto 2026-04-06) Endpoints de documentos usan `DocumentRepository`/`StageTimingRepository` | ✅ | `adapters/driving/api/v1/routers/documents.py:24-247, 632`, `app/backend/app.py:3820-3895` | Actualizados para consumir `list_all_sync(..., status, source)`, `delete_sync` y `StageTimingRepository.delete_for_document_sync`. |
+| 2 | (Resuelto 2026-04-06) API de workers usa `WorkerRepository`/`pipeline_runtime_store` | ✅ | `adapters/driving/api/v1/routers/workers.py` | Nuevos métodos (`list_active_with_documents`, `reset_processing_tasks`, etc.) reemplazan `_pg_conn` y toda la lógica de SQL directo. `set_all_pauses()` sustituye las escrituras manuales en `pipeline_runtime_kv`. |
+| 3 | Routers `admin.py` y `dashboard.py` aún usan `document_status_store` | **Media** | `adapters/driving/api/v1/routers/admin.py:20-320`, `dashboard.py:14-520` | Estas rutas duplican lógica de `app.py` y bloquean la eliminación del store legacy. Necesitan migrarse a los puertos hexagonales (`DocumentRepository`, `StageTimingRepository`, `NewsItemRepository`, `WorkerRepository`). Ver **PEND-010** y la auditoría previa de métricas en **PEND-011**. |
+| 4 | (Resuelto 2026-04-06) Eliminación limpia `document_stage_timing` e índices derivados | ✅ | `adapters/driving/api/v1/routers/documents.py:611-635`, `app/backend/app.py:3842-3865` | `StageTimingRepository.delete_for_document_sync` + `document_repository.delete_sync` se ejecutan antes de remover insights y news items. |
+| 5 | (Resuelto 2026-04-06) Reportes diario/semanal usan `ReportService` | ✅ | `core/application/services/report_service.py`, `app/backend/app.py:1455-1535` | Se creó `ReportService` (puertos `DocumentRepository` + Qdrant/RAG) y se actualizó `generate_daily_report_for_date` / `generate_weekly_report_for_week` para usarlo. `check_workers_script.py` ahora consume `PostgresWorkerRepository`/`PostgresNewsItemRepository`, sin SQL directo ni `document_status_store`. |
+
+> _Notas_: Las brechas 3–5 siguen bloqueando el objetivo AI-LCD de “Centralizar ingesta y estados en puertos hexagonales”. Antes de ampliar cobertura de pruebas debemos cerrar estas migraciones; después se puede abordar la limpieza del store legacy restante en `app.py`.
+
 ---
+
+## 🚨 Incidentes runtime activos (2026-04-06)
+
+- **PEND-016** (ingesta fuera de inbox + retries legacy) — En progreso: limpieza puntual del caso `test_upload` + cuarentena física en `uploads/PEND-016`; symlink/registro específico `91fafac5...` corregido; script de sanity check agregado para detección temprana (`check_upload_symlink_db_consistency.py`); pendiente estandarización estructural de upload/retry.
+- **PEND-013** (`PoolError unkeyed connection`) — En progreso: hardening aplicado en `BasePostgresRepository` y redeploy ejecutado; validar estabilidad en carga.
+- **PEND-014** (`pipeline_runtime_kv` tuple/dict mismatch) — En progreso: `pipeline_runtime_store` tolera filas tuple/dict; startup sin error tras rebuild.
+- **PEND-015** (`UnsupportedImageFormatError` en OCR) — Pendiente: falta validación temprana de tipo real de archivo + clasificación de error permanente.
+
+Ver fuente única de detalles en `PENDING_BACKLOG.md` (§ Prioridad Alta, PEND-016/013/014/015).
+
+---
+
+### 📌 Backlog priorizado (orden de ataque)
+
+1. **Document endpoints → repositorios** ✅ (2026-04-06)  
+   - `DocumentRepository.list_all_sync(..., status, source)` y `delete_sync` + `StageTimingRepository.delete_for_document_sync` implementados.  
+   - `GET /api/documents`, `GET /api/documents/status`, `GET /api/documents/{id}/segmentation-diagnostic` y `DELETE /api/documents/{id}` ahora consumen únicamente los puertos hexagonales.  
+   - `document_status_store` se conserva solo en `app.py` legacy y jobs heredados.
+
+2. **Worker API → `WorkerRepository` / `PipelineRuntimeStore`** ✅ (2026-04-06)  
+   - Nuevos métodos (`list_active_with_documents`, `list_recent_errors_with_documents`, `reset_processing_tasks`, `delete_active_worker_tasks`, `get_pending_task_counts`).  
+   - `routers/workers.py` usa exclusivamente los puertos hexagonales y `pipeline_runtime_store.set_all_pauses`.  
+   - Resultado: ninguna consulta SQL directa en el router; todo pasa por adaptadores hexagonales.
+
+3. **Routers admin/dashboard sin legacy store**  
+   - Diagnóstico previo de métricas/datos requeridos (matriz “métrica → fuente → puerto”).  
+   - Sustituir `document_status_store`, `news_item_store` y SQL sueltos por métodos de `DocumentRepository`, `StageTimingRepository`, `NewsItemRepository` y `WorkerRepository`.  
+   - Objetivo: los routers solo orquestan, sin conexiones directas a la BD. (Ver **PEND-010** y **PEND-011**).
+
+4. **Eliminar cascadas en stage timing / fuentes derivadas** ✅ (2026-04-06)  
+   - `StageTimingRepository.delete_for_document_sync` + borrado coordinado en insights/news items al eliminar documentos.  
+   - Falta documentar el comportamiento final de auditoría en la guía operativa.
+
+5. **Reportes diarios/semanales**  
+   - Decidir si se mantienen solo en `app.py` legacy (documentarlo explícitamente) o se migra la lógica a un servicio basado en repositorios.  
+   - Si se migra, crear puerto dedicado (p.ej. `ReportService`) que reutilice los métodos nuevos de `DocumentRepository`.
+
+6. **Lote de pruebas pendientes (cuando finalice la migración)**  
+   - Ejecutar suite disponible (`cd app/backend && pytest`) + smoke manual sobre `/api/documents`, `/api/workers`, `/api/dashboard`.  
+   - Registrar resultados y comandos en `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md` o nuevo checklist.  
+   - Sin esta evidencia no se considera cerrada la Fase 6. (Ver **PEND-012**).
+
+7. **Memoria analítica post-insights y reportes (brecha vs. visión híbrida)** — *pendiente, no iniciado*  
+   **Contexto**: El pipeline ya es híbrido (OCR/chunking/indexing sin LLM; insights con LangGraph + `InsightMemory`). Tras generar insights, solo se persiste en `news_item_insights` el campo `content` (+ `llm_source`); `extracted_data` / `analysis` viven en caché `InsightMemory`, no como ciudadanos de primer nivel para agregaciones. Los reportes diario/semanal (`app.py` ~1464–1552) arman contexto desde **chunks en Qdrant** y vuelven a llamar al LLM, en lugar de apoyarse en insights ya materializados por noticia.  
+   **Pasos futuros (orden sugerido)**:
+   - [ ] **Esquema**: Añadir columnas JSONB (o tabla derivada `news_item_insight_artifacts`) para `extracted_data`, `analysis` y/o un schema versionado; mantener `content` como vista o concatenación estable para el API actual.
+   - [ ] **Escritura**: En `_insights_worker_task` / `InsightsWorkerService`, tras éxito, persistir estructura además del texto; invalidar o versionar si se reprocesa el documento.
+   - [ ] **Reportes**: Refactor de `generate_daily_report_for_date` / `generate_weekly_report_for_week` para que el prompt use **insights agregados por rango de fechas** (vía `DocumentRepository` + consulta por `news_date` / joins a `news_item_insights`), con chunks solo como fallback si falta insight.
+   - [ ] **Servicio**: Opcional `ReportService` (puerto) que centralice la composición del contexto de reporte y métricas de tokens antes/después.
+   - [ ] **Clarificación de producto**: Documentar diferencia entre memoria conversacional de usuario (`/api/.../memory`) y memoria analítica del corpus (insights persistidos).
+   - [ ] **Verificación**: Tests de integración ligera y comparativa de coste/tokens en reportes piloto.
+
+> Cada paso desencadena el siguiente; no avanzar con #2 hasta cerrar #1, etc. Este orden alimenta el roadmap de Fase 6 y asegura que la documentación refleje fielmente el estado real de la app. El ítem **7** puede avanzar en paralelo a migraciones admin/dashboard si hay capacidad; conviene cerrar **#3–5** antes de invertir fuerte en nuevos esquemas de reporte.
 
 ## 🔥 PRIORIDADES ACTUALES (2026-03-16)
 
@@ -148,7 +213,7 @@ Ver: CONSOLIDATED_STATUS.md § Fix #111, SESSION_LOG.md § 2026-04-01
 |---|--------|-----------|----------|
 | 1 | ~~Cache/batch chunks~~ → **scroll_filter** ✅ — Qdrant Filter+MatchAny server-side (Fix #75) | — | — |
 | 2 | ~~Recovery para insights~~ ✅ — Inferir task_type=insights cuando doc_id=insight_* (Fix #75) | — | — |
-| 3 | ~~GPU para embeddings~~ ✅ — backend/Dockerfile CUDA + EMBEDDING_DEVICE (Fix #75) | — | — |
+| 3 | ~~GPU para embeddings~~ ✅ — `backend/docker/cuda/Dockerfile` + EMBEDDING_DEVICE (Fix #75) | — | — |
 | 4 | ~~**REQ-014.4 Zoom semántico**~~ ✅ — 3 niveles drill-down en Sankey (Fix #82) | — | — |
 | 5 | ~~**PEND-001**~~ — Insights vectorizados en Qdrant ✅ (2026-03-16) | — | — |
 | 6 | ~~**PEND-008**~~ — Workers vs processing (worker_tasks atómico) ✅ (2026-03-17) | — | — |

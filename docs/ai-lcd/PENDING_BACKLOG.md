@@ -1,7 +1,7 @@
 # Backlog Pendiente - NewsAnalyzer-RAG
 
 > **Fuente única** de pendientes técnicos (mejoras, fixes menores).
-> **Última actualización**: 2026-03-31
+> **Última actualización**: 2026-04-06
 
 ---
 
@@ -22,7 +22,91 @@
 
 ## Prioridad: Alta
 
-_(ninguna pendiente)_
+### PEND-016: Ingesta fuera de Inbox reingresa errores legacy (estandarización de entradas)
+**Descripción**: Se detectó que un documento viejo (`test_upload.pdf`, `source='upload'`, ingestado 2026-04-02) reaparece en workers OCR durante pruebas de hoy, aunque los 6 archivos de hoy entraron por inbox correctamente. El flujo de retry/reprocess no distingue antiguedad ni canal y puede reactivar entradas legacy inválidas.
+
+**Evidencia (2026-04-06)**:
+- `document_status`: 6 registros de hoy (`source='inbox'`) + caso legacy `source='upload'` con `ingested_at=2026-04-02`.
+- Archivo legacy: `uploads/a1fff0ff...dffae.pdf`, tamaño 13 bytes, tipo real `ASCII text` (no PDF).
+- Logs: retries OCR repetidos para `test_upload.pdf` sin nuevo upload del usuario.
+
+**Hipótesis principal**:
+1. El documento inválido fue creado por un camino alterno de upload (API/manual) fuera de inbox.
+2. `retry-errors` y/o cola de reproceso reactivan documentos `error` antiguos sin filtro por fecha/canal.
+3. La ingesta por upload no deja evidencia en `inbox/processed` (prefijo corto), dificultando trazabilidad operacional.
+
+**Alcance propuesto**:
+1. Agregar auditoría de canal de ingesta (campo explícito + reason/event) en reintentos.
+2. Filtrar `retry-errors` para excluir automáticamente errores legacy inválidos (o requerir confirmación explícita).
+3. Estandarizar upload API al mismo lifecycle operativo de inbox (registro equivalente en processed/audit trail).
+4. Definir política de cuarentena para archivos inválidos (no reintentar en loop).
+
+**Mitigación aplicada (2026-04-06)**:
+- Limpieza puntual en BD del caso `test_upload.pdf` (`document_id=a1fff0ff...dffae`) en: `worker_tasks`, `processing_queue`, `document_stage_timing`, `document_status`, `ocr_performance_log`.
+- Archivo movido a cuarentena: `app/local-data/uploads/PEND-016/test_upload__a1fff0ff...dffae.pdf`.
+- Corrección puntual de symlink roto para `document_id=91fafac5...8423a` (`source='inbox'`): target actualizado a `91fafac5_23-03-26-El Periodico Catalunya.pdf` (sin sufijo ` 2`).
+- Normalización del registro en BD para ese caso: `document_status.filename`, `processing_queue.filename` y `document_stage_timing.metadata.filename` alineados al nombre real del archivo.
+- Script de diagnóstico agregado: `app/backend/scripts/check_upload_symlink_db_consistency.py` (read-only por defecto; fixes opcionales con flags explícitos).
+- Ejecución global del script sobre 80 symlinks: 1 caso adicional detectado y corregido (`f14f2cf0...947b`, `El Pais 2.pdf` → `El Pais.pdf`) en symlink + BD.
+- Estado: **parcialmente mitigado** (se elimina el caso puntual; falta estandarización estructural del canal upload/retry).
+
+**Ubicación**: `app/backend/app.py`, `app/backend/file_ingestion_service.py`, `docs/ai-lcd/03-operations/*`  
+**Esfuerzo**: Medio  
+**Fecha detección**: 2026-04-06
+
+---
+
+### PEND-013: `PoolError` en repositorios PostgreSQL (`trying to put unkeyed connection`)
+**Descripción**: Los workers OCR/Indexing fallan al iniciar `stage_timing_repository.record_stage_start_sync()` por error de pool al liberar conexión. Impacta procesamiento concurrente y deja tareas en error.
+
+**Evidencia (logs 2026-04-06)**:
+- `psycopg2.pool.PoolError: trying to put unkeyed connection`
+- Stack: `app.py` (`_ocr_worker_task`, `_indexing_worker_task`) → `stage_timing_repository_impl.py` → `base.py:release_connection`
+
+**Alcance propuesto**:
+1. Endurecer `BasePostgresRepository.release_connection()` para manejar conexiones no registradas sin romper workers.
+2. Revisar estrategia de pool en `BasePostgresRepository` (pool único compartido y lock de inicialización).
+3. Validar en runtime: 0 errores `PoolError` en logs tras redeploy.
+
+**Ubicación**: `app/backend/adapters/driven/persistence/postgres/base.py`, `stage_timing_repository_impl.py`  
+**Esfuerzo**: Medio  
+**Fecha detección**: 2026-04-06
+
+---
+
+### PEND-014: `pipeline_runtime_kv` rompe refresh por filas tipo tupla
+**Descripción**: En startup, `insights_pipeline_control.refresh_from_db()` falla con `tuple indices must be integers or slices, not str` al leer snapshot runtime.
+
+**Evidencia (logs 2026-04-06)**:
+- `insights_pipeline_control - ERROR - refresh_from_db: failed to load pipeline_runtime_kv`
+- Stack: `pipeline_runtime_store.py:load_full_snapshot` (`r["key"]`, `r["value"]`)
+
+**Alcance propuesto**:
+1. Hacer `pipeline_runtime_store.py` compatible con filas `dict` y `tuple`.
+2. Validar que `load_full_snapshot()`, `get_pause()` y `get_insights_llm()` no dependan del tipo de cursor.
+3. Confirmar en logs de arranque que desaparece el error.
+
+**Ubicación**: `app/backend/pipeline_runtime_store.py`, `app/backend/insights_pipeline_control.py`  
+**Esfuerzo**: Bajo  
+**Fecha detección**: 2026-04-06
+
+---
+
+### PEND-015: OCR rechaza archivo no-PDF (`UnsupportedImageFormatError`)
+**Descripción**: `ocr-service` devuelve 500 cuando recibe contenido que no es PDF aunque el nombre termine en `.pdf`, generando errores repetidos en workers OCR.
+
+**Evidencia (logs 2026-04-06)**:
+- `OCRmyPDF failed (500): Input file is not a PDF`
+- `UnsupportedImageFormatError`
+
+**Alcance propuesto**:
+1. Validación temprana de tipo real de archivo antes de enviar a OCRmyPDF.
+2. Clasificar error como permanente de input (sin retries agresivos).
+3. Registrar mensaje claro para diagnóstico en dashboard.
+
+**Ubicación**: `app/backend/ocr_service_ocrmypdf.py`, `app/backend/app.py`  
+**Esfuerzo**: Medio  
+**Fecha detección**: 2026-04-06
 
 ### ~~PEND-001: Insights vectorizados en Qdrant~~ ✅ IMPLEMENTADO (2026-03-16)
 **Descripción**: Indexar los insights (resúmenes LLM) en Qdrant para mejorar preguntas de alto nivel.
@@ -101,6 +185,48 @@ _(ninguna pendiente)_
 
 ---
 
+### PEND-010: Routers admin/dashboard sin repositorios hexagonales
+**Descripción**: `adapters/driving/api/v1/routers/admin.py` y `dashboard.py` siguen importando `document_status_store`, `news_item_store` y helpers legacy de `app.py`. Esto impide eliminar el store y duplica la lógica de integridad, totales e insights que ya exponen `DocumentRepository`, `StageTimingRepository`, `NewsItemRepository` y `WorkerRepository`.
+
+**Alcance**:
+- Reemplazar conexiones directas (`document_status_store.get_connection()`, `news_item_insights_store`) por puertos hexagonales.
+- Extraer cálculos de métricas (totales por etapa, integridad de archivos/insights, inbox stats) a servicios reutilizables para que los routers se limiten a orquestar.
+- Ajustar imports/DI para que los routers no requieran `import app as app_module` salvo para caches globales inevitables.
+
+**Actualización 2026-04-06**: Se creó `ReportService` y se migraron `generate_daily_report_for_date`, `generate_weekly_report_for_week` y `check_workers_script.py` a los puertos hexagonales (`DocumentRepository`, `PostgresWorkerRepository`, `PostgresNewsItemRepository`). Los jobs y utilidades de reportes ya no dependen de `document_status_store`, lo que reduce el alcance de legacy pendiente en este item.
+
+**Prioridad**: Media (bloquea el objetivo AI-LCD de “fuente única”).  
+**Archivos**: `routers/admin.py:1-320`, `routers/dashboard.py:1-520`.  
+**Dependencia**: Ninguna (repos nuevos ya disponibles).
+
+---
+
+### PEND-011: Auditoría de datos para admin/dashboard antes de migrar
+**Descripción**: Antes de mover los routers a repositorios, es necesario mapear con precisión qué métricas/consultas necesita cada bloque (summary, analysis, integrity, insights pipeline) para evitar pérdida de funcionalidad. Actualmente las consultas mezclan `document_status`, `processing_queue`, `news_item_insights` y conteos del filesystem/inbox sin contrato formal.
+
+**Tareas**:
+1. Documentar por sección qué entidad/puerto proveerá cada métrica (ej. `files.total`, `insights.link_percentage`, `parallel_flow`), indicando filtros y agregaciones.
+2. Identificar datos que hoy provienen del filesystem (`UPLOAD_DIR`, `INBOX_DIR`) y definir si seguirán ahí o se normalizarán en BD.
+3. Redactar checklist de validación para comparar números antes/después de la migración.
+
+**Prioridad**: Media (desbloquea PEND-010).  
+**Salida esperada**: Sección nueva en `docs/ai-lcd/DASHBOARD_REFACTOR_PLAN.md` u otro doc AI-LCD con la matriz “métrica → fuente → puerto”.
+
+---
+
+### PEND-012: Ejecutar lote de pruebas tras migraciones API
+**Descripción**: Las migraciones recientes (document/workers routers y repositorios) no tienen evidencia de test suite actualizada. Se requiere un lote que cubra `pytest`, smoke sobre `/api/documents`, `/api/workers`, `/api/dashboard`, y verificación manual de dashboard/insights.
+
+**Criterio de done**:
+- Correr `cd app/backend && pytest` y adjuntar resultados.
+- Ejecutar smoke manual vía curl o Thunder Client para los endpoints críticos y adjuntar respuestas 200/401 esperadas.
+- Registrar resultado en `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md` o nuevo `TESTING_CHECKLIST.md`.
+
+**Prioridad**: Media-baja (requerido antes de declarar cerrada la Fase 6).  
+**Bloquea**: Deploy / merge a main.
+
+---
+
 ## Prioridad: Baja
 
 ### PEND-004: Qdrant healthcheck
@@ -155,6 +281,15 @@ PEND-005 (llm_source en API)
 
 PEND-009 (Backend refactor SOLID)
   └── Independiente — refactor incremental, no bloquea otras tareas
+
+PEND-011 (Auditoría admin/dashboard)
+  └── Debe completarse antes de PEND-010
+
+PEND-010 (Migrar routers admin/dashboard)
+  └── Desbloquea eliminación del store legacy y facilita PEND-012
+
+PEND-012 (Ejecución de pruebas)
+  └── Depende de cerrar PEND-010 para tener endpoints definitivos
 ```
 
 > **Nota**: No se incluyen providers de embeddings vía API (OpenAI, Perplexity) en el backlog.

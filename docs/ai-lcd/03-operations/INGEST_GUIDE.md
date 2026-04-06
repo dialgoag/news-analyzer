@@ -2,7 +2,7 @@
 
 > Carga masiva y carpeta inbox para no subir documentos uno a uno en la UI
 
-**Última actualización**: 2026-03-02
+**Última actualización**: 2026-04-06
 **Fase AI-DLC**: 03-operations
 **Audiencia**: Admin, DevOps
 **Relación**: UC-06 (carga masiva), UC-07 (carpeta inbox)
@@ -98,6 +98,34 @@ backend:
 - Solo se procesan archivos en la **raíz** de la inbox (no subcarpetas).
 - Tras procesar, el archivo se mueve a `processed/`; no se borra por si se quiere conservar.
 - El mismo límite de tamaño (`MAX_UPLOAD_SIZE_MB`) aplica.
+
+### 3.5 Sanity check de symlinks vs BD (diagnóstico rápido)
+
+Cuando veas errores `File not found` en OCR, valida consistencia entre:
+- symlink `uploads/{document_id}.pdf`
+- archivo real en `inbox/processed/`
+- `document_status.filename` y `processing_queue.filename`
+
+Script disponible:
+- `app/backend/scripts/check_upload_symlink_db_consistency.py`
+
+Uso recomendado (read-only):
+```bash
+# Desde backend (tras rebuild de imagen) o desde host con entorno Python + psycopg2
+python scripts/check_upload_symlink_db_consistency.py --use-container-paths
+```
+
+Fixes opcionales (solo casos inequívocos):
+```bash
+python scripts/check_upload_symlink_db_consistency.py \
+  --use-container-paths \
+  --apply-symlink-fix \
+  --apply-db-filename-fix
+```
+
+Si ejecutas desde host (no dentro del contenedor), añade:
+- `--local-data-root /ruta/al/proyecto/app/local-data`
+- `--dsn "host=127.0.0.1 port=5432 dbname=<db> user=<user> password=<password>"`
 
 ---
 
