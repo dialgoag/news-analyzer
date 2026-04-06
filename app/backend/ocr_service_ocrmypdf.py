@@ -77,6 +77,16 @@ class OCRServiceOCRmyPDF:
         """
         # Timeout fijo: 25 minutos - suficiente para documentos grandes
         return self.FIXED_TIMEOUT
+
+    @staticmethod
+    def _is_valid_pdf(file_path: str) -> bool:
+        """Basic PDF signature validation to fail fast on wrong inputs."""
+        try:
+            with open(file_path, "rb") as f:
+                header = f.read(5)
+            return header == b"%PDF-"
+        except OSError:
+            return False
     
     def extract_text(self, file_path: str) -> str:
         """
@@ -90,6 +100,23 @@ class OCRServiceOCRmyPDF:
         timeout = None
         
         try:
+            if not self._is_valid_pdf(file_path):
+                msg = (
+                    f"Invalid input format for OCR: {filename} is not a real PDF "
+                    f"(missing %PDF- signature)"
+                )
+                logger.error(f"❌ {msg}")
+                self._log_to_db(
+                    filename=filename,
+                    file_size_mb=size_mb,
+                    success=False,
+                    processing_time_sec=None,
+                    timeout_used_sec=None,
+                    error_type="INVALID_INPUT_FORMAT",
+                    error_detail=msg[:500],
+                )
+                raise ValueError(msg)
+
             # Calcular timeout con aprendizaje conservador
             timeout = self._calculate_timeout(file_size)
             

@@ -161,50 +161,52 @@ Cada stage (OCR, Chunking, Indexing, Insights) sigue:
 async def _ocr_worker_task(document_id: str, filename: str, file_path: str):
     try:
         # PASO 1: OCR
-        document_status_store.update_status(
-            document_id, 
-            DocStatus.OCR_PROCESSING,        # ← ocr_processing
-            processing_stage=Stage.OCR
+        document_repository.update_status_sync(
+            document_id,
+            PipelineStatus.create(StageEnum.OCR, StateEnum.PROCESSING),
+            processing_stage=Stage.OCR,
+            clear_error_message=True,
         )
-        
+        stage_timing_repository.record_stage_start_sync(document_id, 'ocr')
         text = ocr_service.extract_text(file_path)
-        
+
         # PASO 2: Chunking (mismo worker continúa)
-        document_status_store.update_status(
+        document_repository.update_status_sync(
             document_id,
-            DocStatus.CHUNKING_PROCESSING,   # ← chunking_processing
-            processing_stage=Stage.CHUNKING
+            PipelineStatus.create(StageEnum.CHUNKING, StateEnum.PROCESSING),
+            processing_stage=Stage.CHUNKING,
+            clear_indexed_at=True,
         )
-        
+        stage_timing_repository.record_stage_start_sync(document_id, 'chunking')
         items = segment_news_items_from_text(text)
-        chunk_records = []
-        for item in items:
-            chunks = rag_pipeline.chunk_text(item['text'])
-            chunk_records.extend(chunks)
-        
+        chunk_records = chunk_document(items)
+
         # PASO 3: Indexing (mismo worker continúa)
-        document_status_store.update_status(
+        document_repository.update_status_sync(
             document_id,
-            DocStatus.INDEXING_PROCESSING,   # ← indexing_processing
-            processing_stage=Stage.INDEXING
+            PipelineStatus.create(StageEnum.INDEXING, StateEnum.PROCESSING),
+            processing_stage=Stage.INDEXING,
         )
-        
+        stage_timing_repository.record_stage_start_sync(document_id, 'indexing')
         rag_pipeline.index_chunk_records(chunk_records)
-        
+
         # PASO 4: Marcar indexing completo
-        document_status_store.update_status(
+        document_repository.update_status_sync(
             document_id,
-            DocStatus.INDEXING_DONE,         # ← indexing_done
-            indexed_at=datetime.utcnow().isoformat()
+            PipelineStatus.create(StageEnum.INDEXING, StateEnum.DONE),
+            indexed_at=datetime.utcnow().isoformat(),
+            num_chunks=len(chunk_records),
         )
-        
-        # Scheduler detectará indexing_done y creará tareas de insights
-        
+        stage_timing_repository.record_stage_end_sync(document_id, 'indexing', 'done')
+
     except Exception as e:
-        document_status_store.update_status(
-            document_id, 
-            DocStatus.ERROR,                 # ← error
-            error_message=str(e)
+        stage_timing_repository.record_stage_end_sync(
+            document_id, 'ocr', 'error', error_message=str(e)
+        )
+        document_repository.update_status_sync(
+            document_id,
+            PipelineStatus.terminal(TerminalStateEnum.ERROR),
+            error_message=str(e),
         )
 ```
 

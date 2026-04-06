@@ -1,26 +1,9 @@
 # GPU/CUDA Dockerfile - Para Linux con NVIDIA GPU
-# Usar con: COMPOSE_FILE=docker-compose.yml:docker-compose.nvidia.yml
-# Build: ~15-20 min (PyTorch CUDA es grande)
-FROM python:3.11-slim
-
-ENV HF_HOME=/root/.cache/huggingface
-ENV TRANSFORMERS_CACHE=/root/.cache/huggingface
-ENV SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface
+# Usa imagen base newsanalyzer-base:cuda con dependencias pesadas preinstaladas
+ARG BASE_IMAGE=newsanalyzer-base:cuda
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
-
-# Dependencies del sistema (igual que CPU)
-RUN apt-get update && apt-get install -y \
-    git libsm6 libxext6 libxrender-dev libgl1 libglib2.0-0 libgomp1 \
-    curl unzip \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN curl -fsSL https://rclone.org/install.sh | bash
-
-# PyTorch CUDA 12.1 (vs CPU en Dockerfile.cpu)
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-RUN pip install --upgrade pip setuptools wheel
 
 # Dependencies
 COPY backend/requirements.txt .

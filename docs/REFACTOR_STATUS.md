@@ -35,7 +35,8 @@ app/
 - `app/ocr-service/` = servicio OCR independiente
 - `app/docker-compose.yml` = raíz de despliegue
 
-El docker-compose usa `context: .` y `dockerfile: backend/Dockerfile`, por eso existe la carpeta anidada.
+El docker-compose usa `context: .` y para GPU referencia `dockerfile: backend/docker/cuda/Dockerfile`,
+por eso existe la carpeta anidada.
 
 ---
 
@@ -85,4 +86,6 @@ Ver: [docs/MACOS_RECOVERY.md](MACOS_RECOVERY.md)
 
 ---
 
-**Nota**: La optimización con imagen base (newsanalyzer-base:latest) documentada en CONSOLIDATED_STATUS se perdió en el refactor. Dockerfile.cpu ofrece builds rápidos para Mac sin necesidad de base image.
+**Nota**: En abril 2026 se restauró la optimización con imágenes base:
+`backend/docker/base/cpu|cuda` generan `newsanalyzer-base:{cpu,cuda}` y
+los Dockerfiles (`backend/Dockerfile.cpu`, `backend/docker/cuda/Dockerfile`) ahora derivan de ellas.

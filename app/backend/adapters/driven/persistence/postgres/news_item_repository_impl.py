@@ -4,7 +4,7 @@ PostgreSQL NewsItem Repository Implementation.
 Maps between database rows and Domain entities.
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict, Sequence, Tuple
 from datetime import datetime
 
 from core.domain.entities.news_item import NewsItem
@@ -296,6 +296,55 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
             return cursor.fetchone() is not None
         finally:
             self.release_connection(conn)
+
+    async def count_insights_by_status(self) -> dict:
+        """Return counts of news_item_insights grouped by status."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT status, COUNT(*) AS count FROM news_item_insights GROUP BY status"
+            )
+            rows = cursor.fetchall()
+            return {
+                row["status"]: int(row["count"])
+                for row in (self.map_row_to_dict(cursor, row) for row in rows)
+            }
+        finally:
+            self.release_connection(conn)
+
+    def count_all_sync(self) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) AS count FROM news_items")
+            row = cursor.fetchone()
+            return int(row[0] if isinstance(row, tuple) else row.get("count", 0))
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def count_insights_linkage_sync(self, document_ids: Sequence[str]) -> Tuple[int, int]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) AS count FROM news_item_insights")
+            total_row = cursor.fetchone()
+            total = int(total_row[0] if isinstance(total_row, tuple) else total_row.get("count", 0))
+            if not document_ids:
+                return total, 0
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM news_item_insights
+                WHERE document_id = ANY(%s)
+                """,
+                (list(document_ids),),
+            )
+            linked_row = cursor.fetchone()
+            linked = int(linked_row[0] if isinstance(linked_row, tuple) else linked_row.get("count", 0))
+            return total, linked
+        finally:
+            self.get_connection_pool().putconn(conn)
     
     # ========================================
     # PRIVATE: Mapping helpers

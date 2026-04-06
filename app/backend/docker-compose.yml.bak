@@ -73,7 +73,7 @@ milvius:
   backend:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: backend/docker/cuda/Dockerfile
     container_name: rag-backend
     depends_on:
       milvius:

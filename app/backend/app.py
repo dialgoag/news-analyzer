@@ -69,6 +69,7 @@ from adapters.driven.persistence.postgres import (
 from adapters.driven.persistence.postgres.stage_timing_repository_impl import PostgresStageTimingRepository
 from core.domain.value_objects.document_id import DocumentId
 from core.domain.value_objects.pipeline_status import PipelineStatus, StageEnum, StateEnum, TerminalStateEnum
+from core.application.services.report_service import ReportService
 
 # Backup imports
 from backup_service import backup_service
@@ -585,6 +586,7 @@ ocr_service: Optional[OCRService] = None
 embeddings_service: Optional[EmbeddingsService] = None
 rag_pipeline: Optional[RAGPipeline] = None
 qdrant_connector: Optional[QdrantConnector] = None
+report_service: Optional[ReportService] = None
 # generic_worker_pool removed in Fase 5C (master scheduler handles all dispatch)
 
 # Conversational memory for users
@@ -871,7 +873,7 @@ def master_pipeline_scheduler():
                     if Path(name).suffix.lower() not in ALLOWED_EXTENSIONS:
                         continue
                     try:
-                        ingest_from_inbox(inbox_path, name, UPLOAD_DIR, processed_dir)
+                        doc_id = ingest_from_inbox(inbox_path, name, UPLOAD_DIR, processed_dir)
                     except Exception as e:
                         logger.warning(f"⚠️  Inbox: Error ingesting {name}: {e}")
             except Exception as e:
@@ -1337,6 +1339,15 @@ async def startup_event():
             openai_api_key=OPENAI_API_KEY,
         )
         logger.info("✅ RAG Pipeline ready")
+        report_service = ReportService(
+            document_repository=document_repository,
+            qdrant_connector=qdrant_connector,
+            rag_pipeline=rag_pipeline,
+            daily_report_store=daily_report_store,
+            weekly_report_store=weekly_report_store,
+            notification_store=notification_store,
+        )
+        logger.info("✅ ReportService ready")
 
         import insights_pipeline_control as _ipc_controls
         _ipc_controls.refresh_from_db()
@@ -1464,42 +1475,12 @@ def run_daily_report_job():
 def generate_daily_report_for_date(report_date: str) -> bool:
     """
     Generate (or regenerate) the daily report for report_date (YYYY-MM-DD) using documents
-    whose news_date equals report_date. Saves to daily_report_store; on replace, updated_at is set.
-    Returns True if a report was saved, False if no indexed documents for that date (or error).
+    whose news_date equals report_date.
     """
-    if not qdrant_connector or not rag_pipeline:
-        logger.warning("Daily report: Qdrant or RAG pipeline not ready, skipping")
+    if not report_service:
+        logger.warning("Daily report: ReportService not ready, skipping")
         return False
-    doc_ids = document_status_store.get_document_ids_by_news_date(report_date)
-    if not doc_ids:
-        logger.info(f"Daily report: no indexed documents for news_date={report_date}, skipping")
-        return False
-    try:
-        chunks = qdrant_connector.get_chunks_by_document_ids(doc_ids, max_chunks=2000)
-        if not chunks:
-            logger.warning(f"Daily report: no chunks retrieved for {report_date}")
-            return False
-        by_doc = {}
-        for c in chunks:
-            fid = c.get("document_id", "")
-            fname = c.get("filename", "unknown")
-            if fid not in by_doc:
-                by_doc[fid] = {"filename": fname, "texts": []}
-            by_doc[fid]["texts"].append(c.get("text", ""))
-        context_parts = []
-        for doc_id, data in by_doc.items():
-            context_parts.append(f"[{data['filename']}]\n" + "\n".join(data["texts"]))
-        context = "\n\n---\n\n".join(context_parts)
-        if len(context) > 120000:
-            context = context[:120000] + "\n\n[... texto recortado por límite ...]"
-        content = rag_pipeline.generate_report_from_context(context, report_date)
-        daily_report_store.insert(report_date, content)
-        notification_store.insert("daily", report_date, message=f"Reporte del {report_date} actualizado")
-        logger.info(f"Daily report generated for {report_date}")
-        return True
-    except Exception as e:
-        logger.error(f"Daily report generation failed for {report_date}: {e}", exc_info=True)
-        return False
+    return report_service.generate_daily_report(report_date)
 
 
 def run_weekly_report_job():
@@ -1512,44 +1493,10 @@ def run_weekly_report_job():
 
 def generate_weekly_report_for_week(week_start: str) -> bool:
     """Generate weekly report for week starting week_start (Monday YYYY-MM-DD). Week = week_start to week_start+6 days."""
-    if not qdrant_connector or not rag_pipeline:
-        logger.warning("Weekly report: Qdrant or RAG pipeline not ready, skipping")
+    if not report_service:
+        logger.warning("Weekly report: ReportService not ready, skipping")
         return False
-    from datetime import datetime as dt, timedelta
-    try:
-        start = dt.strptime(week_start, "%Y-%m-%d").date()
-    except ValueError:
-        logger.warning(f"Weekly report: invalid week_start {week_start}")
-        return False
-    end = start + timedelta(days=6)
-    week_end = end.isoformat()
-    doc_ids = document_status_store.get_document_ids_by_news_date_range(week_start, week_end)
-    if not doc_ids:
-        logger.info(f"Weekly report: no indexed documents for week {week_start}–{week_end}, skipping")
-        return False
-    try:
-        chunks = qdrant_connector.get_chunks_by_document_ids(doc_ids, max_chunks=3000)
-        if not chunks:
-            return False
-        by_doc = {}
-        for c in chunks:
-            fid = c.get("document_id", "")
-            fname = c.get("filename", "unknown")
-            if fid not in by_doc:
-                by_doc[fid] = {"filename": fname, "texts": []}
-            by_doc[fid]["texts"].append(c.get("text", ""))
-        context_parts = [f"[{d['filename']}]\n" + "\n".join(d["texts"]) for d in by_doc.values()]
-        context = "\n\n---\n\n".join(context_parts)
-        if len(context) > 150000:
-            context = context[:150000] + "\n\n[... texto recortado ...]"
-        content = rag_pipeline.generate_weekly_report_from_context(context, week_start, week_end)
-        weekly_report_store.insert(week_start, content)
-        notification_store.insert("weekly", week_start, message=f"Reporte semanal ({week_start}) actualizado")
-        logger.info(f"Weekly report generated for week {week_start}–{week_end}")
-        return True
-    except Exception as e:
-        logger.error(f"Weekly report failed for {week_start}: {e}", exc_info=True)
-        return False
+    return report_service.generate_weekly_report(week_start)
 
 
 # ============================================================================
@@ -2104,8 +2051,24 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
     chunks = None
     chunk_records = None
     content_hash: Optional[str] = None
+    upload_stage_closed = False
     try:
-        document_status_store.update_status(document_id, DocStatus.OCR_PROCESSING, processing_stage=Stage.OCR)
+        document_repository.update_status_sync(
+            document_id,
+            PipelineStatus.create(StageEnum.OCR, StateEnum.PROCESSING),
+            processing_stage=Stage.OCR,
+            clear_error_message=True
+        )
+
+        try:
+            stage_timing_repository.record_stage_end_sync(
+                document_id=document_id,
+                stage='upload',
+                status='done'
+            )
+            upload_stage_closed = True
+        except Exception as timing_err:
+            logger.warning(f"Stage timing end (upload→done) failed for {document_id}: {timing_err}")
 
         logger.info("=" * 80)
         logger.info(f"📇 PROCESSING START: {filename}")
@@ -2138,7 +2101,7 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
             logger.info(f"Structured Fields: {structured_fields}")
             
             # Store OCR text in database for diagnostic purposes
-            document_status_store.store_ocr_text(document_id, text)
+            document_repository.store_ocr_text_sync(document_id, text)
         except Exception as e:
             logger.error(f"      ❌ OCR FAILED: {str(e)}", exc_info=True)
             text = ""
@@ -2148,18 +2111,33 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
 
         if not text or len(text.strip()) == 0:
             logger.warning(f"⚠️  WARNING: OCR returned empty text!")
-            document_status_store.update_status(document_id, DocStatus.ERROR, error_message="OCR returned empty text")
+            document_repository.update_status_sync(
+                document_id,
+                PipelineStatus.terminal(TerminalStateEnum.ERROR),
+                error_message="OCR returned empty text",
+                processing_stage=Stage.OCR
+            )
             return
         
         # STEP 2: Segmentación en noticias + chunking
-        document_status_store.update_status(document_id, DocStatus.CHUNKING_PROCESSING, processing_stage=Stage.CHUNKING)
+        document_repository.update_status_sync(
+            document_id,
+            PipelineStatus.create(StageEnum.CHUNKING, StateEnum.PROCESSING),
+            processing_stage=Stage.CHUNKING,
+            clear_indexed_at=True
+        )
         logger.info(f"  [2/3] News segmentation + chunking...")
         start_chunk = datetime.now()
 
         try:
             items = segment_news_items_from_text(text)
             if not items:
-                document_status_store.update_status(document_id, DocStatus.ERROR, error_message="No news items detected")
+                document_repository.update_status_sync(
+                    document_id,
+                    PipelineStatus.terminal(TerminalStateEnum.ERROR),
+                    error_message="No news items detected",
+                    processing_stage=Stage.CHUNKING
+                )
                 return
 
             # STEP 2.1: Check for existing items by text_hash to avoid duplicates on reprocessing
@@ -2235,7 +2213,12 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
             )
         except Exception as e:
             logger.error(f"      ❌ CHUNKING FAILED: {str(e)}", exc_info=True)
-            document_status_store.update_status(document_id, DocStatus.ERROR, error_message=f"Chunking failed: {e}")
+            document_repository.update_status_sync(
+                document_id,
+                PipelineStatus.terminal(TerminalStateEnum.ERROR),
+                error_message=f"Chunking failed: {e}",
+                processing_stage=Stage.CHUNKING
+            )
             return
 
         chunk_time = (datetime.now() - start_chunk).total_seconds()
@@ -2243,11 +2226,20 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
 
         if not chunk_records:
             logger.error(f"❌ ERROR: No chunks created!")
-            document_status_store.update_status(document_id, DocStatus.ERROR, error_message="No chunks created")
+            document_repository.update_status_sync(
+                document_id,
+                PipelineStatus.terminal(TerminalStateEnum.ERROR),
+                error_message="No chunks created",
+                processing_stage=Stage.CHUNKING
+            )
             return
         
         # STEP 3: Embedding & Indexing
-        document_status_store.update_status(document_id, DocStatus.INDEXING_PROCESSING, processing_stage=Stage.INDEXING)
+        document_repository.update_status_sync(
+            document_id,
+            PipelineStatus.create(StageEnum.INDEXING, StateEnum.PROCESSING),
+            processing_stage=Stage.INDEXING
+        )
         logger.info(f"  [3/3] Embedding & Indexing...")
         start_index = datetime.now()
 
@@ -2255,7 +2247,12 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
             rag_pipeline.index_chunk_records(chunk_records)
         except Exception as e:
             logger.error(f"      ❌ INDEXING FAILED: {str(e)}", exc_info=True)
-            document_status_store.update_status(document_id, DocStatus.ERROR, error_message=f"Indexing failed: {e}")
+            document_repository.update_status_sync(
+                document_id,
+                PipelineStatus.terminal(TerminalStateEnum.ERROR),
+                error_message=f"Indexing failed: {e}",
+                processing_stage=Stage.INDEXING
+            )
             return
 
         index_time = (datetime.now() - start_index).total_seconds()
@@ -2273,15 +2270,15 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
         logger.info(f"   Characters: {len(text)}")
         logger.info("=" * 80)
 
-        document_status_store.update_status(
+        news_date = parse_news_date_from_filename(filename)
+        document_repository.update_status_sync(
             document_id,
-            DocStatus.INDEXING_DONE,
+            PipelineStatus.create(StageEnum.INDEXING, StateEnum.DONE),
             indexed_at=datetime.utcnow().isoformat(),
             num_chunks=len(chunk_records),
-            news_date=parse_news_date_from_filename(filename),
-            processing_stage=Stage.INDEXING,
+            news_date=news_date,
+            processing_stage=Stage.INDEXING
         )
-        news_date = parse_news_date_from_filename(filename)
         if news_date and not INGEST_DEFER_REPORT_GENERATION:
             try:
                 do_generate = True
@@ -2332,7 +2329,21 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
         logger.error(f"❌ CRITICAL PROCESSING ERROR {filename}: {str(e)}")
         logger.error(traceback.format_exc())
         logger.error("=" * 80)
-        document_status_store.update_status(document_id, DocStatus.ERROR, error_message=str(e))
+        document_repository.update_status_sync(
+            document_id,
+            PipelineStatus.terminal(TerminalStateEnum.ERROR),
+            error_message=str(e)
+        )
+        if not upload_stage_closed:
+            try:
+                stage_timing_repository.record_stage_end_sync(
+                    document_id=document_id,
+                    stage='upload',
+                    status='error',
+                    error_message=str(e)[:200]
+                )
+            except Exception as timing_err:
+                logger.warning(f"Stage timing end (upload→error) failed for {document_id}: {timing_err}")
 
     finally:
         # 🧹 CRITICAL: Memory cleanup to prevent OOM on next upload
@@ -3532,23 +3543,33 @@ async def requeue_document(
         # 3. If ocr_text exists and doc failed at indexing → retry indexing only
         has_ocr = doc.get('ocr_text') and len(str(doc.get('ocr_text') or '').strip()) > 0
         if has_ocr:
-            document_status_store.update_status(
+            document_repository.update_status_sync(
                 document_id,
-                DocStatus.CHUNKING_DONE,
-                processing_stage="chunking",
+                PipelineStatus.create(StageEnum.CHUNKING, StateEnum.DONE),
+                processing_stage=Stage.CHUNKING,
                 clear_indexed_at=True,
                 clear_error_message=True,
+            )
+            stage_timing_repository.record_stage_start_sync(
+                document_id=document_id,
+                stage='indexing',
+                metadata={'source': 'requeue', 'mode': 'indexing_only'}
             )
             await worker_repository.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
             logger.info(f"   ✓ Retry indexing only (ocr_text exists)")
         else:
-            document_status_store.update_status(
+            document_repository.update_status_sync(
                 document_id,
-                DocStatus.OCR_PROCESSING,
-                processing_stage="ocr",
+                PipelineStatus.create(StageEnum.OCR, StateEnum.PROCESSING),
+                processing_stage=Stage.OCR,
                 num_chunks=0,
                 clear_indexed_at=True,
                 clear_error_message=True,
+            )
+            stage_timing_repository.record_stage_start_sync(
+                document_id=document_id,
+                stage='ocr',
+                metadata={'source': 'requeue'}
             )
             await document_repository.store_ocr_text(DocumentId(document_id), None)
             await document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
@@ -3688,13 +3709,18 @@ async def retry_error_workers(
                 
                 if not has_ocr or stage in ('ocr', 'upload', ''):
                     # OCR falló o no hay texto → retry OCR completo
-                    document_status_store.update_status(
+                    document_repository.update_status_sync(
                         document_id,
-                        DocStatus.OCR_PROCESSING,
-                        processing_stage="ocr",
+                        PipelineStatus.create(StageEnum.OCR, StateEnum.PROCESSING),
+                        processing_stage=Stage.OCR,
                         num_chunks=0,
                         clear_indexed_at=True,
                         clear_error_message=True,
+                    )
+                    stage_timing_repository.record_stage_start_sync(
+                        document_id=document_id,
+                        stage='ocr',
+                        metadata={'source': 'retry-errors'}
                     )
                     await document_repository.store_ocr_text(DocumentId(document_id), None)
                     await document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
@@ -3702,23 +3728,33 @@ async def retry_error_workers(
                     logger.info(f"   → Retry OCR (no ocr_text or stage={stage})")
                 elif stage == 'chunking':
                     # Chunking falló (ej. Server disconnected) → retry chunking
-                    document_status_store.update_status(
+                    document_repository.update_status_sync(
                         document_id,
-                        DocStatus.CHUNKING_PROCESSING,
-                        processing_stage="chunking",
+                        PipelineStatus.create(StageEnum.CHUNKING, StateEnum.PROCESSING),
+                        processing_stage=Stage.CHUNKING,
                         clear_indexed_at=True,
                         clear_error_message=True,
+                    )
+                    stage_timing_repository.record_stage_start_sync(
+                        document_id=document_id,
+                        stage='chunking',
+                        metadata={'source': 'retry-errors'}
                     )
                     await worker_repository.enqueue_task(document_id, filename, TaskType.CHUNKING, priority=10)
                     logger.info(f"   → Retry chunking (stage=chunking)")
                 else:
                     # Indexing falló o stage=indexing → retry indexing
-                    document_status_store.update_status(
+                    document_repository.update_status_sync(
                         document_id,
-                        DocStatus.CHUNKING_DONE,
-                        processing_stage="chunking",
+                        PipelineStatus.create(StageEnum.CHUNKING, StateEnum.DONE),
+                        processing_stage=Stage.CHUNKING,
                         clear_indexed_at=True,
                         clear_error_message=True,
+                    )
+                    stage_timing_repository.record_stage_start_sync(
+                        document_id=document_id,
+                        stage='indexing',
+                        metadata={'source': 'retry-errors', 'mode': 'indexing_only'}
                     )
                     await worker_repository.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
                     logger.info(f"   → Retry indexing only (ocr+chunking done)")
@@ -3766,7 +3802,8 @@ async def delete_document(
     try:
         logger.info(f"🗑️  Deleting document: {document_id}")
         qdrant_connector.delete_document(document_id)
-        document_status_store.delete(document_id)
+        stage_timing_repository.delete_for_document_sync(document_id)
+        document_repository.delete_sync(document_id)
         document_insights_store.delete(document_id)
         news_item_insights_store.delete_by_document_id(document_id)
         news_item_store.delete_by_document_id(document_id)
@@ -3896,11 +3933,17 @@ def _run_reindex_all():
         filename = row["filename"] or doc_id
         try:
             qdrant_connector.delete_document(doc_id)
-            document_status_store.update_status(
-                doc_id, DocStatus.CHUNKING_DONE,
-                processing_stage="chunking",
+            document_repository.update_status_sync(
+                doc_id,
+                PipelineStatus.create(StageEnum.CHUNKING, StateEnum.DONE),
+                processing_stage=Stage.CHUNKING,
                 clear_indexed_at=True,
                 clear_error_message=True,
+            )
+            stage_timing_repository.record_stage_start_sync(
+                document_id=doc_id,
+                stage='indexing',
+                metadata={'source': 'reindex-all'}
             )
             worker_repository.enqueue_task_sync(doc_id, filename, TaskType.INDEXING, priority=10)
             if (i + 1) % 10 == 0 or i == 0:

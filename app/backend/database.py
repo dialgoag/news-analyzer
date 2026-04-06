@@ -1244,6 +1244,92 @@ class NewsItemInsightsStore:
         conn.cursor_factory = psycopg2.extras.RealDictCursor
         return conn
 
+    def list_active_tasks(self) -> List[Dict]:
+        """List insights currently generating or indexing."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT news_item_id, document_id, filename, title
+                FROM news_item_insights
+                WHERE status IN (%s, %s)
+                ORDER BY news_item_id
+                """,
+                (self.STATUS_GENERATING, self.STATUS_INDEXING),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def count_pending_or_queued(self) -> int:
+        """Count insights pending or queued."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM news_item_insights
+                WHERE status IN (%s, %s)
+                """,
+                (self.STATUS_PENDING, self.STATUS_QUEUED),
+            )
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        finally:
+            conn.close()
+
+    def count_ready_for_indexing(self) -> int:
+        """Count insights done with content but not yet indexed in Qdrant."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM news_item_insights
+                WHERE status = %s
+                  AND indexed_in_qdrant_at IS NULL
+                  AND content IS NOT NULL
+                """,
+                (self.STATUS_DONE,),
+            )
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        finally:
+            conn.close()
+
+    def list_errors(self, news_item_ids: Optional[List[str]] = None) -> List[Dict]:
+        """List insight rows in error status (optionally filtered by IDs)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            if news_item_ids:
+                placeholders = ",".join(["%s"] * len(news_item_ids))
+                cursor.execute(
+                    f"""
+                    SELECT news_item_id, document_id, filename, title
+                    FROM news_item_insights
+                    WHERE status = %s AND news_item_id IN ({placeholders})
+                    ORDER BY news_item_id
+                    """,
+                    (self.STATUS_ERROR, *news_item_ids),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT news_item_id, document_id, filename, title
+                    FROM news_item_insights
+                    WHERE status = %s
+                    ORDER BY news_item_id
+                    """,
+                    (self.STATUS_ERROR,),
+                )
+            return [dict(r) for r in cursor.fetchall()]
+        finally:
+            conn.close()
+
     def enqueue(
         self,
         news_item_id: str,

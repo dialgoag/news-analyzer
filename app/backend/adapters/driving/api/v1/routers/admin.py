@@ -4,11 +4,11 @@ Admin router — reindex, memory, stats, logging, insights pipeline, data integr
 Uses `import app as app_module` for globals and helpers defined in app.py.
 """
 import os
-from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 import app as app_module
+from adapters.driving.api.v1.dependencies import AdminDataIntegrityServiceDep
 from adapters.driving.api.v1.schemas.admin_schemas import InsightsPipelineUpdate
 from backup_models import (
     BackupProviderCreate,
@@ -17,7 +17,6 @@ from backup_models import (
     BackupScheduleRequest,
 )
 from backup_service import backup_service
-from database import document_status_store
 from middleware import CurrentUser, require_admin
 
 router = APIRouter()
@@ -197,115 +196,13 @@ async def put_insights_pipeline_settings(
 
 
 @router.get("/data-integrity")
-async def get_data_integrity(current_user: CurrentUser = Depends(require_admin)):
+async def get_data_integrity(
+    current_user: CurrentUser = Depends(require_admin),
+    integrity_service: AdminDataIntegrityServiceDep = Depends(),
+):
     """Data integrity metrics: files vs DB, insights linkage, schema validation."""
     try:
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-
-        uploads_dir = app_module.UPLOAD_DIR
-        disk_files = set()
-        if os.path.isdir(uploads_dir):
-            disk_files = {f for f in os.listdir(uploads_dir) if f.endswith(".pdf")}
-
-        cursor.execute("SELECT COUNT(*) as total, COUNT(file_hash) as with_hash FROM document_status")
-        result = cursor.fetchone()
-        total_db, with_hash = result["total"], result["with_hash"]
-
-        cursor.execute("SELECT document_id FROM document_status")
-        db_doc_ids = {row["document_id"] for row in cursor.fetchall()}
-
-        orphaned_disk = disk_files - db_doc_ids
-        orphaned_db = db_doc_ids - disk_files
-        match_pct = round(len(disk_files & db_doc_ids) / (len(disk_files) or 1) * 100, 1)
-
-        if total_db > 0:
-            match_pct = round(len(disk_files & db_doc_ids) / max(len(disk_files), total_db) * 100, 1)
-
-        files = {
-            "total_disk": len(disk_files),
-            "total_db": total_db,
-            "match": match_pct,
-            "orphaned_count": len(orphaned_db),
-        }
-
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM news_item_insights nii
-            WHERE EXISTS (SELECT 1 FROM document_status ds WHERE ds.document_id = nii.document_id)
-        """
-        )
-        result = cursor.fetchone()
-        linked_insights = result[list(result.keys())[0]] if result else None
-
-        cursor.execute("SELECT COUNT(*) FROM news_item_insights")
-        result = cursor.fetchone()
-        total_insights = result[list(result.keys())[0]] if result else None
-
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM news_item_insights nii
-            WHERE NOT EXISTS (SELECT 1 FROM document_status ds WHERE ds.document_id = nii.document_id)
-        """
-        )
-        result = cursor.fetchone()
-        orphaned_insights = result[list(result.keys())[0]] if result else None
-
-        insights = {
-            "total": total_insights,
-            "linked": linked_insights,
-            "link_percentage": round((linked_insights / (total_insights or 1)) * 100, 1),
-            "orphaned_count": orphaned_insights,
-        }
-
-        cursor.execute("SELECT COUNT(*) FROM news_items")
-        result = cursor.fetchone()
-        news_total = result[list(result.keys())[0]] if result else None
-
-        cursor.execute("SELECT COALESCE(SUM(num_chunks), 0) FROM document_status")
-        result = cursor.fetchone()
-        chunks_total = result[list(result.keys())[0]] if result else 0
-
-        data_loss_percentage = 0.0
-        if total_db > 0 and len(orphaned_db) > 0:
-            data_loss_percentage = round(len(orphaned_db) / total_db * 100, 1)
-
-        schema = {"join_valid": True, "fk_active": False}
-
-        recommendations = []
-        if match_pct < 100:
-            recommendations.append(
-                {"priority": "high", "message": f"{len(orphaned_db)} registros en BD sin archivo físico"}
-            )
-        if orphaned_insights > 0:
-            recommendations.append(
-                {
-                    "priority": "medium",
-                    "message": f"{orphaned_insights} insights con documento inexistente",
-                }
-            )
-
-        overall = (
-            "healthy"
-            if match_pct >= 99 and orphaned_insights == 0
-            else "warning"
-            if match_pct >= 95
-            else "error"
-        )
-
-        conn.close()
-
-        return {
-            "overall_status": overall,
-            "timestamp": datetime.now().isoformat(),
-            "files": files,
-            "insights": insights,
-            "news_items": {"total": news_total},
-            "chunks": {"total": int(chunks_total)},
-            "data_loss_percentage": data_loss_percentage,
-            "schema": schema,
-            "recommendations": recommendations,
-        }
+        return integrity_service.get_data_integrity()
     except Exception as e:
         app_module.logger.error(f"Data integrity error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,35 +1,9 @@
 # CPU-only Dockerfile - Para macOS, Linux sin GPU, o desarrollo rápido
-# Sin CUDA, sin Tika embebido (usar OCR_ENGINE=ocrmypdf con ocr-service)
-# Build: ~5-8 min (vs 15-20 min con CUDA)
-FROM python:3.11-slim
-
-ENV HF_HOME=/root/.cache/huggingface
-ENV TRANSFORMERS_CACHE=/root/.cache/huggingface
-ENV SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface
+# Reutiliza imagen base (newsanalyzer-base:cpu) con dependencias pesadas ya instaladas
+ARG BASE_IMAGE=newsanalyzer-base:cpu
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
-
-# Dependencias del sistema (sin Java/Tika)
-RUN apt-get update && apt-get install -y \
-    git \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgl1 \
-    libglib2.0-0 \
-    libgomp1 \
-    curl \
-    unzip \
-    && rm -rf /var/lib/apt/lists/*
-
-# rclone para backups
-RUN curl -fsSL https://rclone.org/install.sh | bash
-
-# PyTorch CPU (mucho más ligero que CUDA)
-RUN pip install --no-cache-dir torch torchvision torchaudio
-
-# Upgrade pip
-RUN pip install --upgrade pip setuptools wheel
 
 # Dependencias Python
 COPY backend/requirements.txt .

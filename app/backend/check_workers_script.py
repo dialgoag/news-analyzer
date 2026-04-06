@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Script para verificar estado de workers y tareas pendientes.
+Script para verificar estado de workers y tareas pendientes usando los repositorios hexagonales.
 Ejecutar desde app/backend con: python check_workers_script.py
 Requiere: POSTGRES_* o DATABASE_URL en .env
 """
+import asyncio
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-# Asegurar que el backend está en el path
 backend_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(backend_dir))
 os.chdir(backend_dir)
@@ -23,128 +24,94 @@ if env_file.exists():
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
-from database import document_status_store
+from adapters.driven.persistence.postgres import (
+    PostgresWorkerRepository,
+    PostgresNewsItemRepository,
+)
 
-def main():
-    conn = document_status_store.get_connection()
-    cursor = conn.cursor()
+
+def _minutes_running(started_at) -> float:
+    if not started_at:
+        return 0.0
+    if isinstance(started_at, str):
+        try:
+            started_at = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        except ValueError:
+            return 0.0
+    if isinstance(started_at, datetime):
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - started_at
+        return max(delta.total_seconds() / 60.0, 0.0)
+    return 0.0
+
+
+async def main_async():
+    worker_repo = PostgresWorkerRepository()
+    news_repo = PostgresNewsItemRepository()
 
     print("=" * 70)
     print("VERIFICACIÓN DE WORKERS Y TAREAS PENDIENTES")
     print("=" * 70)
 
-    # 1. Worker tasks por estado
-    cursor.execute("""
-        SELECT status, COUNT(*) as count
-        FROM worker_tasks
-        GROUP BY status
-        ORDER BY status
-    """)
-    wt_summary = cursor.fetchall()
+    worker_summary = await worker_repo.get_worker_status_summary()
     print("\n📊 WORKER_TASKS por estado:")
-    for row in wt_summary:
-        print(f"   {row['status']}: {row['count']}")
+    for status, count in sorted(worker_summary.items()):
+        print(f"   {status}: {count}")
 
-    # 2. Workers activos (assigned/started) con tiempo de ejecución
-    cursor.execute("""
-        SELECT 
-            wt.worker_id, wt.task_type, wt.document_id, ds.filename,
-            wt.status, wt.started_at, wt.error_message,
-            EXTRACT(EPOCH FROM (NOW() - wt.started_at))/60 as minutes_running
-        FROM worker_tasks wt
-        LEFT JOIN document_status ds ON wt.document_id = ds.document_id
-        WHERE wt.status IN ('assigned', 'started')
-        ORDER BY wt.started_at ASC
-    """)
-    active = cursor.fetchall()
+    active = await worker_repo.list_active_with_documents()
     print(f"\n🔧 WORKERS ACTIVOS (assigned/started): {len(active)}")
-    stuck_count = 0
+    stuck = 0
     for row in active:
-        mins = row['minutes_running'] or 0
-        is_stuck = mins > 20
+        minutes = row.get("minutes_running")
+        if minutes is None:
+            minutes = _minutes_running(row.get("started_at"))
+        is_stuck = minutes > 20
         if is_stuck:
-            stuck_count += 1
+            stuck += 1
         flag = " ⚠️ STUCK (>20 min)" if is_stuck else ""
-        fn = row['filename'] or row['document_id'] or "-"
-        print(f"   {row['worker_id']} | {row['task_type']} | {fn[:40]} | {mins:.1f} min{flag}")
+        filename = row.get("filename") or row.get("document_id") or "-"
+        print(f"   {row.get('worker_id')} | {row.get('task_type')} | {filename[:40]} | {minutes:.1f} min{flag}")
+    if stuck:
+        print(f"\n   ⚠️ {stuck} worker(s) bloqueados (>20 min) - posible crash o deadlock")
 
-    if stuck_count > 0:
-        print(f"\n   ⚠️ {stuck_count} worker(s) bloqueados (>20 min) - posible crash o deadlock")
-
-    # 3. Workers con error (últimas 24h)
-    cursor.execute("""
-        SELECT wt.worker_id, wt.task_type, ds.filename, wt.error_message, wt.completed_at
-        FROM worker_tasks wt
-        LEFT JOIN document_status ds ON wt.document_id = ds.document_id
-        WHERE wt.status = 'error'
-        AND wt.completed_at > NOW() - INTERVAL '24 hours'
-        ORDER BY wt.completed_at DESC
-        LIMIT 15
-    """)
-    errors = cursor.fetchall()
+    errors = await worker_repo.list_recent_errors_with_documents(hours=24, limit=15)
     print(f"\n❌ WORKERS CON ERROR (últimas 24h): {len(errors)}")
     for row in errors[:5]:
-        err = (row['error_message'] or "")[:60]
-        print(f"   {row['task_type']} | {row['filename'] or row['worker_id']} | {err}...")
+        filename = row.get("filename") or row.get("worker_id")
+        error_message = (row.get("error_message") or "")[:60]
+        print(f"   {row.get('task_type')} | {filename} | {error_message}...")
 
-    # 4. Processing queue por tipo y estado
-    cursor.execute("""
-        SELECT task_type, status, COUNT(*) as count
-        FROM processing_queue
-        GROUP BY task_type, status
-        ORDER BY task_type, status
-    """)
-    pq = cursor.fetchall()
+    queue_status = await worker_repo.get_processing_queue_status()
     print("\n📋 PROCESSING_QUEUE:")
-    by_type = {}
-    for row in pq:
-        t = row['task_type']
-        if t not in by_type:
-            by_type[t] = {}
-        by_type[t][row['status']] = row['count']
-    for t in sorted(by_type.keys()):
-        s = by_type[t]
-        pending = s.get('pending', 0)
-        processing = s.get('processing', 0)
-        completed = s.get('completed', 0)
-        print(f"   {t}: pending={pending}, processing={processing}, completed={completed}")
+    for task_type in sorted(queue_status.keys()):
+        states = queue_status[task_type]
+        pending = states.get("pending", 0)
+        processing = states.get("processing", 0)
+        completed = states.get("completed", 0)
+        print(f"   {task_type}: pending={pending}, processing={processing}, completed={completed}")
 
-    # 5. Insights pendientes
-    cursor.execute("""
-        SELECT status, COUNT(*) FROM news_item_insights
-        GROUP BY status
-    """)
-    insights = cursor.fetchall()
+    insight_counts = await news_repo.count_insights_by_status()
     print("\n📰 NEWS_ITEM_INSIGHTS:")
-    for row in insights:
-        print(f"   {row['status']}: {row['count']}")
+    for status, count in sorted(insight_counts.items()):
+        print(f"   {status}: {count}")
 
-    # 6. Tareas huérfanas (processing sin worker activo)
-    cursor.execute("""
-        SELECT COUNT(*) as count
-        FROM processing_queue pq
-        WHERE pq.status = 'processing'
-        AND NOT EXISTS (
-            SELECT 1 FROM worker_tasks wt
-            WHERE wt.document_id = pq.document_id
-            AND wt.task_type = pq.task_type
-            AND wt.status IN ('assigned', 'started')
-        )
-    """)
-    orphaned = cursor.fetchone()['count']
-    if orphaned > 0:
+    orphaned = await worker_repo.count_processing_orphans()
+    if orphaned:
         print(f"\n⚠️ TAREAS HUÉRFANAS (processing sin worker): {orphaned}")
 
-    # 7. Límites de workers (env)
     pool_size = int(os.getenv("PIPELINE_WORKERS_COUNT", "20"))
     ocr_limit = int(os.getenv("OCR_PARALLEL_WORKERS", str(pool_size)))
     insights_limit = int(os.getenv("INSIGHTS_PARALLEL_WORKERS", str(pool_size)))
     indexing_limit = int(os.getenv("INDEXING_PARALLEL_WORKERS", "8"))
     indexing_insights_limit = int(os.getenv("INDEXING_INSIGHTS_PARALLEL_WORKERS", "8"))
-    print(f"\n⚙️ LÍMITES (env): pool={pool_size}, OCR={ocr_limit}, insights={insights_limit}, indexing={indexing_limit}, indexing_insights={indexing_insights_limit}")
+    print(
+        f"\n⚙️ LÍMITES (env): pool={pool_size}, OCR={ocr_limit}, "
+        f"insights={insights_limit}, indexing={indexing_limit}, indexing_insights={indexing_insights_limit}"
+    )
 
-    conn.close()
     print("\n" + "=" * 70)
 
+
 if __name__ == "__main__":
-    main()
+    asyncio.run(main_async())

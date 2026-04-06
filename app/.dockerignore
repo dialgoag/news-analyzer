@@ -1,0 +1,35 @@
+# Reduce backend build context when docker-compose builds from app/
+
+# Git & IDE metadata
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+
+# Env/config secrets
+.env
+.env.*
+
+# Python/Node build artifacts
+__pycache__/
+*.py[cod]
+node_modules/
+
+# Logs
+*.log
+
+# Large local volumes and caches (these made the context 5+ GB)
+local-data/
+temp/
+
+# Directories unrelated to backend image contents
+frontend/
+ocr-service/
+benchmark/
+docs/
+cleanup_reports/
+
+# Misc scripts/tests not needed inside the image
+test_endpoints_fase5e.py
+test_fase5e_simple.py

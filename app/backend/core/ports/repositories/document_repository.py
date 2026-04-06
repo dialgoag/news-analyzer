@@ -48,6 +48,10 @@ class DocumentRepository(ABC):
         """
         pass
     
+    def get_by_sha256_sync(self, sha256: str) -> Optional[Document]:
+        """SYNC version - Get document by SHA256 hash."""
+        pass
+    
     @abstractmethod
     async def save(self, document: Document) -> None:
         """
@@ -59,6 +63,10 @@ class DocumentRepository(ABC):
         Raises:
             ValueError: If document is invalid
         """
+        pass
+    
+    def save_sync(self, document: Document) -> None:
+        """SYNC version - Save document (insert or update)."""
         pass
     
     @abstractmethod
@@ -112,22 +120,51 @@ class DocumentRepository(ABC):
     
     @abstractmethod
     async def update_status(
-        self, 
-        document_id: DocumentId, 
+        self,
+        document_id: DocumentId,
         status: PipelineStatus,
-        error_message: Optional[str] = None
+        *,
+        indexed_at: Optional[str] = None,
+        error_message: Optional[str] = None,
+        num_chunks: Optional[int] = None,
+        news_date: Optional[str] = None,
+        processing_stage: Optional[str] = None,
+        clear_indexed_at: bool = False,
+        clear_error_message: bool = False,
     ) -> None:
         """
         Update document status.
-        
+
         Args:
             document_id: Document identifier
             status: New status
+            indexed_at: Optional ISO timestamp for indexing completion
             error_message: Error message if status is error
-        
+            num_chunks: Optional chunk count
+            news_date: Optional news_date update
+            processing_stage: Optional string stage marker
+            clear_indexed_at: If True, sets indexed_at to NULL
+            clear_error_message: If True, clears error_message field
+
         Raises:
             ValueError: If document not found
         """
+        pass
+
+    def update_status_sync(
+        self,
+        document_id: str,
+        status: PipelineStatus,
+        *,
+        indexed_at: Optional[str] = None,
+        error_message: Optional[str] = None,
+        num_chunks: Optional[int] = None,
+        news_date: Optional[str] = None,
+        processing_stage: Optional[str] = None,
+        clear_indexed_at: bool = False,
+        clear_error_message: bool = False,
+    ) -> None:
+        """SYNC version - Update document status with optional metadata."""
         pass
     
     @abstractmethod
@@ -219,4 +256,55 @@ class DocumentRepository(ABC):
         ocr_text: Optional[str]
     ) -> None:
         """SYNC version - Store OCR text."""
+        pass
+
+    def list_all_sync(
+        self,
+        skip: int = 0,
+        limit: Optional[int] = None,
+        *,
+        status: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> List[dict]:
+        """
+        SYNC version - List documents with optional filters (returns dicts).
+
+        Args:
+            skip: Number of rows to skip
+            limit: Maximum rows to return (None = no limit)
+            status: Optional pipeline status string
+            source: Optional source filter
+        """
+        pass
+
+    def delete_sync(self, document_id: str) -> None:
+        """SYNC version - Delete a document by ID."""
+        pass
+
+    @abstractmethod
+    async def get_status_summary(self) -> dict:
+        """Return aggregated counts of documents by key statuses and stages."""
+        pass
+
+    def list_ids_sync(self) -> List[str]:
+        """SYNC version - Return all document IDs."""
+        pass
+
+    def list_ids_by_news_date_sync(self, report_date: str) -> List[str]:
+        """
+        SYNC version - Return document IDs elegible para reportes en una fecha específica.
+
+        Args:
+            report_date: Fecha (YYYY-MM-DD).
+        """
+        pass
+
+    def list_ids_by_news_date_range_sync(self, start_date: str, end_date: str) -> List[str]:
+        """
+        SYNC version - Return document IDs elegibles para reportes en un rango de fechas.
+
+        Args:
+            start_date: Fecha inicial (YYYY-MM-DD).
+            end_date: Fecha final (YYYY-MM-DD).
+        """
         pass

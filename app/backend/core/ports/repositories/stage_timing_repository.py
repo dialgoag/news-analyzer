@@ -148,3 +148,12 @@ class StageTimingRepository(ABC):
     ) -> None:
         """SYNC version - Record stage end."""
         pass
+
+    @abstractmethod
+    async def delete_for_document(self, document_id: str) -> None:
+        """Delete all timing records for a document."""
+        pass
+
+    def delete_for_document_sync(self, document_id: str) -> None:
+        """SYNC version - Delete timing records for a document."""
+        pass

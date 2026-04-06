@@ -4,7 +4,7 @@ PostgreSQL Worker Repository Implementation.
 Maps between database rows and Domain entities.
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 import uuid
 
@@ -479,6 +479,183 @@ class PostgresWorkerRepository(BasePostgresRepository, WorkerRepository):
             import logging
             logging.getLogger(__name__).error(f"Error assigning worker: {e}")
             return False
+        finally:
+            self.release_connection(conn)
+
+    async def list_active_with_documents(self) -> List[dict]:
+        """Return active workers joined with document metadata."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT wt.worker_id, wt.task_type, wt.document_id, wt.status,
+                       wt.started_at, wt.error_message, wt.completed_at,
+                       ds.filename
+                FROM worker_tasks wt
+                LEFT JOIN document_status ds ON wt.document_id = ds.document_id
+                WHERE wt.status IN ('assigned', 'started')
+                ORDER BY wt.task_type, wt.document_id
+                """
+            )
+            rows = cursor.fetchall()
+            return [self.map_row_to_dict(cursor, row) for row in rows]
+        finally:
+            self.release_connection(conn)
+
+    async def list_recent_errors_with_documents(
+        self,
+        hours: int = 24,
+        limit: int = 50
+    ) -> List[dict]:
+        """Return recent error workers with document metadata."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT wt.worker_id, wt.task_type, wt.document_id, wt.status,
+                       wt.started_at, wt.error_message, wt.completed_at,
+                       ds.filename
+                FROM worker_tasks wt
+                LEFT JOIN document_status ds ON wt.document_id = ds.document_id
+                WHERE wt.status = 'error'
+                  AND wt.completed_at > NOW() - (%s * INTERVAL '1 hour')
+                ORDER BY wt.completed_at DESC
+                LIMIT %s
+                """,
+                (hours, limit)
+            )
+            rows = cursor.fetchall()
+            return [self.map_row_to_dict(cursor, row) for row in rows]
+        finally:
+            self.release_connection(conn)
+
+    async def get_worker_status_summary(self) -> Dict[str, int]:
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM worker_tasks
+                GROUP BY status
+                ORDER BY status
+                """
+            )
+            rows = cursor.fetchall()
+            return {
+                row["status"]: int(row["count"])
+                for row in (self.map_row_to_dict(cursor, row) for row in rows)
+            }
+        finally:
+            self.release_connection(conn)
+
+    async def get_pending_task_counts(self) -> dict:
+        """Return counts of pending processing_queue tasks grouped by task_type."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT task_type, COUNT(*) AS count
+                FROM processing_queue
+                WHERE status = 'pending'
+                GROUP BY task_type
+                """
+            )
+            rows = cursor.fetchall()
+            dict_rows = [self.map_row_to_dict(cursor, row) for row in rows]
+            return {row["task_type"]: int(row["count"]) for row in dict_rows}
+        finally:
+            self.release_connection(conn)
+
+    async def reset_processing_tasks(self) -> dict:
+        """Reset processing_queue tasks back to pending and return counts by task_type."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT task_type, COUNT(*) AS count
+                FROM processing_queue
+                WHERE status = 'processing'
+                GROUP BY task_type
+                """
+            )
+            rows = cursor.fetchall()
+            stats_rows = [self.map_row_to_dict(cursor, row) for row in rows]
+            stats = {row["task_type"]: int(row["count"]) for row in stats_rows}
+            cursor.execute(
+                """
+                UPDATE processing_queue
+                SET status = 'pending'
+                WHERE status = 'processing'
+                """
+            )
+            conn.commit()
+            return stats
+        finally:
+            self.release_connection(conn)
+
+    async def delete_active_worker_tasks(self) -> int:
+        """Delete worker_tasks currently assigned or started."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                DELETE FROM worker_tasks
+                WHERE status IN ('assigned', 'started')
+                """
+            )
+            deleted = cursor.rowcount
+            conn.commit()
+            return deleted
+        finally:
+            self.release_connection(conn)
+
+    async def get_processing_queue_status(self) -> dict:
+        """Return counts of processing_queue grouped by task_type and status."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT task_type, status, COUNT(*) AS count
+                FROM processing_queue
+                GROUP BY task_type, status
+                """
+            )
+            rows = cursor.fetchall()
+            result: Dict[str, Dict[str, int]] = {}
+            for row in (self.map_row_to_dict(cursor, row) for row in rows):
+                task_type = row["task_type"]
+                status = row["status"]
+                result.setdefault(task_type, {})[status] = int(row["count"])
+            return result
+        finally:
+            self.release_connection(conn)
+
+    async def count_processing_orphans(self) -> int:
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM processing_queue pq
+                WHERE pq.status = 'processing'
+                AND NOT EXISTS (
+                    SELECT 1 FROM worker_tasks wt
+                    WHERE wt.document_id = pq.document_id
+                    AND wt.task_type = pq.task_type
+                    AND wt.status IN ('assigned', 'started')
+                )
+                """
+            )
+            row = cursor.fetchone() or {"count": 0}
+            return int(row.get("count") or 0)
         finally:
             self.release_connection(conn)
     

@@ -6,7 +6,7 @@ Adapters implement this interface for different persistence mechanisms.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, List
+from typing import Optional, List, Sequence, Tuple
 from datetime import datetime
 
 from core.domain.entities.news_item import NewsItem
@@ -166,4 +166,22 @@ class NewsItemRepository(ABC):
         Returns:
             True if news item exists, False otherwise
         """
+        pass
+
+    def count_all_sync(self) -> int:
+        """SYNC version - Count total news items."""
+        pass
+
+    def count_insights_linkage_sync(self, document_ids: Sequence[str]) -> Tuple[int, int]:
+        """
+        SYNC version - Return (total_insights, linked_insights) for given document IDs.
+
+        Args:
+            document_ids: Iterable of document IDs to check linkage.
+        """
+        pass
+
+    @abstractmethod
+    async def count_insights_by_status(self) -> dict:
+        """Return counts of news_item_insights grouped by status."""
         pass

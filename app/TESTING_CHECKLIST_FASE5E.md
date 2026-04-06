@@ -15,7 +15,7 @@
 **Solución**: Comentada línea `COPY backend/worker_pool.py .`  
 **Archivos**: 
 - `app/backend/Dockerfile.cpu` línea 53
-- `app/backend/Dockerfile` línea 44
+- `app/backend/docker/cuda/Dockerfile` línea 44
 
 ### 2. GET /api/documents/{id}/download
 **Problema**: Usaba `document_status_store.get()` en lugar del migrado `document_repository.get_by_id_sync()`  

@@ -198,6 +198,49 @@ const useDashboardFilters = () => {
 
 #### Visualizaciones:
 
+---
+
+## 5. Auditoría admin/dashboard (2026-04-06)
+
+> Resultado solicitado en **PEND-011**. Mapeamos cada métrica expuesta hoy por los routers `admin.py` y `dashboard.py` para poder migrarlos a los puertos hexagonales sin perder datos.
+
+### 5.1 Endpoints vs dependencias
+
+| Endpoint | Bloques principales | Dependencias legacy actuales | Fuente hexagonal propuesta |
+|----------|--------------------|------------------------------|---------------------------|
+| `GET /api/dashboard/summary` | files, news_items, ocr, chunking, indexing, insights, errors | `document_status_store`, `news_item_store`, `news_item_insights_store`, `processing_queue`, `os.listdir(INBOX_DIR)` | `DocumentRepository` (aggregates por status), `StageTimingRepository` (date_first/date_last si se requiere), `NewsItemRepository`, `NewsItemInsightsRepository`, `ProcessingQueueRepository`, `InboxFileService`/`FileIngestionService` (conteo físico) |
+| `GET /api/dashboard/analysis` | error groups, pipeline analysis, worker stats, queue health | `document_status_store`, `news_item_insights_store`, `processing_queue`, `pipeline_runtime_store`, filesystem | `DocumentRepository`, `NewsItemInsightsRepository`, `ProcessingQueueRepository`, `WorkerRepository`, `StageTimingRepository`, `InboxFileService` |
+| `GET /api/dashboard/parallel-data` | parallel coordinates (docs + news) | `document_repository.list_all_sync()` (ya hexagonal), `news_item_store`, `_fetch_parallel_news_items` (usa raw SQL) | `DocumentRepository` (paginación), `NewsItemRepository` (por doc_id), nuevo `DashboardQueryService` para componer payload |
+| `GET /api/admin/data-integrity` | archivos vs DB, insights vinculados, news totals | `document_status_store`, `news_item_insights_store`, `news_item_store`, filesystem uploads | `DocumentRepository` (counts, file_hash coverage), `NewsItemRepository`, `NewsItemInsightsRepository`, `StageTimingRepository` (chunks/metadata), `UploadsInventoryService` |
+
+### 5.2 Matriz Métrica → Fuente futura
+
+| Métrica (router summary/analysis/admin) | Hoy se obtiene de | Fuente propuesta | Notas |
+|-----------------------------------------|-------------------|------------------|-------|
+| `files.total`, `files.completed`, `files.processing`, `files.errors` | `document_status` con SQL directo | `DocumentRepository.stats_by_status()` devolviendo conteos por `PipelineStatus` | Requiere método sync + filtros por stage.
+| `files.inbox_count` / `inbox_documents` | `os.listdir(INBOX_DIR)` | `InboxFileService.get_pending_files()` (wrap sobre filesystem o tabla `inbox_files`) | Mantener dependencia a FS pero centralizada y mockeable.
+| `news_items.total/done/pending/errors` | JOIN `news_items` + `news_item_insights` | `NewsItemRepository.aggregate_statuses()` y `NewsItemInsightsRepository.count_by_status()` | Debe exponer totales por `news_date` para cálculos derivados.
+| `ocr/chunking/indexing` queues | `processing_queue` consulta directa | `ProcessingQueueRepository.count_by_task_type(task_type)` | También devuelve `pending/processing/completed` y permite filtrar por prioridad.
+| `insights.eta_seconds` | Heurística local con `pending`/`parallel_workers` | `InsightsWorkerService.estimate_eta(pending_count)` | Usa config real (`INSIGHTS_PARALLEL_WORKERS`).
+| `errors` (agrupadas) | `document_status` + `news_item_insights_store` | `DocumentRepository.list_errors_grouped()` y `NewsItemInsightsRepository.list_errors_grouped()` | Deben normalizar `error_message` y stage.
+| `data_integrity.files.match_pct` | Diferencia `document_status` vs uploads dir | `UploadsInventoryService.compare_repo_vs_disk()` | Reporta `orphaned_disk` y `orphaned_db`.
+| `data_integrity.insights.link_percentage` | `news_item_insights` subqueries | `NewsItemInsightsRepository.linkage_summary()` (JOIN con DocumentRepository) | Debe exponer `linked`, `orphaned`, `total`.
+| `chunks.total` y `chunks.total_chunks` | `document_status.num_chunks`, `news_items` count directo | `DocumentRepository.sum_chunks()` y `NewsItemRepository.count_all()` | Considerar mover estos campos a vista materializada si son costosos.
+| `parallel-data.news_items_total` | `news_item_store.get_counts_by_document_ids` | `NewsItemRepository.count_by_document_ids(doc_ids)` | Consolidar en repos/servicio compartido.
+
+### 5.3 Recomendaciones
+
+1. **Crear `DashboardMetricsService`** que orqueste los repositorios y exponga DTOs (`DashboardSummary`, `DashboardAnalysis`). Así evitamos mezclar SQL en los routers.
+2. **Encapsular filesystem**: agregar `InboxFileService` (para INBOX) y `UploadInventoryService` (para uploads) con adaptadores inyectables; ambos pueden vivir en `adapters/driven/filesystem`.
+3. **Exponer métodos agregados en repositorios**:
+   - `DocumentRepository.stats_by_stage(stage: StageEnum)`
+   - `ProcessingQueueRepository.counts(task_type)`
+   - `NewsItemRepository.count_distinct_by_status(status)`
+   - `NewsItemInsightsRepository.group_errors()`
+4. **Checklist de validación** (para PEND-012): antes/después de migrar, capturar snapshot de `files`, `insights`, `data_integrity` y compararlo; documentar en `TESTING_DASHBOARD_INTERACTIVE.md`.
+
+Con esta matriz cerramos la parte documental de PEND-011 y podemos planificar la migración de código (PEND-010) sin sorpresas.
+
 1. **Word Cloud Interactivo**:
    - Palabras clave extraídas de insights
    - Tamaño = frecuencia

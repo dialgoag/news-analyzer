@@ -9,6 +9,7 @@ from .document_repository_impl import PostgresDocumentRepository
 from .news_item_repository_impl import PostgresNewsItemRepository
 from .worker_repository_impl import PostgresWorkerRepository
 from .stage_timing_repository_impl import PostgresStageTimingRepository
+from .dashboard_read_repository_impl import PostgresDashboardReadRepository
 
 __all__ = [
     "BasePostgresRepository",
@@ -16,4 +17,5 @@ __all__ = [
     "PostgresNewsItemRepository",
     "PostgresWorkerRepository",
     "PostgresStageTimingRepository",
+    "PostgresDashboardReadRepository",
 ]

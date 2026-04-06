@@ -45,9 +45,9 @@ Build con caché (más rápido): `make rebuild-frontend` / `make rebuild-backend
 
 | Plataforma | Comando | Dockerfile | OCR |
 |------------|---------|------------|-----|
-| **Mac / Linux sin GPU** | `docker compose up -d` | `Dockerfile.cpu` | ocrmypdf (ocr-service) |
-| **Linux + NVIDIA** | `COMPOSE_FILE=docker-compose.yml:docker-compose.nvidia.yml docker compose up -d` | `Dockerfile` (CUDA) | tika |
-| **Linux + AMD ROCm** | `COMPOSE_FILE=docker-compose.yml:docker-compose.amd.yml docker compose up -d` | `Dockerfile.cpu` | ocrmypdf |
+| **Mac / Linux sin GPU** | `docker compose up -d` | `backend/Dockerfile.cpu` | ocrmypdf (ocr-service) |
+| **Linux + NVIDIA** | `COMPOSE_FILE=docker-compose.yml:docker-compose.nvidia.yml docker compose up -d` | `backend/docker/cuda/Dockerfile` | tika |
+| **Linux + AMD ROCm** | `COMPOSE_FILE=docker-compose.yml:docker-compose.amd.yml docker compose up -d` | `backend/Dockerfile.cpu` | ocrmypdf |
 
 El compose principal (`docker-compose.yml`) usa **CPU por defecto**. Los overrides de GPU son opcionales.
 
@@ -57,12 +57,27 @@ El compose principal (`docker-compose.yml`) usa **CPU por defecto**. Los overrid
 
 | Archivo | Propósito |
 |---------|-----------|
-| `docker-compose.yml` | Compose principal. Backend con `Dockerfile.cpu`, OCR via ocr-service |
+| `docker-compose.yml` | Compose principal. Backend con `backend/Dockerfile.cpu`, OCR via ocr-service |
 | `docker-compose.nvidia.yml` | Override: backend con CUDA, Tika embebido, GPU asignada |
 | `docker-compose.amd.yml` | Override: Ollama con imagen ROCm, dispositivos `/dev/kfd`, `/dev/dri` |
-| `backend/Dockerfile.cpu` | Imagen CPU: PyTorch CPU, sin Java/Tika, ~5-8 min build |
-| `backend/Dockerfile` | Imagen CUDA: PyTorch CUDA 12.8, Tika, ~15-20 min build |
-| `build.sh` | Script de build: detecta GPU o usa `GPU_TYPE` del `.env` |
+| `backend/Dockerfile.cpu` | Imagen CPU (deriva de `newsanalyzer-base:cpu`) |
+| `backend/docker/cuda/Dockerfile` | Imagen CUDA (deriva de `newsanalyzer-base:cuda`) |
+| `backend/docker/base/cpu/Dockerfile` | Imagen base CPU (apt + rclone + PyTorch CPU) |
+| `backend/docker/base/cuda/Dockerfile` | Imagen base CUDA (apt + Java + PyTorch CUDA) |
+| `build.sh` | Script de build: detecta GPU o usa `GPU_TYPE` y construye la base si falta |
+
+---
+
+### 2.1 Imágenes base y flujo de build
+
+- **Objetivo**: mover las capas lentas (apt, Java, PyTorch) a una imagen reutilizable (`newsanalyzer-base:{cpu|cuda}`) y dejar que el Dockerfile copie solo código + `pip install -r requirements.txt`.
+- **Construcción**:
+  - CPU (default): `docker build -f backend/docker/base/cpu/Dockerfile -t newsanalyzer-base:cpu .`
+  - CUDA: `docker build -f backend/docker/base/cuda/Dockerfile -t newsanalyzer-base:cuda .`
+- `app/build.sh` y `../complete_build.sh` verifican automáticamente si la base existe y la construyen (primer build ≈20‑30 min, rebuilds ≈2‑3 min).
+- Puedes sobreescribir los tags con `BASE_CPU_TAG` / `BASE_CUDA_TAG` al invocar los scripts si necesitas versionarlos.
+- Los Dockerfiles finales usan `FROM newsanalyzer-base:{cpu|cuda}`; al construir con el builder clásico de Docker (ver abajo) se reutiliza la imagen local sin intentar pull del registry. Si necesitas apuntar a un registry distinto, pasa `--build-arg BASE_IMAGE=<registry>/<imagen>:tag`.
+- Como Docker Compose usa BuildKit por defecto (que siempre intenta bajar todas las bases), los targets `make build/deploy/...` exportan `DOCKER_BUILDKIT=0` y `COMPOSE_DOCKER_CLI_BUILD=0` para forzar el builder clásico y reutilizar las imágenes locales. Si prefieres BuildKit necesitas publicar las bases en un registry accesible y ajustar `BASE_IMAGE`.
 
 ---
 
@@ -107,6 +122,7 @@ cd app
 ```
 
 `build.sh` usa `GPU_TYPE` del `.env` o detecta `nvidia-smi` en Linux.
+Si la imagen base correspondiente no existe, la construye antes de lanzar el `docker compose build backend`.
 
 ### 3.5 Rebuild tras cambios en código (backend/frontend)
 

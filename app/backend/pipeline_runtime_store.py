@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg2.extras
 
-from database import document_status_store
+from adapters.driven.persistence.postgres.base import BasePostgresRepository
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +44,32 @@ def _pause_key(step_id: str) -> str:
     return f"pause.{step_id}"
 
 
+def _row_get(row: Any, key: str, idx: int) -> Any:
+    """Read value from dict-like or tuple-like DB row."""
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row.get(key)
+    try:
+        return row[idx]
+    except Exception:
+        return None
+
+
+class _PipelineRuntimeRepository(BasePostgresRepository):
+    """Lightweight helper to access pipeline_runtime_kv without legacy stores."""
+    pass
+
+
+_runtime_repo = _PipelineRuntimeRepository()
+
+
 def _conn():
-    return document_status_store.get_connection()
+    return _runtime_repo.get_connection()
+
+
+def _release(conn):
+    _runtime_repo.release_connection(conn)
 
 
 def get_pause(step_id: str) -> bool:
@@ -58,14 +82,15 @@ def get_pause(step_id: str) -> bool:
             (key,),
         )
         row = cur.fetchone()
-        if not row or row.get("value") is None:
+        value = _row_get(row, "value", 0)
+        if value is None:
             return False
-        v = row["value"]
+        v = value
         if isinstance(v, dict):
             return bool(v.get("paused"))
         return False
     finally:
-        conn.close()
+        _release(conn)
 
 
 def set_pause(step_id: str, paused: bool) -> None:
@@ -85,7 +110,7 @@ def set_pause(step_id: str, paused: bool) -> None:
         )
         conn.commit()
     finally:
-        conn.close()
+        _release(conn)
 
 
 def set_all_pauses(paused: bool) -> None:
@@ -103,9 +128,10 @@ def get_insights_llm() -> Dict[str, Any]:
             (INSIGHTS_LLM_KEY,),
         )
         row = cur.fetchone()
-        if not row or not row.get("value"):
+        value = _row_get(row, "value", 0)
+        if not value:
             return dict(_DEFAULT_LLM)
-        v = row["value"]
+        v = value
         if not isinstance(v, dict):
             return dict(_DEFAULT_LLM)
         mode = v.get("mode") if v.get("mode") in ("auto", "manual") else "auto"
@@ -118,7 +144,7 @@ def get_insights_llm() -> Dict[str, Any]:
             out["ollama_model"] = om
         return out
     finally:
-        conn.close()
+        _release(conn)
 
 
 def write_insights_llm(
@@ -157,7 +183,7 @@ def write_insights_llm(
         )
         conn.commit()
     finally:
-        conn.close()
+        _release(conn)
 
 
 def set_insights_llm(mode: str, order: List[str]) -> None:
@@ -179,9 +205,14 @@ def load_full_snapshot() -> Dict[str, Any]:
         )
         rows = cur.fetchall()
     finally:
-        conn.close()
+        _release(conn)
 
-    by_key = {r["key"]: r["value"] for r in rows}
+    by_key: Dict[str, Any] = {}
+    for r in rows:
+        k = _row_get(r, "key", 0)
+        v = _row_get(r, "value", 1)
+        if k:
+            by_key[k] = v
     pause_steps = []
     for step_id, label in KNOWN_PAUSE_STEPS:
         pk = _pause_key(step_id)

@@ -4,7 +4,7 @@ PostgreSQL Document Repository Implementation.
 Maps between database rows and Domain entities.
 """
 
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from datetime import datetime
 
 from core.domain.entities.document import Document, DocumentType
@@ -23,6 +23,14 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
     - Database: document_status table (status as string)
     - Domain: Document entity (status as PipelineStatus)
     """
+
+    REPORT_ELIGIBLE_STATUSES: Tuple[str, ...] = (
+        "indexing_done",
+        "insights_pending",
+        "insights_processing",
+        "insights_done",
+        "completed",
+    )
     
     async def get_by_id(self, document_id: DocumentId) -> Optional[Document]:
         """Get document by ID."""
@@ -54,23 +62,16 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT document_id, filename, source, status, ingested_at, 
-                       news_date, file_hash, ocr_text, doc_type, error_message,
-                       processing_stage, num_chunks, indexed_at, reprocess_requested,
-                       created_at, updated_at
-                FROM document_status
-                WHERE file_hash = %s
-                """,
-                (sha256,)
-            )
-            row = cursor.fetchone()
-            
-            if not row:
-                return None
-            
-            return self._map_row_to_entity(cursor, row)
+            return self._fetch_document_by_hash(cursor, sha256)
+        finally:
+            self.release_connection(conn)
+    
+    def get_by_sha256_sync(self, sha256: str) -> Optional[Document]:
+        """SYNC version - Get document by SHA256 hash."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            return self._fetch_document_by_hash(cursor, sha256)
         finally:
             self.release_connection(conn)
     
@@ -78,80 +79,104 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
         """Save document (insert or update)."""
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
-            
-            # Check if exists
-            cursor.execute(
-                "SELECT document_id FROM document_status WHERE document_id = %s",
-                (document.id.value,)
-            )
-            exists = cursor.fetchone()
-            
-            status_str = self.map_status_from_domain(document.status)
-            
-            if exists:
-                # Update existing
-                # NOTE: Update ALL relevant fields from Document entity
-                # Trigger handles updated_at automatically
-                cursor.execute(
-                    """
-                    UPDATE document_status
-                    SET filename = %s, source = %s, status = %s, 
-                        news_date = %s, file_hash = %s, ocr_text = %s,
-                        doc_type = %s, error_message = %s, processing_stage = %s,
-                        num_chunks = %s, indexed_at = %s, reprocess_requested = %s
-                    WHERE document_id = %s
-                    """,
-                    (
-                        document.filename,
-                        document.source,
-                        status_str,
-                        document.news_date,
-                        document.content_hash.value if document.content_hash else document.sha256,
-                        document.ocr_text,
-                        document.document_type.value,
-                        document.error_message,
-                        document.processing_stage,
-                        document.num_chunks,
-                        document.indexed_at,
-                        1 if document.reprocess_requested else 0,
-                        document.id.value
-                    )
-                )
-            else:
-                # Insert new
-                # NOTE: Map document fields to DB (NO stage timestamps - those go to document_stage_timing)
-                cursor.execute(
-                    """
-                    INSERT INTO document_status
-                    (document_id, filename, source, status, ingested_at, news_date, 
-                     file_hash, ocr_text, doc_type, error_message, processing_stage, 
-                     num_chunks, indexed_at, reprocess_requested, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        document.id.value,
-                        document.filename,
-                        document.source,
-                        status_str,
-                        document.ingested_at,
-                        document.news_date,
-                        document.content_hash.value if document.content_hash else document.sha256,
-                        document.ocr_text,
-                        document.document_type.value,
-                        document.error_message,
-                        document.processing_stage,
-                        document.num_chunks,
-                        document.indexed_at,  # LEGACY
-                        1 if document.reprocess_requested else 0,
-                        document.created_at,
-                        document.updated_at
-                    )
-                )
-            
-            conn.commit()
+            self._save_document(conn, document)
         finally:
             self.release_connection(conn)
+    
+    def save_sync(self, document: Document) -> None:
+        """SYNC version - Save document."""
+        conn = self.get_connection()
+        try:
+            self._save_document(conn, document)
+        finally:
+            self.release_connection(conn)
+    
+    def _save_document(self, conn, document: Document) -> None:
+        cursor = conn.cursor()
+        
+        # Check if exists
+        cursor.execute(
+            "SELECT document_id FROM document_status WHERE document_id = %s",
+            (document.id.value,)
+        )
+        exists = cursor.fetchone()
+        
+        status_str = self.map_status_from_domain(document.status)
+        
+        if exists:
+            # Update existing
+            cursor.execute(
+                """
+                UPDATE document_status
+                SET filename = %s, source = %s, status = %s, 
+                    news_date = %s, file_hash = %s, ocr_text = %s,
+                    doc_type = %s, error_message = %s, processing_stage = %s,
+                    num_chunks = %s, indexed_at = %s, reprocess_requested = %s
+                WHERE document_id = %s
+                """,
+                (
+                    document.filename,
+                    document.source,
+                    status_str,
+                    document.news_date,
+                    document.content_hash.value if document.content_hash else document.sha256,
+                    document.ocr_text,
+                    document.document_type.value,
+                    document.error_message,
+                    document.processing_stage,
+                    document.num_chunks,
+                    document.indexed_at,
+                    1 if document.reprocess_requested else 0,
+                    document.id.value
+                )
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO document_status
+                (document_id, filename, source, status, ingested_at, news_date, 
+                 file_hash, ocr_text, doc_type, error_message, processing_stage, 
+                 num_chunks, indexed_at, reprocess_requested, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    document.id.value,
+                    document.filename,
+                    document.source,
+                    status_str,
+                    document.ingested_at,
+                    document.news_date,
+                    document.content_hash.value if document.content_hash else document.sha256,
+                    document.ocr_text,
+                    document.document_type.value,
+                    document.error_message,
+                    document.processing_stage,
+                    document.num_chunks,
+                    document.indexed_at,
+                    1 if document.reprocess_requested else 0,
+                    document.created_at,
+                    document.updated_at
+                )
+            )
+        
+        conn.commit()
+    
+    def _fetch_document_by_hash(self, cursor, sha256: str) -> Optional[Document]:
+        cursor.execute(
+            """
+            SELECT document_id, filename, source, status, ingested_at, 
+                   news_date, file_hash, ocr_text, doc_type, error_message,
+                   processing_stage, num_chunks, indexed_at, reprocess_requested,
+                   created_at, updated_at
+            FROM document_status
+            WHERE file_hash = %s
+            """,
+            (sha256,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return self._map_row_to_entity(cursor, row)
     
     async def list_by_status(
         self, 
@@ -252,22 +277,55 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
         self, 
         document_id: DocumentId, 
         status: PipelineStatus,
-        error_message: Optional[str] = None
+        *,
+        indexed_at: Optional[str] = None,
+        error_message: Optional[str] = None,
+        num_chunks: Optional[int] = None,
+        news_date: Optional[str] = None,
+        processing_stage: Optional[str] = None,
+        clear_indexed_at: bool = False,
+        clear_error_message: bool = False,
     ) -> None:
-        """Update document status."""
+        """Update document status and optional metadata."""
         status_str = self.map_status_from_domain(status)
         
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute(
-                """
+            updates = ["status = %s"]
+            params = [status_str]
+            
+            if clear_indexed_at:
+                updates.append("indexed_at = NULL")
+            elif indexed_at is not None:
+                updates.append("indexed_at = %s")
+                params.append(indexed_at)
+            
+            if clear_error_message:
+                updates.append("error_message = NULL")
+            elif error_message is not None:
+                updates.append("error_message = %s")
+                params.append(error_message)
+            
+            if num_chunks is not None:
+                updates.append("num_chunks = %s")
+                params.append(num_chunks)
+            
+            if news_date is not None:
+                updates.append("news_date = %s")
+                params.append(news_date)
+            
+            if processing_stage is not None:
+                updates.append("processing_stage = %s")
+                params.append(processing_stage)
+            
+            params.append(document_id.value)
+            query = f"""
                 UPDATE document_status
-                SET status = %s, error_message = %s
+                SET {', '.join(updates)}
                 WHERE document_id = %s
-                """,
-                (status_str, error_message, document_id.value)
-            )
+            """
+            cursor.execute(query, tuple(params))
             
             if cursor.rowcount == 0:
                 raise ValueError(f"Document not found: {document_id.value}")
@@ -395,7 +453,7 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
                 UPDATE document_status
                 SET reprocess_requested = %s
                 WHERE document_id = %s
-            """, (requested, str(document_id)))
+            """, (1 if requested else 0, str(document_id)))
             conn.commit()
         finally:
             self.release_connection(conn)
@@ -451,7 +509,7 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
                 UPDATE document_status
                 SET reprocess_requested = %s
                 WHERE document_id = %s
-            """, (requested, document_id))
+            """, (1 if requested else 0, document_id))
             conn.commit()
         finally:
             self.get_connection_pool().putconn(conn)
@@ -486,18 +544,201 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             return self.map_row_to_dict(cursor, row)
         finally:
             self.get_connection_pool().putconn(conn)
-    
-    def list_all_sync(self, skip: int = 0, limit: int = 100) -> List[dict]:
-        """SYNC version - List all documents (returns dicts for legacy compat)."""
+
+    def update_status_sync(
+        self,
+        document_id: str,
+        status: PipelineStatus,
+        *,
+        indexed_at: Optional[str] = None,
+        error_message: Optional[str] = None,
+        num_chunks: Optional[int] = None,
+        news_date: Optional[str] = None,
+        processing_stage: Optional[str] = None,
+        clear_indexed_at: bool = False,
+        clear_error_message: bool = False,
+    ) -> None:
+        """SYNC version - Update document status and metadata."""
+        status_str = self.map_status_from_domain(status)
         conn = self.get_connection_pool().getconn()
         try:
             cursor = conn.cursor()
-            cursor.execute("""
+            updates = ["status = %s"]
+            params = [status_str]
+            
+            if clear_indexed_at:
+                updates.append("indexed_at = NULL")
+            elif indexed_at is not None:
+                updates.append("indexed_at = %s")
+                params.append(indexed_at)
+            
+            if clear_error_message:
+                updates.append("error_message = NULL")
+            elif error_message is not None:
+                updates.append("error_message = %s")
+                params.append(error_message)
+            
+            if num_chunks is not None:
+                updates.append("num_chunks = %s")
+                params.append(num_chunks)
+            
+            if news_date is not None:
+                updates.append("news_date = %s")
+                params.append(news_date)
+            
+            if processing_stage is not None:
+                updates.append("processing_stage = %s")
+                params.append(processing_stage)
+            
+            params.append(document_id)
+            query = f"""
+                UPDATE document_status
+                SET {', '.join(updates)}
+                WHERE document_id = %s
+            """
+            cursor.execute(query, tuple(params))
+            conn.commit()
+        finally:
+            self.get_connection_pool().putconn(conn)
+    
+    def list_all_sync(
+        self,
+        skip: int = 0,
+        limit: Optional[int] = None,
+        *,
+        status: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> List[dict]:
+        """SYNC version - List documents (returns dicts)."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            where_clauses = []
+            params: list = []
+            if status:
+                where_clauses.append("status = %s")
+                params.append(status)
+            if source:
+                where_clauses.append("source = %s")
+                params.append(source)
+            where_sql = ""
+            if where_clauses:
+                where_sql = "WHERE " + " AND ".join(where_clauses)
+            order_clause = "ORDER BY COALESCE(created_at, ingested_at, NOW()) DESC"
+            limit_clause = ""
+            offset_clause = ""
+            if limit is not None:
+                limit_clause = "LIMIT %s"
+                params.append(limit)
+            if skip:
+                offset_clause = "OFFSET %s"
+                params.append(skip)
+            query = f"""
                 SELECT * FROM document_status
-                ORDER BY created_at DESC
-                LIMIT %s OFFSET %s
-            """, (limit, skip))
+                {where_sql}
+                {order_clause}
+                {limit_clause}
+                {offset_clause}
+            """
+            cursor.execute(query, tuple(params))
             rows = cursor.fetchall()
             return [self.map_row_to_dict(cursor, row) for row in rows]
         finally:
             self.get_connection_pool().putconn(conn)
+
+    def list_ids_by_news_date_sync(self, report_date: str) -> List[str]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            placeholders = ",".join(["%s"] * len(self.REPORT_ELIGIBLE_STATUSES))
+            cursor.execute(
+                f"""
+                SELECT document_id
+                FROM document_status
+                WHERE news_date = %s
+                  AND status IN ({placeholders})
+                ORDER BY document_id
+                """,
+                (report_date, *self.REPORT_ELIGIBLE_STATUSES),
+            )
+            return [row[0] for row in cursor.fetchall()]
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def list_ids_by_news_date_range_sync(self, start_date: str, end_date: str) -> List[str]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            placeholders = ",".join(["%s"] * len(self.REPORT_ELIGIBLE_STATUSES))
+            cursor.execute(
+                f"""
+                SELECT document_id
+                FROM document_status
+                WHERE news_date BETWEEN %s AND %s
+                  AND status IN ({placeholders})
+                ORDER BY news_date, document_id
+                """,
+                (start_date, end_date, *self.REPORT_ELIGIBLE_STATUSES),
+            )
+            return [row[0] for row in cursor.fetchall()]
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def delete_sync(self, document_id: str) -> None:
+        """SYNC version - Delete document by ID."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM document_status WHERE document_id = %s",
+                (document_id,),
+            )
+            conn.commit()
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    async def get_status_summary(self) -> dict:
+        """Return aggregated counts of documents by status/stage."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (
+                        WHERE status IN (
+                            'indexing_done','insights_pending','insights_processing',
+                            'insights_done','completed'
+                        )
+                    ) AS completed,
+                    COUNT(*) FILTER (WHERE status LIKE '%_processing') AS processing,
+                    COUNT(*) FILTER (WHERE status = 'error') AS errors
+                FROM document_status
+                """
+            )
+            totals = self.map_row_to_dict(cursor, cursor.fetchone())
+
+            cursor.execute(
+                """
+                SELECT processing_stage, COUNT(*) AS count
+                FROM document_status
+                WHERE status = 'error'
+                GROUP BY processing_stage
+                """
+            )
+            error_breakdown = {
+                (row["processing_stage"] or "unknown"): row["count"]
+                for row in (self.map_row_to_dict(cursor, row) for row in cursor.fetchall())
+            }
+
+            cursor.execute("SELECT COALESCE(SUM(num_chunks), 0) AS total_chunks FROM document_status")
+            chunk_row = self.map_row_to_dict(cursor, cursor.fetchone())
+
+            return {
+                "documents": totals,
+                "error_breakdown": error_breakdown,
+                "chunks_total": int(chunk_row["total_chunks"]) if chunk_row and chunk_row["total_chunks"] is not None else 0,
+            }
+        finally:
+            self.release_connection(conn)

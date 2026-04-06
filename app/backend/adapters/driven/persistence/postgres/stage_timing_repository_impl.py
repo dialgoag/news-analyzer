@@ -300,6 +300,32 @@ class PostgresStageTimingRepository(BasePostgresRepository, StageTimingRepositor
             conn.commit()
         finally:
             self.release_connection(conn)
+
+    async def delete_for_document(self, document_id: str) -> None:
+        """Delete all timing records for a document."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM document_stage_timing WHERE document_id = %s",
+                (document_id,),
+            )
+            conn.commit()
+        finally:
+            self.release_connection(conn)
+
+    def delete_for_document_sync(self, document_id: str) -> None:
+        """SYNC version - Delete timing records for a document."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM document_stage_timing WHERE document_id = %s",
+                (document_id,),
+            )
+            conn.commit()
+        finally:
+            self.get_connection_pool().putconn(conn)
     
     # ========================================
     # PRIVATE: Mapping helpers

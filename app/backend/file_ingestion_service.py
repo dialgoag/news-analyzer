@@ -16,11 +16,18 @@ import logging
 import os
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, Dict
 
-from database import document_status_store, ProcessingQueueStore
-from pipeline_states import DocStatus, TaskType
+from database import ProcessingQueueStore
+from pipeline_states import DocStatus, TaskType, Stage
+from adapters.driven.persistence.postgres import PostgresDocumentRepository
+from adapters.driven.persistence.postgres.stage_timing_repository_impl import PostgresStageTimingRepository
+from core.domain.entities.document import Document
+from core.domain.value_objects.document_id import DocumentId
+from core.domain.value_objects.pipeline_status import PipelineStatus, StageEnum, StateEnum
+from core.domain.value_objects.text_hash import TextHash
 
 logger = logging.getLogger("file_ingestion_service")
 
@@ -31,6 +38,8 @@ ALLOWED_EXTENSIONS = {
 }
 
 processing_queue_store = ProcessingQueueStore()
+document_repository = PostgresDocumentRepository()
+stage_timing_repository = PostgresStageTimingRepository()
 
 
 def _generate_document_id(filename: str, file_hash: str) -> str:
@@ -68,7 +77,14 @@ def compute_sha256(data: bytes = None, *, file_path: str = None) -> str:
 
 def check_duplicate(file_hash: str) -> Optional[Dict]:
     """Return existing document dict if hash already registered, else None."""
-    return document_status_store.find_by_hash(file_hash)
+    existing = document_repository.get_by_sha256_sync(file_hash)
+    if not existing:
+        return None
+    return {
+        "document_id": existing.id.value,
+        "filename": existing.filename,
+        "source": existing.source,
+    }
 
 
 def _has_hash_prefix(basename: str) -> bool:
@@ -90,28 +106,63 @@ def _processed_basename(original_filename: str, short_hash: str) -> str:
     return f"{short_hash}_{original_filename}"
 
 
+def _map_initial_status(initial_status: str) -> PipelineStatus:
+    if initial_status == DocStatus.UPLOAD_DONE:
+        return PipelineStatus.create(StageEnum.UPLOAD, StateEnum.DONE)
+    if initial_status == DocStatus.UPLOAD_PROCESSING:
+        return PipelineStatus.create(StageEnum.UPLOAD, StateEnum.PROCESSING)
+    return PipelineStatus.create(StageEnum.UPLOAD, StateEnum.PENDING)
+
+
+def _news_date_to_datetime(news_date_str: Optional[str]) -> Optional[datetime]:
+    if not news_date_str:
+        return None
+    try:
+        return datetime.fromisoformat(news_date_str)
+    except ValueError:
+        return None
+
+
 def _register_and_enqueue(
     document_id: str,
     filename: str,
     source: str,
     file_hash: str,
+    file_size: int,
     initial_status: str = DocStatus.UPLOAD_DONE,
     enqueue_ocr: bool = True,
     priority: int = 1,
 ) -> bool:
-    """Register document in DB and optionally enqueue OCR task."""
-    news_date = _parse_news_date(filename)
-    ok = document_status_store.insert(
-        document_id=document_id,
+    """Register document via DocumentRepository and optionally enqueue OCR task."""
+    news_date_str = _parse_news_date(filename)
+    news_date = _news_date_to_datetime(news_date_str)
+    status = _map_initial_status(initial_status)
+    now = datetime.utcnow()
+    
+    document = Document.create(
         filename=filename,
-        source=source,
-        status=initial_status,
-        news_date=news_date,
-        file_hash=file_hash,
+        sha256=file_hash,
+        file_size=file_size,
+        document_id=DocumentId(document_id)
     )
-    if not ok:
-        logger.warning(f"Document already registered: {document_id}")
-        return False
+    document.status = status
+    document.source = source
+    document.news_date = news_date
+    document.processing_stage = Stage.UPLOAD
+    document.content_hash = TextHash(file_hash)
+    document.ingested_at = now
+    document.uploaded_at = now
+    document.updated_at = now
+    document.num_chunks = 0
+    document.reprocess_requested = False
+    document.error_message = None
+    
+    document_repository.save_sync(document)
+    stage_timing_repository.record_stage_start_sync(
+        document_id=document_id,
+        stage='upload',
+        metadata={'source': source, 'filename': filename}
+    )
 
     if enqueue_ocr:
         processing_queue_store.enqueue_task(
@@ -163,6 +214,7 @@ def ingest_from_upload(
         filename=filename,
         source="upload",
         file_hash=file_hash,
+        file_size=len(content),
         initial_status=DocStatus.UPLOAD_PROCESSING,
         enqueue_ocr=False,  # Upload API uses background_tasks instead
     )
@@ -186,6 +238,7 @@ def ingest_from_inbox(
     Fix #95: Prevents overwriting files with same name but different content.
     """
     file_hash = compute_sha256(file_path=inbox_path)
+    file_size = os.path.getsize(inbox_path)
     short_hash = file_hash[:8]  # First 8 chars for identification
 
     existing = check_duplicate(file_hash)
@@ -221,6 +274,7 @@ def ingest_from_inbox(
         filename=filename,
         source="inbox",
         file_hash=file_hash,
+        file_size=file_size,
         initial_status=DocStatus.UPLOAD_DONE,
         enqueue_ocr=True,
         priority=1,

@@ -260,6 +260,57 @@ class WorkerRepository(ABC):
             True if assignment succeeded, False if already assigned
         """
         pass
+
+    # ========================================
+    # DASHBOARD / MAINTENANCE HELPERS
+    # ========================================
+
+    @abstractmethod
+    async def list_active_with_documents(self) -> List[Dict]:
+        """Return active workers joined with document metadata (filenames)."""
+        pass
+
+    @abstractmethod
+    async def list_recent_errors_with_documents(
+        self,
+        hours: int = 24,
+        limit: int = 50
+    ) -> List[Dict]:
+        """Return recent error workers (finished within timeframe) with document metadata."""
+        pass
+
+    @abstractmethod
+    async def get_worker_status_summary(self) -> Dict[str, int]:
+        """Return counts of worker_tasks grouped by status."""
+        pass
+
+    @abstractmethod
+    async def get_pending_task_counts(self) -> Dict[str, int]:
+        """Return counts of pending tasks grouped by task_type."""
+        pass
+    
+    @abstractmethod
+    async def get_processing_queue_status(self) -> Dict[str, Dict[str, int]]:
+        """Return counts of processing_queue grouped by task_type/status."""
+        pass
+
+    @abstractmethod
+    async def count_processing_orphans(self) -> int:
+        """Return number of processing_queue rows without an active worker assigned."""
+        pass
+
+    @abstractmethod
+    async def reset_processing_tasks(self) -> Dict[str, int]:
+        """
+        Reset processing_queue rows (status='processing') back to 'pending'.
+        Returns counts per task_type prior to the reset.
+        """
+        pass
+
+    @abstractmethod
+    async def delete_active_worker_tasks(self) -> int:
+        """Delete worker_tasks in statuses ACTIVE. Returns number deleted."""
+        pass
     
     # ========================================
     # SYNC methods for legacy scheduler compatibility

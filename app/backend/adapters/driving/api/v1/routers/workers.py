@@ -11,10 +11,12 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 import app as app_module
-from database import document_status_store, news_item_insights_store
+from database import news_item_insights_store
 from middleware import CurrentUser, get_current_user, require_admin
-from pipeline_states import DocStatus, TaskType, WorkerStatus
+from pipeline_states import DocStatus, TaskType, WorkerStatus, Stage
 from core.domain.value_objects.document_id import DocumentId
+from core.domain.value_objects.pipeline_status import PipelineStatus, StageEnum, StateEnum
+from pipeline_runtime_store import set_all_pauses
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,75 +33,13 @@ async def get_workers_status(
     if cached is not None:
         return cached
     try:
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        
-        # Get ACTIVE workers from worker_tasks (this is the actual running workers)
-        cursor.execute("""
-            SELECT wt.worker_id, wt.task_type, wt.document_id, ds.filename, wt.status, wt.started_at, wt.error_message, wt.completed_at
-            FROM worker_tasks wt
-            LEFT JOIN document_status ds ON wt.document_id = ds.document_id
-            WHERE wt.status IN (%s, %s)
-            ORDER BY wt.task_type, wt.document_id
-        """, (WorkerStatus.ASSIGNED, WorkerStatus.STARTED))
-        active_workers = cursor.fetchall()
-        
-        # Get RECENT error workers (last 24 hours) for dashboard visibility
-        cursor.execute("""
-            SELECT wt.worker_id, wt.task_type, wt.document_id, ds.filename, wt.status, wt.started_at, wt.error_message, wt.completed_at
-            FROM worker_tasks wt
-            LEFT JOIN document_status ds ON wt.document_id = ds.document_id
-            WHERE wt.status = 'error'
-            AND wt.completed_at > NOW() - INTERVAL '24 hours'
-            ORDER BY wt.completed_at DESC
-            LIMIT 50
-        """)
-        error_workers = cursor.fetchall()
-        
-        # Get ACTIVE tasks being processed (status='processing') - fallback
-        cursor.execute("""
-            SELECT task_type, document_id, filename, status 
-            FROM processing_queue 
-            WHERE status = 'processing'
-            ORDER BY task_type, document_id
-        """)
-        active_pipeline_tasks = cursor.fetchall()
-        
-        # Get ACTIVE insights (generating) and indexing_insights (indexing)
-        cursor.execute("""
-            SELECT news_item_id, document_id, filename, title 
-            FROM news_item_insights 
-            WHERE status IN ('generating', 'indexing')
-            ORDER BY news_item_id
-        """)
-        active_insights_tasks = cursor.fetchall()
-        
-        # Get PENDING task counts
-        cursor.execute("""
-            SELECT task_type, COUNT(*) 
-            FROM processing_queue 
-            WHERE status = 'pending'
-            GROUP BY task_type
-        """)
-        pending_counts = {row['task_type']: row['count'] for row in cursor.fetchall()}
-        
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM news_item_insights
-            WHERE status IN ('pending', 'queued')
-        """)
-        result = cursor.fetchone()
-        pending_counts['insights'] = result[list(result.keys())[0]] if result else 0
-
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM news_item_insights
-            WHERE status = 'done' AND indexed_in_qdrant_at IS NULL AND content IS NOT NULL
-        """)
-        result = cursor.fetchone()
-        pending_counts['indexing_insights'] = result[list(result.keys())[0]] if result else 0
-        
-        conn.close()
+        active_workers = await app_module.worker_repository.list_active_with_documents()
+        error_workers = await app_module.worker_repository.list_recent_errors_with_documents()
+        pending_counts = await app_module.worker_repository.get_pending_task_counts()
+        pending_counts = pending_counts or {}
+        active_insights_tasks = news_item_insights_store.list_active_tasks()
+        pending_counts["insights"] = news_item_insights_store.count_pending_or_queued()
+        pending_counts["indexing_insights"] = news_item_insights_store.count_ready_for_indexing()
         
         # Pool status - No hay generic_worker_pool, reportar en base a master_pipeline_scheduler
         # Todos los workers son ahora despachos individuales desde scheduler
@@ -398,74 +338,32 @@ async def shutdown_workers_gracefully(current_user: CurrentUser = Depends(requir
 
         # PASO 1: Activar todas las pausas para detener dispatch
         import insights_pipeline_control as _ipc
-        conn_pause = document_status_store.get_connection()
-        cursor_pause = conn_pause.cursor()
-
-        cursor_pause.execute("""
-            INSERT INTO pipeline_runtime_kv (key, value, updated_at)
-            VALUES
-                ('pause_ocr', 'true', NOW()),
-                ('pause_chunking', 'true', NOW()),
-                ('pause_indexing', 'true', NOW()),
-                ('pause_insights', 'true', NOW())
-            ON CONFLICT (key)
-            DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
-        """)
-        conn_pause.commit()
-        conn_pause.close()
+        set_all_pauses(True)
         _ipc.refresh_from_db()
         logger.info("✅ Pipeline pausas activadas (detiene nuevo dispatch)")
 
         # PASO 2: Rollback tareas 'processing' → 'pending'
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT task_type, COUNT(*) as count
-            FROM processing_queue
-            WHERE status = 'processing'
-            GROUP BY task_type
-        """)
-        processing_tasks = cursor.fetchall()
-        total_processing = sum(row['count'] for row in processing_tasks)
-
+        processing_tasks = await app_module.worker_repository.reset_processing_tasks()
+        total_processing = sum(processing_tasks.values())
         if total_processing > 0:
             logger.info(f"🔄 Rollback {total_processing} tareas 'processing' → 'pending'...")
-            cursor.execute("""
-                UPDATE processing_queue
-                SET status = 'pending'
-                WHERE status = 'processing'
-            """)
-            conn.commit()
-            logger.info(f"✅ {total_processing} tareas revertidas")
+            for task_type, count in processing_tasks.items():
+                logger.info(f"   • {task_type}: {count}")
+            logger.info("✅ Tareas revertidas a pending")
 
         # PASO 3: Limpiar worker_tasks activos
-        cursor.execute("""
-            SELECT COUNT(*) as count
-            FROM worker_tasks
-            WHERE status IN ('assigned', 'started')
-        """)
-        result = cursor.fetchone()
-        total_active = result['count'] if result else 0
-
+        total_active = await app_module.worker_repository.delete_active_worker_tasks()
         if total_active > 0:
             logger.info(f"🧹 Limpiando {total_active} worker_tasks activos...")
-            cursor.execute("""
-                DELETE FROM worker_tasks
-                WHERE status IN ('assigned', 'started')
-            """)
-            conn.commit()
-            logger.info(f"✅ {total_active} worker_tasks limpiados")
-
-        conn.close()
+            logger.info("✅ worker_tasks activos limpiados")
 
         return {
             "status": "success",
             "message": "Workers shutdown completado",
             "actions_taken": [
-                f"Pipeline pausas activadas (detiene dispatch)",
+                "Pipeline pausas activadas (detiene dispatch)",
                 f"{total_processing} tareas revertidas a pending",
-                f"{total_active} worker_tasks limpiados"
+                f"{total_active} worker_tasks limpiados",
             ],
             "note": "Para reactivar: POST /api/admin/insights-pipeline con todas las pausas en false"
         }
@@ -492,16 +390,13 @@ async def retry_error_workers(
         pass
     document_ids = body.get("document_ids") if isinstance(body, dict) else None
     try:
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        
         # Separar IDs en documentos vs insights
         doc_ids = []
         insight_ids = []
         if document_ids and len(document_ids) > 0:
             for did in document_ids:
                 if isinstance(did, str) and did.startswith("insight_"):
-                    insight_ids.append(did[8:])  # strip "insight_"
+                    insight_ids.append(did[8:])
                 else:
                     doc_ids.append(did)
         
@@ -509,39 +404,24 @@ async def retry_error_workers(
         error_insights = []
         retry_all = not document_ids or len(document_ids) == 0
         
-        # Documentos: document_status
+        # Documentos via DocumentRepository
         if doc_ids:
-            placeholders = ','.join(['%s'] * len(doc_ids))
-            cursor.execute(f"""
-                SELECT document_id, filename FROM document_status
-                WHERE status = %s AND document_id IN ({placeholders})
-            """, (DocStatus.ERROR, *doc_ids))
-            error_docs = cursor.fetchall()
+            for doc_id in doc_ids:
+                row = app_module.document_repository.get_by_id_sync(doc_id)
+                if row and row.get("status") == DocStatus.ERROR:
+                    error_docs.append(row)
         elif retry_all:
-            cursor.execute("""
-                SELECT document_id, filename FROM document_status
-                WHERE status = %s
-                ORDER BY document_id
-            """, (DocStatus.ERROR,))
-            error_docs = cursor.fetchall()
+            error_docs = app_module.document_repository.list_all_sync(
+                skip=0,
+                limit=None,
+                status=DocStatus.ERROR,
+            )
         
-        # Insights: news_item_insights
+        # Insights via store
         if insight_ids:
-            placeholders = ','.join(['%s'] * len(insight_ids))
-            cursor.execute(f"""
-                SELECT news_item_id, document_id, filename, title FROM news_item_insights
-                WHERE status = %s AND news_item_id IN ({placeholders})
-            """, (news_item_insights_store.STATUS_ERROR, *insight_ids))
-            error_insights = cursor.fetchall()
+            error_insights = news_item_insights_store.list_errors(insight_ids)
         elif retry_all:
-            cursor.execute("""
-                SELECT news_item_id, document_id, filename, title FROM news_item_insights
-                WHERE status = %s
-                ORDER BY news_item_id
-            """, (news_item_insights_store.STATUS_ERROR,))
-            error_insights = cursor.fetchall()
-        
-        conn.close()
+            error_insights = news_item_insights_store.list_errors()
         
         if not error_docs and not error_insights:
             return {
@@ -585,13 +465,18 @@ async def retry_error_workers(
                 
                 if not has_ocr or stage in ('ocr', 'upload', ''):
                     # OCR falló o no hay texto → retry OCR completo
-                    document_status_store.update_status(
+                    app_module.document_repository.update_status_sync(
                         document_id,
-                        DocStatus.OCR_PROCESSING,
-                        processing_stage="ocr",
+                        PipelineStatus.create(StageEnum.OCR, StateEnum.PROCESSING),
+                        processing_stage=Stage.OCR,
                         num_chunks=0,
                         clear_indexed_at=True,
                         clear_error_message=True,
+                    )
+                    app_module.stage_timing_repository.record_stage_start_sync(
+                        document_id=document_id,
+                        stage='ocr',
+                        metadata={'source': 'retry-errors'}
                     )
                     await app_module.document_repository.store_ocr_text(DocumentId(document_id), None)
                     await app_module.document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
@@ -599,23 +484,33 @@ async def retry_error_workers(
                     logger.info(f"   → Retry OCR (no ocr_text or stage={stage})")
                 elif stage == 'chunking':
                     # Chunking falló (ej. Server disconnected) → retry chunking
-                    document_status_store.update_status(
+                    app_module.document_repository.update_status_sync(
                         document_id,
-                        DocStatus.CHUNKING_PROCESSING,
-                        processing_stage="chunking",
+                        PipelineStatus.create(StageEnum.CHUNKING, StateEnum.PROCESSING),
+                        processing_stage=Stage.CHUNKING,
                         clear_indexed_at=True,
                         clear_error_message=True,
+                    )
+                    app_module.stage_timing_repository.record_stage_start_sync(
+                        document_id=document_id,
+                        stage='chunking',
+                        metadata={'source': 'retry-errors'}
                     )
                     await app_module.worker_repository.enqueue_task(document_id, filename, TaskType.CHUNKING, priority=10)
                     logger.info(f"   → Retry chunking (stage=chunking)")
                 else:
                     # Indexing falló o stage=indexing → retry indexing
-                    document_status_store.update_status(
+                    app_module.document_repository.update_status_sync(
                         document_id,
-                        DocStatus.CHUNKING_DONE,
-                        processing_stage="chunking",
+                        PipelineStatus.create(StageEnum.CHUNKING, StateEnum.DONE),
+                        processing_stage=Stage.CHUNKING,
                         clear_indexed_at=True,
                         clear_error_message=True,
+                    )
+                    app_module.stage_timing_repository.record_stage_start_sync(
+                        document_id=document_id,
+                        stage='indexing',
+                        metadata={'source': 'retry-errors', 'mode': 'indexing_only'}
                     )
                     await app_module.worker_repository.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
                     logger.info(f"   → Retry indexing only (ocr+chunking done)")

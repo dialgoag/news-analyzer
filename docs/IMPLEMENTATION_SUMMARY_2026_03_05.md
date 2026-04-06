@@ -77,21 +77,23 @@ rag-tika    0.86%   192.6MiB / 2GiB     9.40%  # ✅ Solo 192 MB usados
    - Log: "Unmarked document from reprocessing"
 ```
 
-### 🔧 Métodos Nuevos en `database.py`
+### 🔧 APIs expuestas por `DocumentRepository`
 ```python
-# Marcar/desmarcar documento
-document_status_store.mark_for_reprocessing(document_id, requested=True)
-document_status_store.mark_for_reprocessing(document_id, requested=False)
+# Marcar / desmarcar documento
+await document_repository.mark_for_reprocessing(DocumentId(doc_id), requested=True)
+document_repository.mark_for_reprocessing_sync(doc_id, requested=False)
 
 # Obtener documentos marcados
-docs = document_status_store.get_documents_pending_reprocess()
+pending = await document_repository.list_pending_reprocess()
+pending_sync = document_repository.list_pending_reprocess_sync()
 ```
 
 ### 📊 Archivos Modificados
 ```
 backend/migrations/014_add_reprocess_flag.py  # Nueva migración
-backend/database.py                            # Métodos: mark_for_reprocessing, get_documents_pending_reprocess
-backend/app.py                                 # Master Scheduler + auto-unmark en indexing
+backend/adapters/driven/persistence/postgres/document_repository_impl.py  # Implementación Postgres
+backend/core/ports/repositories/document_repository.py                    # Métodos públicos
+backend/app.py                                                             # Master Scheduler + auto-unmark en indexing
 docs/REPROCESSING_PERSISTENCE.md              # Documentación completa
 ```
 
@@ -110,9 +112,9 @@ EOF
 
 # Test 2: Ver documentos marcados
 docker compose exec backend python3 << 'EOF'
-from database import DocumentStatusStore
-store = DocumentStatusStore()
-docs = store.get_documents_pending_reprocess()
+from adapters.driven.persistence.postgres import PostgresDocumentRepository
+repo = PostgresDocumentRepository()
+docs = repo.list_pending_reprocess_sync()
 print(f"Documentos marcados: {len(docs)}")
 EOF
 

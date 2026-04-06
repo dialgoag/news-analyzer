@@ -193,6 +193,29 @@ class Document:
 
 ---
 
+## ♻️ Backfill opcional para históricos
+
+Antes de Migration 018, los documentos no tenían registros `stage='upload'`.  
+Si necesitas métricas históricas previas al despliegue:
+
+1. Ir a la carpeta backend y ejecutar el script:
+   ```bash
+   cd app/backend
+   python scripts/backfill_upload_stage_timing.py --batch-size 1000
+   ```
+2. Flags útiles:
+   - `--limit N` para procesar solo los primeros N documentos sin registro.
+   - `--dry-run` para ver cuántas filas faltan sin insertar nada.
+
+El script revisa `document_status` y crea filas `document_stage_timing` con:
+- `stage='upload'`
+- `status` derivado de `document_status.status` (`upload_pending|processing|done|error`)
+- `metadata.backfill = "upload_stage"`
+
+Las ingestas nuevas ya escriben `document_stage_timing` durante el alta (`file_ingestion_service`), por lo que el script solo es necesario una vez si quieres históricos.
+
+---
+
 ## 🚀 Implementación en Workers
 
 ### Patrón Estándar (OCR Worker ejemplo):

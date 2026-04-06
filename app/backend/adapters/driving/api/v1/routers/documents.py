@@ -21,13 +21,12 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from database import (
     document_insights_store,
-    document_status_store,
     news_item_insights_store,
     news_item_store,
 )
 from file_ingestion_service import resolve_file_path, check_duplicate, compute_sha256, ingest_from_upload
 from middleware import CurrentUser, get_current_user, require_admin, require_upload_permission, require_delete_permission
-from pipeline_states import DocStatus
+from pipeline_states import DocStatus, Stage
 
 from adapters.driving.api.v1.schemas.document_schemas import (
     DocumentMetadata,
@@ -37,6 +36,7 @@ from adapters.driving.api.v1.schemas.document_schemas import (
 
 # Domain
 from core.domain.value_objects import DocumentId, TaskType
+from core.domain.value_objects.pipeline_status import PipelineStatus, StageEnum, StateEnum
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -72,7 +72,12 @@ async def list_documents(
     if cached is not None:
         return cached
     try:
-        rows = document_status_store.get_all(status_filter=status, source_filter=source)
+        rows = app_module.document_repository.list_all_sync(
+            skip=0,
+            limit=None,
+            status=status,
+            source=source,
+        )
         by_id = {}
         for r in rows:
             ingested_at = r["ingested_at"]
@@ -172,7 +177,7 @@ async def get_documents_status():
     if cached is not None:
         return cached
     try:
-        rows = document_status_store.get_all(status_filter=None, source_filter=None)
+        rows = app_module.document_repository.list_all_sync(skip=0, limit=None)
 
         doc_ids = [r["document_id"] for r in rows]
 
@@ -243,16 +248,9 @@ async def get_segmentation_diagnostic(
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
 
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT ocr_text FROM document_status WHERE document_id = %s", (document_id,))
-        result = cursor.fetchone()
-        conn.close()
-
-        if not result or not result["ocr_text"]:
+        ocr_text = doc.get("ocr_text")
+        if not ocr_text:
             raise HTTPException(status_code=404, detail="OCR text not available")
-
-        ocr_text = result["ocr_text"]
 
         items = app_module.segment_news_items_from_text(ocr_text)
 
@@ -455,7 +453,7 @@ async def upload_document(
 
         upload_dir = _upload_dir()
         document_id, file_hash = ingest_from_upload(content, file.filename, upload_dir)
-        
+
         # Resolve actual file path (handles .pdf extension, Fix #95)
         file_path = resolve_file_path(document_id, upload_dir)
 
@@ -554,23 +552,33 @@ async def requeue_document(
         # 3. If ocr_text exists and doc failed at indexing → retry indexing only
         has_ocr = doc.get('ocr_text') and len(str(doc.get('ocr_text') or '').strip()) > 0
         if has_ocr:
-            document_status_store.update_status(
+            app_module.document_repository.update_status_sync(
                 document_id,
-                DocStatus.CHUNKING_DONE,
-                processing_stage="chunking",
+                PipelineStatus.create(StageEnum.CHUNKING, StateEnum.DONE),
+                processing_stage=Stage.CHUNKING,
                 clear_indexed_at=True,
                 clear_error_message=True,
+            )
+            app_module.stage_timing_repository.record_stage_start_sync(
+                document_id=document_id,
+                stage='indexing',
+                metadata={'source': 'requeue', 'mode': 'indexing_only'}
             )
             await app_module.worker_repository.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
             logger.info(f"   ✓ Retry indexing only (ocr_text exists)")
         else:
-            document_status_store.update_status(
+            app_module.document_repository.update_status_sync(
                 document_id,
-                DocStatus.OCR_PROCESSING,
-                processing_stage="ocr",
+                PipelineStatus.create(StageEnum.OCR, StateEnum.PROCESSING),
+                processing_stage=Stage.OCR,
                 num_chunks=0,
                 clear_indexed_at=True,
                 clear_error_message=True,
+            )
+            app_module.stage_timing_repository.record_stage_start_sync(
+                document_id=document_id,
+                stage='ocr',
+                metadata={'source': 'requeue'}
             )
             await app_module.document_repository.store_ocr_text(DocumentId(document_id), None)
             await app_module.document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
@@ -618,7 +626,8 @@ async def delete_document(
     try:
         logger.info(f"🗑️  Deleting document: {document_id}")
         app_module.qdrant_connector.delete_document(document_id)
-        document_status_store.delete(document_id)
+        app_module.stage_timing_repository.delete_for_document_sync(document_id)
+        app_module.document_repository.delete_sync(document_id)
         document_insights_store.delete(document_id)
         news_item_insights_store.delete_by_document_id(document_id)
         news_item_store.delete_by_document_id(document_id)
@@ -627,4 +636,3 @@ async def delete_document(
     except Exception as e:
         logger.error(f"Deletion error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-

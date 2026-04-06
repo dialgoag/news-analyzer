@@ -5,31 +5,34 @@ set -e
 
 cd "$(dirname "$0")/app"
 
-echo "🔨 Esperando imagen base..."
+BASE_CPU_TAG=${BASE_CPU_TAG:-newsanalyzer-base:cpu}
+BASE_CUDA_TAG=${BASE_CUDA_TAG:-newsanalyzer-base:cuda}
 
-# Wait for base image (up to 30 minutes)
-max_attempts=60
-attempt=0
-while [ $attempt -lt $max_attempts ]; do
-    if docker images | grep -q "newsanalyzer-base:latest"; then
-        echo "✅ Base image ready!"
-        break
-    fi
-    attempt=$((attempt + 1))
-    if [ $((attempt % 10)) -eq 0 ]; then
-        echo "⏳ Intento $attempt/$max_attempts..."
-    fi
-    sleep 30
-done
+build_base() {
+    local dockerfile=$1
+    local tag=$2
 
-if [ $attempt -ge $max_attempts ]; then
-    echo "❌ Timeout - Base image no se construyó en 30 minutos"
-    exit 1
+    if docker image inspect "$tag" >/dev/null 2>&1; then
+        echo "✅ Imagen base $tag ya existe"
+    else
+        echo "🔨 Construyendo imagen base $tag ..."
+        docker build -f "$dockerfile" -t "$tag" .
+    fi
+}
+
+if [[ "${GPU_TYPE}" == "nvidia" ]]; then
+    BASE_TAG=$BASE_CUDA_TAG
+    BASE_FILE=backend/docker/base/cuda/Dockerfile
+else
+    BASE_TAG=$BASE_CPU_TAG
+    BASE_FILE=backend/docker/base/cpu/Dockerfile
 fi
+
+build_base "$BASE_FILE" "$BASE_TAG"
 
 echo ""
 echo "=" * 80
-echo "📦 Construyendo backend con imagen base..."
+echo "📦 Construyendo backend con imagen base ${BASE_TAG}..."
 echo "=" * 80
 
 docker-compose build backend

@@ -88,73 +88,42 @@ steps = [
 ]
 ```
 
-### Métodos en `database.py`
+### Puerto: `DocumentRepository`
 
-#### `mark_for_reprocessing(document_id, requested=True)`
+La lógica quedó encapsulada en el puerto hexagonal. Implementaciones (Postgres) exponen:
+
 ```python
-def mark_for_reprocessing(self, document_id: str, requested: bool = True) -> bool:
-    """Mark a document for reprocessing (persists across app restarts)."""
-    conn = self.get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "UPDATE document_status SET reprocess_requested = ? WHERE document_id = ?",
-            (1 if requested else 0, document_id),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+class DocumentRepository(ABC):
+    async def mark_for_reprocessing(self, document_id: DocumentId, requested: bool = True) -> None: ...
+    async def list_pending_reprocess(self) -> List[Document]: ...
+    def mark_for_reprocessing_sync(self, document_id: str, requested: bool = True) -> None: ...
+    def list_pending_reprocess_sync(self) -> List[dict]: ...
 ```
 
-#### `get_documents_pending_reprocess()`
-```python
-def get_documents_pending_reprocess(self) -> List[Dict]:
-    """Get all documents marked for reprocessing."""
-    conn = self.get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "SELECT * FROM document_status WHERE reprocess_requested = 1 ORDER BY ingested_at DESC"
-        )
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
-    finally:
-        conn.close()
-```
+Esto elimina acceso directo a `document_status_store` y permite reutilizar la misma lógica en workers y schedulers.
 
 ### Lógica en Master Scheduler (`app.py`)
 
 ```python
-# PASO 0: Documentos marcados para reprocesamiento
-try:
-    docs_to_reprocess = document_status_store.get_documents_pending_reprocess()
-    if docs_to_reprocess:
-        logger.info(f"🔄 Found {len(docs_to_reprocess)} documents marked for reprocessing")
-        for doc in docs_to_reprocess:
-            doc_id = doc['document_id']
-            filename = doc['filename']
-            
-            # Verificar si ya está en la cola de procesamiento
-            conn_temp = processing_queue_store.get_connection()
-            cursor_temp = conn_temp.cursor()
-            cursor_temp.execute("""
-                SELECT COUNT(*) FROM processing_queue
-                WHERE document_id = ?
-                AND task_type = 'ocr'
-                AND status IN ('pending', 'processing')
-            """, (doc_id,))
-            in_queue = cursor_temp.fetchone()[0] > 0
-            conn_temp.close()
-            
-            if not in_queue:
-                # Agregar a la cola
-                processing_queue_store.enqueue_task(doc_id, filename, 'ocr', priority=10)
-                logger.info(f"   ✅ Enqueued {filename} for reprocessing")
-            else:
-                logger.debug(f"   ⏳ {filename} already in queue, skipping")
-except Exception as e:
-    logger.error(f"❌ Error checking reprocess queue: {e}")
+docs_to_reprocess = document_repository.list_pending_reprocess_sync()
+for doc in docs_to_reprocess:
+    doc_id = doc["document_id"]
+    filename = doc["filename"]
+
+    already_in_queue = worker_repository.is_document_enqueued_sync(
+        document_id=doc_id,
+        task_type=TaskType.OCR
+    )
+    if already_in_queue:
+        continue
+
+    worker_repository.enqueue_task_sync(
+        document_id=doc_id,
+        filename=filename,
+        task_type=TaskType.OCR,
+        priority=10,
+    )
+    logger.info(f"   ✅ Requeued {filename} ({doc_id}) for OCR")
 ```
 
 ### Desmarcado Automático
@@ -163,11 +132,17 @@ En `_handle_indexing_task()` (app.py):
 
 ```python
 try:
-    document_status_store.update_status(document_id, "indexed", processing_stage="indexing", indexed_at=datetime.utcnow().isoformat())
-    
+    document_repository.update_status_sync(
+        document_id,
+        PipelineStatus.create(StageEnum.INDEXING, StateEnum.DONE),
+        processing_stage=Stage.INDEXING,
+        indexed_at=datetime.utcnow().isoformat(),
+        num_chunks=len(chunk_records),
+    )
+
     # Desmarcar documento de reprocesamiento (ya completado)
-    document_status_store.mark_for_reprocessing(document_id, requested=False)
-    
+    document_repository.mark_for_reprocessing_sync(document_id, requested=False)
+
     if INSIGHTS_QUEUE_ENABLED and rag_pipeline:
         # ... resto del código
 ```
@@ -204,9 +179,9 @@ Usuario marca documento → App reinicia
 ```bash
 # Desde el container del backend
 docker compose exec backend python3 << 'EOF'
-from database import DocumentStatusStore
-store = DocumentStatusStore()
-docs = store.get_documents_pending_reprocess()
+from adapters.driven.persistence.postgres import PostgresDocumentRepository
+repo = PostgresDocumentRepository()
+docs = repo.list_pending_reprocess_sync()
 print(f"Documentos marcados para reprocesamiento: {len(docs)}")
 for doc in docs:
     print(f"  - {doc['filename']} ({doc['document_id']})")

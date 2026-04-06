@@ -59,41 +59,29 @@ Resultado en DB:
 def _inbox_file_to_queue(path: str, filename: str) -> bool:
     """
     Move inbox file to UPLOAD_DIR and queue for OCR processing.
-    Returns True if queued, False if error.
+    Returns document_id if queued, None if duplicate, raises on error.
     """
     try:
-        document_id = f"{datetime.now().timestamp()}_{filename}"
-        dest_path = os.path.join(UPLOAD_DIR, document_id)
-        
-        # Copy file to UPLOAD_DIR
-        shutil.copy2(path, dest_path)
-        logger.info(f"Inbox: {filename} → {document_id}")
-        
-        # Create document_status entry
-        news_date = parse_news_date_from_filename(filename)
-        document_status_store.insert(
-            document_id, 
-            filename, 
-            source="inbox",
-            status="queued",  # NEW: queued state
-            news_date=news_date
-        )
-        
-        # Queue for OCR processing
-        processing_queue_store.insert(
-            task_id=f"ocr_{document_id}",
-            task_type="ocr",
-            document_id=document_id,
+        document_id = ingest_from_inbox(
+            inbox_path=path,
             filename=filename,
-            status="pending"
+            upload_dir=UPLOAD_DIR,
+            processed_dir=PROCESSED_DIR,
         )
-        
-        logger.info(f"Inbox: queued {filename} for OCR")
-        return True
-        
+        if not document_id:
+            return None  # duplicate handled by service
+
+        stage_timing_repository.record_stage_start_sync(
+            document_id=document_id,
+            stage='upload',
+            metadata={'source': 'inbox', 'filename': filename}
+        )
+        logger.info(f"Inbox: queued {filename} as {document_id}")
+        return document_id
+
     except Exception as e:
         logger.error(f"Inbox queue failed for {filename}: {e}", exc_info=True)
-        return False
+        raise
 ```
 
 ### 2. Refactorizar `run_inbox_scan()`
@@ -135,30 +123,22 @@ def run_inbox_scan():
 
     logger.info(f"Inbox: found {len(files_to_queue)} file(s) to queue")
 
-    # Queue files (fast, no OCR)
     queued = 0
     for path, name in files_to_queue:
-        if _inbox_file_to_queue(path, name):
+        document_id = _inbox_file_to_queue(path, name)
+        if document_id:
             queued += 1
-            # Move source to processed/ AFTER queuing
-            try:
-                shutil.move(path, os.path.join(processed_dir, name))
-            except OSError as e:
-                logger.warning(f"Could not move {name} to processed/: {e}")
+        # ingest_from_inbox already moves the file into processed_dir (symlink target)
+        # so no manual shutil.move is required here.
 
-    logger.info(f"Inbox: queued {queued}/{len(files_to_queue)} files for OCR")
+    logger.info(f"Inbox: queued {queued}/{len(files_to_queue)} files for OCR via file_ingestion_service")
 ```
 
-### 3. Update `document_status_store.insert()` signature
+### 3. DocumentRepository como única fuente de verdad
 
-Necesita soportar `source` y `status` parameters:
-
-```python
-def insert(self, document_id: str, filename: str, source: str = "upload", 
-           status: str = "queued", news_date: str = None):
-    """Insert document with source and initial status."""
-    # Existing logic + preserve source and status
-```
+- `file_ingestion_service.ingest_from_inbox` crea/actualiza documentos mediante `document_repository.save_sync()` concluyendo en `document_stage_timing`.
+- No se expone más `document_status_store.insert`. Toda la metadata (`source`, `status`, `news_date`, hashes) se setea en el `Document` domain object antes de persistirlo.
+- Los encolados OCR los realiza `worker_repository.enqueue_task_sync`, por lo que no hay API separada para `processing_queue_store`.
 
 ---
 
