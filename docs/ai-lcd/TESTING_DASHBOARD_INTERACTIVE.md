@@ -13,6 +13,41 @@
 - [x] Contenedor frontend reiniciado
 - [x] Sistema completo corriendo
 
+## 🚧 Estado 2026-04-06 (smoke pendiente)
+
+- Se intentó correr el smoke suite desde el entorno remoto de Codex usando el token temporal (`curl -H "Authorization: Bearer <token>" http://localhost:{8000,3000}/api/...`).
+- Todos los intentos respondieron `curl: (7) Failed to connect to localhost port XXXX` porque el entorno no tiene acceso directo a los puertos publicados por Docker en la máquina host.
+- Acciones pendientes:
+  1. Ejecutar los mismos comandos **desde la máquina host o dentro del contenedor backend** para capturar las respuestas reales.
+  2. Pegar en esta sección los outputs de:  
+     ```bash
+     curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/documents
+     curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/workers/status
+     curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/dashboard/summary
+     curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/admin/data-integrity
+     ```  
+     (Agregar también `/api/dashboard/analysis` si se valida el payload completo).
+  3. Actualizar la checklist inferior marcando qué endpoints ya tienen evidencia.
+- Hasta ejecutar los pasos anteriores, el ítem **PEND-012** sigue abierto.
+
+---
+
+## 📌 Resultados de humo 2026-04-07 (desde host)
+
+Comando ejecutado: `TOKEN=<jwt admin> ./scripts/run_api_smoke.sh`
+
+| Endpoint | HTTP | Resumen |
+|----------|------|---------|
+| `GET /api/documents` | 404 | `{"detail":"Not Found"}` — el backend sigue atendiendo esta ruta con los handlers legacy porque los routers v2 no se registraron (ver PEND-017). Requiere reiniciar backend tras exportar `TaskType`. |
+| `GET /api/workers/status` | 200 | Payload extenso con 5 workers activos, 50 en error y detalle de cada documento/ocr. (Ver logs en `scripts/run_api_smoke.sh` output 2026-04-07 00:07). |
+| `GET /api/dashboard/summary` | 200 | `files.total=332`, `completed=305`, `news_items.total=28029`, etc. |
+| `GET /api/dashboard/analysis` | 200 | Incluye grupos de error para `testfile.pdf` y workers stuck. |
+| `GET /api/admin/data-integrity` | 200 | (Salida guardada en la terminal; pendiente documentarla aquí cuando reinicie el backend y repita la corrida definitiva). |
+
+Notas:
+- El token usado se generó con `/api/auth/login` (`user_id=1, username=admin, role=admin`). Los endpoints devolvieron 200 salvo `/api/documents`.
+- Para cerrar PEND‑012 necesitamos repetir el script después de reiniciar el backend (ver siguiente sección) y pegar las respuestas finales completas.
+
 ---
 
 ## 📋 Checklist de Testing
@@ -197,6 +232,19 @@ export function ComponentName({ data }) {
   - Después: `index-090dba48.js` (fix aplicado)
 
 - **Testing**: ✅ Verificar que NO aparece `ReferenceError: stageColors is not defined` en consola del navegador
+
+---
+
+## 🧪 2026-04-06 — Backend API Smoke (Fase 5E)
+
+| Paso | Resultado | Evidencia |
+|------|-----------|-----------|
+| `cd app/backend && pytest` | ✅ 100 tests pasaron en 1.19 s | Ver salida capturada en la terminal (pytest 9.0.2, Python 3.12). |
+| `/api/documents`, `/api/workers`, `/api/dashboard`, `/api/admin/data-integrity` (curl) | ⏳ Pendiente | El entorno de CLI no permite conexiones HTTP locales (curl falla con *Operation not permitted*), por lo que los curls deben ejecutarse desde la máquina del desarrollador antes de cerrar PEND‑012. |
+
+**Notas**:
+- Pytest cubre entidades, repositorios y el nuevo `DashboardMetricsService` respaldado por `PostgresDashboardReadRepository`, validando que la migración eliminó dependencias del `document_status_store` sin romper lógica.
+- Cuando se ejecuten los curls, actualizar esta tabla con la respuesta HTTP y timestamp correspondientes.
 
 ---
 

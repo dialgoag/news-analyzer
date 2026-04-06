@@ -221,11 +221,29 @@
 - Correr `cd app/backend && pytest` y adjuntar resultados.
 - Ejecutar smoke manual vía curl o Thunder Client para los endpoints críticos y adjuntar respuestas 200/401 esperadas.
 - Registrar resultado en `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md` o nuevo `TESTING_CHECKLIST.md`.
+- **Seguimiento 2026-04-06**: Desde el entorno remoto de Codex los `curl http://localhost:{8000,3000}/api/...` con el token provisto fallan con `curl: (7) Failed to connect...` (no hay acceso a los puertos publicados en la máquina host). El smoke test debe ejecutarse localmente (o dentro del contenedor backend) para capturar las respuestas y adjuntarlas en la doc.
 
 **Prioridad**: Media-baja (requerido antes de declarar cerrada la Fase 6).  
 **Bloquea**: Deploy / merge a main.
 
 ---
+
+### PEND-017: Endpoints legacy duplicados en `app.py` tras migrar routers
+**Descripción**: Aunque `/api/documents/*` y `/api/workers/*` ya se sirven a través de los routers (`adapters/driving/api/v1/routers/*.py`), los handlers originales siguen definidos en `app/backend/app.py` (`@app.post("/api/documents/{document_id}/requeue")`, `@app.post("/api/workers/retry-errors")`, etc.) y continúan importando `document_status_store`. FastAPI registra ambos para la misma ruta y solo el último declarado responde, lo que genera divergencias silenciosas (el router usa repositorios hexagonales mientras que el handler legacy sigue tocando SQL directo y no escribe en `document_stage_timing`).
+
+**Evidencia (2026-04-06)**:
+- `app/backend/app.py:3481-4088` mantiene los endpoints de requeue/retry/delete y 24 referencias activas a `document_status_store` (`rg -c "document_status_store" app/backend/app.py` → 24).
+- Los routers equivalentes (`adapters/driving/api/v1/routers/documents.py` y `workers.py`) ya usan `DocumentRepository`, `StageTimingRepository` y `WorkerRepository`.
+- No existe nota en la doc AI-LCD que marque los handlers legacy como “solo referencia” ni una lista de rutas que deben deshabilitarse.
+- **Seguimiento 2026-04-07**: el smoke script (`scripts/run_api_smoke.sh`) devolvió `404 Not Found` en `GET /api/documents` a pesar de usar un token válido porque FastAPI siguió registrando solo los handlers legacy (los routers v2 no cargaron al arrancar, ver logs `⚠️ Could not load modular routers: cannot import name 'TaskType'...`). Tras exportar `TaskType` en `core/domain/value_objects/__init__.py`, es necesario reiniciar el backend para que los routers v2 tomen control y el 404 desaparezca.
+
+**Alcance propuesto**:
+1. Deshabilitar o renombrar los endpoints legacy (ej. moverlos a `/legacy/*`) una vez que el smoke suite confirme que las versiones nuevas funcionan.
+2. Revisar `app/backend/app.py` para eliminar dependencias residuales de `document_status_store` en rutas públicas.
+3. Actualizar la doc AI-LCD (PLAN y BACKLOG) para indicar explícitamente qué rutas quedan “solo legacy” antes de borrar el store.
+
+**Prioridad**: Media (bloquea la eliminación del store y puede ocultar bugs, porque las rutas legacy ignoran `StageTimingRepository`).  
+**Dependencia**: PEND-012 (necesitamos evidencia de los routers nuevos antes de apagar los legacy).
 
 ## Prioridad: Baja
 

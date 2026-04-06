@@ -16,6 +16,7 @@ from .pipeline_status import (
     InsightStatusEnum,
     WorkerStatusEnum,
 )
+from pipeline_states import TaskType
 
 __all__ = [
     # IDs
@@ -31,4 +32,5 @@ __all__ = [
     "TerminalStateEnum",
     "InsightStatusEnum",
     "WorkerStatusEnum",
+    "TaskType",
 ]
