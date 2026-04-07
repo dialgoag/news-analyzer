@@ -1307,11 +1307,15 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 
 ### ✅ Actualización 2026-04-07 — Fix Docker shared/ + PYTHONPATH
 - [x] Agregado `COPY backend/shared/ shared/` en Dockerfile.cpu y docker/cuda/Dockerfile
+- [x] Agregado `COPY backend/config.py .` en ambos Dockerfiles
+- [x] Agregado `pydantic-settings==2.1.0` en requirements.txt
 - [x] Agregado `ENV PYTHONPATH=/app:$PYTHONPATH` en ambos Dockerfiles
 - [x] Documentación actualizada: CONSOLIDATED_STATUS.md § Fix #132, SESSION_LOG.md
-- [ ] Pendiente: Rebuild backend y verificar que workers insights completen sin ImportError
-- [ ] Pendiente: Verificar logs `docker compose logs -f backend | grep -E "\[insights_"`
-- [ ] Pendiente: Confirmar `news_item_insights` status pasa de `pending` → `completed`
+- [x] Rebuild backend completado (3 iteraciones: shared → config → pydantic-settings)
+- [x] Backend reiniciado y verificado
+- [x] Workers insights ahora despachan correctamente sin ImportError
+- [x] `InsightsWorkerService` se inicializa y ejecuta workflow
+- [ ] Pendiente siguiente: Resolver bug LangGraph "'error' is already being used as a state key" (nuevo issue, no relacionado con Docker/imports)
 
 
 ### ✅ Actualización 2026-04-07 — Workers internos
@@ -1324,3 +1328,9 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 - [x] `run_news_item_insights_queue_job_parallel` sin SQL inline en `app.py`.
 - [x] Selection/count/update de cola migrados a `worker_repository` + `news_item_repository`.
 - [ ] Pendiente siguiente: revisar y limpiar utilidades legacy menores aún dependientes de stores antiguos.
+
+### ✅ Actualización 2026-04-07 — Cierre stores legacy news_item*
+- [x] `_process_document_sync`, `run_news_item_insights_queue_job`, reconciliación de scheduler y reindex insights usan `news_item_repository`.
+- [x] Eliminados imports runtime de `news_item_store` y `news_item_insights_store` en `app.py`.
+- [x] Añadidos métodos sync de soporte en repositorio (`upsert_items_sync`, `enqueue_insight_sync`, `set_insight_indexed_in_qdrant_sync`).
+- [ ] Pendiente siguiente: inventariar legacy restante no crítico (`db`/stores de reportes-notificaciones) para moverlo a servicios/routers dedicados.

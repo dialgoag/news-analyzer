@@ -427,6 +427,43 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
         finally:
             self.get_connection_pool().putconn(conn)
 
+    def upsert_items_sync(self, document_id: str, filename: str, items: Sequence[dict]) -> int:
+        if not items:
+            return 0
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            rows = 0
+            now = datetime.utcnow().isoformat()
+            for it in items:
+                cursor.execute(
+                    """
+                    INSERT INTO news_items (news_item_id, document_id, filename, item_index, title, status, text_hash, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(news_item_id) DO UPDATE SET
+                        title = excluded.title,
+                        status = excluded.status,
+                        text_hash = excluded.text_hash,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        it["news_item_id"],
+                        document_id,
+                        filename,
+                        int(it.get("item_index", 0)),
+                        it.get("title") or None,
+                        it.get("status") or "pending",
+                        it.get("text_hash") or None,
+                        now,
+                        now,
+                    ),
+                )
+                rows += 1
+            conn.commit()
+            return rows
+        finally:
+            self.get_connection_pool().putconn(conn)
+
     def list_insights_by_document_id_sync(self, document_id: str) -> List[dict]:
         conn = self.get_connection_pool().getconn()
         try:
@@ -629,6 +666,57 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
             deleted = cursor.rowcount
             conn.commit()
             return deleted
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def enqueue_insight_sync(
+        self,
+        news_item_id: str,
+        document_id: str,
+        filename: str,
+        item_index: int,
+        title: Optional[str] = None,
+        text_hash: Optional[str] = None,
+    ) -> bool:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO news_item_insights
+                    (news_item_id, document_id, filename, item_index, title, status, text_hash, created_at)
+                VALUES
+                    (%s, %s, %s, %s, %s, 'insights_pending', %s, NOW())
+                ON CONFLICT (news_item_id) DO NOTHING
+                """,
+                (
+                    news_item_id,
+                    document_id,
+                    filename,
+                    int(item_index),
+                    title or None,
+                    text_hash or None,
+                ),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def set_insight_indexed_in_qdrant_sync(self, news_item_id: str) -> bool:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE news_item_insights
+                SET indexed_in_qdrant_at = NOW(), status = 'insights_done', updated_at = NOW()
+                WHERE news_item_id = %s
+                """,
+                (news_item_id,),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
         finally:
             self.get_connection_pool().putconn(conn)
 

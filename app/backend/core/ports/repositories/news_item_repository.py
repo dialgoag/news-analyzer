@@ -197,6 +197,10 @@ class NewsItemRepository(ABC):
         """SYNC: list news_items rows for a document."""
         pass
 
+    def upsert_items_sync(self, document_id: str, filename: str, items: Sequence[dict]) -> int:
+        """SYNC: insert/update news_items rows for a document."""
+        pass
+
     def list_insights_by_document_id_sync(self, document_id: str) -> List[dict]:
         """SYNC: list news_item_insights rows for a document."""
         pass
@@ -245,6 +249,22 @@ class NewsItemRepository(ABC):
 
     def delete_insights_by_document_id_sync(self, document_id: str) -> int:
         """SYNC: delete news_item_insights rows for a document."""
+        pass
+
+    def enqueue_insight_sync(
+        self,
+        news_item_id: str,
+        document_id: str,
+        filename: str,
+        item_index: int,
+        title: Optional[str] = None,
+        text_hash: Optional[str] = None,
+    ) -> bool:
+        """SYNC: enqueue one news_item_insights row if missing."""
+        pass
+
+    def set_insight_indexed_in_qdrant_sync(self, news_item_id: str) -> bool:
+        """SYNC: mark insight row as indexed in Qdrant."""
         pass
 
     def set_insights_pending_for_document_sync(self, document_id: str, from_status: str) -> int:

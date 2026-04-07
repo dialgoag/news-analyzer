@@ -35,14 +35,10 @@ if TYPE_CHECKING:
 # Authentication imports
 from auth import create_user_token
 from database import (
-    db,
-    document_status_store,
     daily_report_store,
     weekly_report_store,
     notification_store,
     document_insights_store,
-    news_item_store,
-    news_item_insights_store,
     ProcessingQueueStore,
     UserRole,
 )
@@ -931,7 +927,7 @@ def master_pipeline_scheduler():
                 break
         if orphan_news_items:
             for row in orphan_news_items:
-                news_item_insights_store.enqueue(
+                news_item_repository.enqueue_insight_sync(
                     news_item_id=row['news_item_id'],
                     document_id=row['document_id'],
                     filename=row['filename'],
@@ -1665,7 +1661,7 @@ def _perform_chunking(text: str, document_id: str, filename: str, doc_type: str)
                 })
         
         # Persist items metadata in SQLite
-        news_item_store.upsert_items(
+        news_item_repository.upsert_items_sync(
             document_id=document_id,
             filename=filename,
             items=[{
@@ -1801,7 +1797,7 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
 
             # STEP 2.1: Check for existing items by text_hash to avoid duplicates on reprocessing
             existing_items_by_hash = {}
-            existing_items = news_item_store.list_by_document_id(document_id)
+            existing_items = news_item_repository.list_by_document_id_sync(document_id)
             for existing in existing_items:
                 if existing.get("text_hash"):
                     existing_items_by_hash[existing["text_hash"]] = existing
@@ -1865,7 +1861,7 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
             logger.info(f"   📊 Items summary: {new_items_count} new, {reused_items_count} reused (total: {len(items_to_upsert)})")
             
             # Persist items metadata in SQLite
-            news_item_store.upsert_items(
+            news_item_repository.upsert_items_sync(
                 document_id=document_id,
                 filename=filename,
                 items=items_to_upsert,
@@ -1957,15 +1953,15 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
         if INSIGHTS_QUEUE_ENABLED and rag_pipeline:
             try:
                 # Encolar insights por noticia (news_item_id). Dedupe por text_hash del item.
-                items = news_item_store.list_by_document_id(document_id)
+                items = news_item_repository.list_by_document_id_sync(document_id)
                 for it in items:
                     nid = it["news_item_id"]
                     title = it.get("title") or ""
                     item_index = int(it.get("item_index") or 0)
                     text_hash = it.get("text_hash") or None
 
-                    existing = news_item_insights_store.get_done_by_text_hash(text_hash) if text_hash else None
-                    news_item_insights_store.enqueue(
+                    existing = news_item_repository.get_done_insight_by_text_hash_sync(text_hash) if text_hash else None
+                    news_item_repository.enqueue_insight_sync(
                         news_item_id=nid,
                         document_id=document_id,
                         filename=filename,
@@ -1974,8 +1970,8 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
                         text_hash=text_hash,
                     )
                     if existing and existing.get("content"):
-                        news_item_insights_store.set_status(
-                            nid, news_item_insights_store.STATUS_DONE,
+                        news_item_repository.set_insight_status_sync(
+                            nid, InsightStatus.DONE,
                             content=existing.get("content"), llm_source=existing.get("llm_source")
                         )
                         logger.info(f"News item insights reused for {nid} ({title})")
@@ -2083,10 +2079,9 @@ def run_news_item_insights_queue_job():
     import insights_pipeline_control as _ipc
     if _ipc.is_generation_paused():
         return
-    pending = news_item_insights_store.get_next_pending(limit=1)
-    if not pending:
+    row = news_item_repository.get_next_pending_insight_sync()
+    if not row:
         return
-    row = pending[0]
     news_item_id = row["news_item_id"]
     document_id = row["document_id"]
     filename = row["filename"]
@@ -2095,20 +2090,20 @@ def run_news_item_insights_queue_job():
     # DEDUP: Check text_hash before calling GPT
     text_hash = row.get("text_hash")
     if text_hash:
-        existing = news_item_insights_store.get_done_by_text_hash(text_hash)
+        existing = news_item_repository.get_done_insight_by_text_hash_sync(text_hash)
         if existing and existing.get("content") and existing.get("news_item_id") != news_item_id:
-            news_item_insights_store.set_status(
-                news_item_id, news_item_insights_store.STATUS_DONE,
+            news_item_repository.set_insight_status_sync(
+                news_item_id, InsightStatus.DONE,
                 content=existing["content"], llm_source=existing.get("llm_source")
             )
             logger.info(f"♻️ Reused insight via text_hash for {news_item_id} ({title}) (saved GPT call)")
             return
     
-    news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_GENERATING)
+    news_item_repository.set_insight_status_sync(news_item_id, InsightStatus.GENERATING)
     try:
         chunks = qdrant_connector.get_chunks_by_news_item_ids([news_item_id], max_chunks=500)
         if not chunks:
-            news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_ERROR, error_message="No chunks")
+            news_item_repository.set_insight_status_sync(news_item_id, InsightStatus.ERROR, error_message="No chunks")
             return
         texts = [c.get("text", "") for c in chunks if c.get("text")]
         context = "\n\n".join(texts)
@@ -2118,7 +2113,7 @@ def run_news_item_insights_queue_job():
         for attempt in range(INSIGHTS_MAX_RETRIES):
             try:
                 content, llm_source = generate_insights_for_queue(context, label)
-                news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_DONE, content=content, llm_source=llm_source)
+                news_item_repository.set_insight_status_sync(news_item_id, InsightStatus.DONE, content=content, llm_source=llm_source)
                 logger.info(f"News item insights generated for {news_item_id} ({title}) via {llm_source}")
                 return
             except requests.exceptions.HTTPError as e:
@@ -2131,10 +2126,10 @@ def run_news_item_insights_queue_job():
                     time.sleep(wait)
                 else:
                     raise
-        news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_ERROR, error_message="Max retries (429)")
+        news_item_repository.set_insight_status_sync(news_item_id, InsightStatus.ERROR, error_message="Max retries (429)")
     except Exception as e:
         logger.error(f"News item insights generation failed for {news_item_id}: {e}", exc_info=True)
-        news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_ERROR, error_message=str(e))
+        news_item_repository.set_insight_status_sync(news_item_id, InsightStatus.ERROR, error_message=str(e))
 
 
 async def _insights_worker_task(
@@ -2774,9 +2769,9 @@ async def _indexing_worker_task(document_id: str, filename: str, worker_id: str)
         
         if INSIGHTS_QUEUE_ENABLED and rag_pipeline:
             try:
-                items = news_item_store.list_by_document_id(document_id)
+                items = news_item_repository.list_by_document_id_sync(document_id)
                 for it in items:
-                    news_item_insights_store.enqueue(
+                    news_item_repository.enqueue_insight_sync(
                         news_item_id=it["news_item_id"],
                         document_id=document_id,
                         filename=filename,
@@ -3143,7 +3138,7 @@ def _run_reindex_all():
                 _index_insight_in_qdrant(
                     r["news_item_id"], r["document_id"], r["filename"] or "", r.get("title") or "", r["content"]
                 )
-                news_item_insights_store.set_indexed_in_qdrant(r["news_item_id"])
+                news_item_repository.set_insight_indexed_in_qdrant_sync(r["news_item_id"])
             except Exception as e:
                 logger.warning(f"Reindex insight {r.get('news_item_id')}: {e}")
         if insights_to_reindex:

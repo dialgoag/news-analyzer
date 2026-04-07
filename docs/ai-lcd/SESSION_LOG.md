@@ -3961,3 +3961,9 @@ curl -X POST /api/documents/{real_doc_id}/requeue
 - **Alternativas consideradas**: Dejar esta función como excepción temporal (rechazada por inconsistencia con refactor previo).
 - **Impacto en roadmap**: `app.py` queda concentrado en orquestación; acceso a datos pasa por puertos.
 - **Riesgo**: Bajo; se preservó lógica de semáforo y asignación atómica existente.
+
+### Cambio: Cierre de stores legacy remanentes en `app.py`
+- **Decisión**: Completar la migración hexagonal sustituyendo `news_item_store/news_item_insights_store` por `news_item_repository` en paths internos aún activos.
+- **Alternativas consideradas**: Mantener wrappers legacy temporales (rechazada por prolongar doble fuente de verdad en runtime).
+- **Impacto en roadmap**: `app.py` queda más cerca de bootstrap puro; acceso a news items/insights consolidado en puertos.
+- **Riesgo**: Bajo-medio; mitigado replicando semántica de dedup, enqueue y marcado de indexación con nuevos métodos sync en repositorio.
