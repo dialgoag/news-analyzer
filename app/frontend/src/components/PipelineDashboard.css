@@ -35,9 +35,22 @@
   flex-shrink: 0;
 }
 
-/* Workers inline container */
-.workers-inline-container {
-  display: block;
+/* Workers + Errors side-by-side row */
+.workers-errors-row {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.error-panel-compact {
+  min-height: 140px;
+}
+
+@media (max-width: 1024px) {
+  .workers-errors-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .mini-widget {

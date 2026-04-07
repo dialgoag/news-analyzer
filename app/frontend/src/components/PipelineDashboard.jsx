@@ -213,8 +213,9 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
           />
         )}
         
-        {/* NEW: Workers Status */}
-        <div className="workers-inline-container">
+        {/* NEW: Workers + Errors side-by-side */}
+        <div className="workers-errors-row">
+          {/* Workers Widget */}
           <div className="mini-widget workers-widget">
             <div className="mini-widget-header">
               <UsersIcon className="widget-icon" aria-hidden="true" />
@@ -252,17 +253,19 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
               </div>
             </div>
           </div>
+          
+          {/* Error Panel (compact version in same row) */}
+          <div className="error-panel-compact">
+            <CollapsibleSection 
+              title="Análisis de Errores" 
+              icon={ExclamationTriangleIcon} 
+              priority="high"
+              defaultCollapsed={false}
+            >
+              <ErrorAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+            </CollapsibleSection>
+          </div>
         </div>
-        
-        {/* Full Error Panel (always visible but collapsible) */}
-        <CollapsibleSection 
-          title="Análisis Detallado de Errores" 
-          icon={ExclamationTriangleIcon} 
-          priority="high"
-          defaultCollapsed={false}
-        >
-          <ErrorAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
-        </CollapsibleSection>
         
         {/* Coordenadas Paralelas (improved) */}
         <ParallelPipelineCoordinates data={parallelData} documents={documents} />
