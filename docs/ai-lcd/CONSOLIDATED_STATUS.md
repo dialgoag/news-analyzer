@@ -1,11 +1,68 @@
 # 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-04-01
 
-> **Versión definitiva**: Fix #136 Indexing Insights como Etapa de Primera Clase; Fix #135 Validación Flexible Insights (JSON+Markdown); Fix #134 LangGraph Node Renaming; Fix #133 Docker Layering Optimization; Fix #132 Docker Import Fixes; Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
+> **Versión definitiva**: Fix #137 Pre-validación de Contexto Insights (ahorro de costos LLM); Fix #136 Indexing Insights como Etapa de Primera Clase; Fix #135 Validación Flexible Insights (JSON+Markdown); Fix #134 LangGraph Node Renaming; Fix #133 Docker Layering Optimization; Fix #132 Docker Import Fixes; Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
 **Última actualización**: 2026-04-07  
-**Prioridad**: REQ-015 — Insights Workers End-to-End COMPLETADO (Fixes #132-#136)
+**Prioridad**: REQ-015 — Insights Workers End-to-End COMPLETADO (Fixes #132-#137)
 
 **Backlog (solo documentación, 2026-04-06)**: Pasos futuros para cerrar la brecha entre insights por noticia (LangGraph + `InsightMemory`) y reportes que aún arman contexto desde chunks — ver `PLAN_AND_NEXT_STEP.md` backlog ítem **7** y `SESSION_LOG.md` § 2026-04-06.
+
+---
+
+### 137. Pre-validación de Contexto Insights (Ahorro de Costos LLM) ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: 
+- `app/backend/app.py` líneas 2175-2215 (pre-validation antes de LLM call)
+- `app/backend/adapters/driven/llm/graphs/insights_graph.py` líneas 177-193 (detección de refusals)
+
+**Problema**:
+- OpenAI rechazaba contextos incompletos con "I'm sorry, but I can't assist with that request"
+- El sistema reintentaba 5 veces por cada news_item (~5000 tokens / $0.10 USD desperdiciados)
+- Algunos news_items tenían contextos muy cortos (1000-1400 chars, 1-2 chunks)
+- El workflow LangGraph seguía intentando incluso con contextos claramente insuficientes
+- Rate limiting de OpenAI (429 Too Many Requests) por exceso de llamadas fallidas
+
+**Solución**:
+1. **Pre-validación de contexto** en `_insights_worker_task()` ANTES de llamar al LLM:
+   - Valida `len(context) >= 500 chars` (MIN_CONTEXT_LENGTH)
+   - Si contexto insuficiente → marca error inmediatamente SIN llamar al LLM
+   - Log: "⚠️ SKIPPING LLM call - Insufficient context: X chars < 500"
+   - Ahorra ~5000 tokens ($0.10 USD) por cada news_item con contexto insuficiente
+
+2. **Detección temprana de refusals** en `validate_extraction_node()`:
+   - Detecta mensajes "I'm sorry", "I can't assist", "incomplete", "lacks sufficient context"
+   - Si es refusal → marca error inmediato y retorna (no más reintentos)
+   - Evita desperdiciar 4 reintentos adicionales (~4000 tokens más)
+
+3. **Error específico registrado**:
+   - Error message: "Insufficient context: X chars < 500 (needs more content)"
+   - Permite identificar y filtrar estos casos para reprocesamiento posterior
+   - Endpoint `/api/v1/workers/retry-errors` puede reencolar estos news_items si se corrige el chunking
+
+**Impacto**:
+- ✅ **Ahorro de costos**: ~$0.10 USD por news_item con contexto insuficiente (sin llamadas al LLM)
+- ✅ **Reduce rate limiting**: Menos llamadas fallidas a OpenAI
+- ✅ **Errores claros**: "Insufficient context" vs "Workflow failed at None"
+- ✅ **Reprocesamiento posible**: Endpoint `/retry-errors` puede reencolar si se mejora el chunking
+- ✅ **Logging mejorado**: Identifica cuántos tokens se ahorraron
+
+**⚠️ NO rompe**:
+- Generación de insights con contexto válido (>500 chars) ✅
+- Workflow LangGraph existente ✅
+- Cache LangMem ✅
+- Retry logic para errores reales (network, rate limit) ✅
+
+**Verificación**:
+- [ ] News_items con contexto <500 chars marcan error sin llamar al LLM
+- [ ] News_items con contexto >500 chars procesan normalmente
+- [ ] Log muestra "SKIPPING LLM call" y tokens ahorrados
+- [ ] Dashboard muestra errores con mensaje específico
+- [ ] `/retry-errors` puede reprocesar insights con error
+
+**Próximos pasos** (backlog):
+- Investigar por qué algunos news_items tienen contextos tan cortos (problema de chunking/segmentación)
+- Considerar ajustar estrategia de chunking para news_items muy pequeños
+- Monitorear tasa de errores "Insufficient context" para evaluar si MIN_CONTEXT_LENGTH es adecuado
 
 ---
 

@@ -483,6 +483,25 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
         finally:
             self.get_connection_pool().putconn(conn)
 
+    def get_insight_by_id_sync(self, news_item_id: str) -> Optional[dict]:
+        """Get single news_item_insight by news_item_id."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT news_item_id, document_id, filename, item_index, title, status, content, error_message,
+                       text_hash, llm_source, indexed_in_qdrant_at, retry_count, created_at, updated_at
+                FROM news_item_insights
+                WHERE news_item_id = %s
+                """,
+                (news_item_id,),
+            )
+            row = cursor.fetchone()
+            return self.map_row_to_dict(cursor, row) if row else None
+        finally:
+            self.get_connection_pool().putconn(conn)
+
     def list_insights_by_news_item_id_sync(self, news_item_id: str) -> List[dict]:
         conn = self.get_connection_pool().getconn()
         try:
@@ -672,6 +691,32 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
             if llm_source is not None:
                 updates.append("llm_source = %s")
                 args.append(llm_source)
+            args.append(news_item_id)
+            cursor.execute(
+                f"UPDATE news_item_insights SET {', '.join(updates)} WHERE news_item_id = %s",
+                tuple(args),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def set_insight_status_with_retry_sync(
+        self,
+        news_item_id: str,
+        status: str,
+        error_message: Optional[str] = None,
+        retry_count: int = 0,
+    ) -> bool:
+        """Update insight status, error message, and retry_count."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            updates = ["status = %s", "retry_count = %s", "updated_at = NOW()"]
+            args: List[object] = [status, retry_count]
+            if error_message is not None:
+                updates.append("error_message = %s")
+                args.append(error_message)
             args.append(news_item_id)
             cursor.execute(
                 f"UPDATE news_item_insights SET {', '.join(updates)} WHERE news_item_id = %s",

@@ -205,6 +205,10 @@ class NewsItemRepository(ABC):
         """SYNC: list news_item_insights rows for a document."""
         pass
 
+    def get_insight_by_id_sync(self, news_item_id: str) -> Optional[dict]:
+        """SYNC: get single news_item_insight by news_item_id."""
+        pass
+
     def list_insights_by_news_item_id_sync(self, news_item_id: str) -> List[dict]:
         """SYNC: list news_item_insights rows for a news_item_id."""
         pass
@@ -254,6 +258,16 @@ class NewsItemRepository(ABC):
         llm_source: Optional[str] = None,
     ) -> bool:
         """SYNC: update status/content/error for a news_item_insights row."""
+        pass
+
+    def set_insight_status_with_retry_sync(
+        self,
+        news_item_id: str,
+        status: str,
+        error_message: Optional[str] = None,
+        retry_count: int = 0,
+    ) -> bool:
+        """SYNC: update status/error/retry_count for a news_item_insights row."""
         pass
 
     def delete_by_document_id_sync(self, document_id: str) -> int:

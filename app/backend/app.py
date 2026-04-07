@@ -735,6 +735,21 @@ def master_pipeline_scheduler():
                     elif (task_type or "").lower() == "insights" and doc_id and str(doc_id).startswith("insight_"):
                         # Legacy insights lock: doc_id="insight_{news_item_id}"
                         news_item_id = doc_id[8:]  # strip "insight_"
+                        
+                        # Check retry_count BEFORE recovering
+                        current_item = news_item_repository.get_insight_by_id_sync(news_item_id)
+                        retry_count = current_item.get("retry_count", 0) if current_item else 0
+                        MAX_INSIGHTS_RETRIES = 3
+                        
+                        if retry_count >= MAX_INSIGHTS_RETRIES:
+                            # Max retries exceeded - don't requeue, mark as permanent error
+                            logger.warning(
+                                f"   ⏭ Skipping recovery for {news_item_id[:30]}... - "
+                                f"max retries exceeded ({retry_count}/{MAX_INSIGHTS_RETRIES})"
+                            )
+                            # Keep as ERROR status, don't reset to PENDING
+                            continue
+                        
                         updated_rows = news_item_repository.set_insight_status_if_current_sync(
                             news_item_id,
                             InsightStatus.GENERATING,
@@ -2173,6 +2188,39 @@ async def _insights_worker_task(
             f"({len(context)} chars, {len(chunks)} chunks)"
         )
         
+        # PRE-VALIDATION: Check if context is sufficient before calling LLM
+        # This prevents wasting API calls on incomplete/insufficient content
+        MIN_CONTEXT_LENGTH = 500  # Minimum chars to be worth analyzing
+        MIN_CHUNKS_COUNT = 1      # Minimum chunks required
+        
+        if len(context) < MIN_CONTEXT_LENGTH:
+            error_msg = f"Insufficient context: {len(context)} chars < {MIN_CONTEXT_LENGTH} (needs more content)"
+            logger.warning(
+                f"[{worker_id}] ⚠️ SKIPPING LLM call - {error_msg} "
+                f"(saved ~5000 tokens / $0.10 USD)"
+            )
+            
+            # RECORD STAGE END with error
+            stage_timing_repository.record_stage_end_sync(
+                document_id=document_id,
+                news_item_id=news_item_id,
+                stage='insights',
+                status='error',
+                error_message=error_msg
+            )
+            
+            news_item_repository.set_insight_status_sync(
+                news_item_id,
+                InsightStatus.ERROR,
+                error_message=error_msg
+            )
+            worker_repository.update_worker_status_sync(
+                worker_id, task_doc_id, 'insights', 'error',
+                error_message=error_msg
+            )
+            worker_repository.mark_task_completed_sync(task_doc_id, 'insights')
+            return
+        
         # Generate insights with InsightsWorkerService (LangGraph + LangMem)
         from core.application.services.insights_worker_service import get_insights_worker_service
         
@@ -2236,6 +2284,26 @@ async def _insights_worker_task(
         try:
             err_msg = str(e)[:200]
             
+            # Get current retry_count
+            current_item = news_item_repository.get_insight_by_id_sync(news_item_id)
+            retry_count = (current_item.get("retry_count", 0) if current_item else 0) + 1
+            
+            # MAX_INSIGHTS_RETRIES: Maximum attempts before marking as permanent error
+            MAX_INSIGHTS_RETRIES = 3
+            
+            # Check if we've exceeded max retries
+            if retry_count >= MAX_INSIGHTS_RETRIES:
+                err_msg = f"[MAX_RETRIES_EXCEEDED] {err_msg} (attempt {retry_count}/{MAX_INSIGHTS_RETRIES})"
+                logger.error(
+                    f"[{worker_id}] ❌ Max retries exceeded ({retry_count}/{MAX_INSIGHTS_RETRIES}) - "
+                    f"marking as permanent error"
+                )
+            else:
+                logger.warning(
+                    f"[{worker_id}] ⚠️ Retry {retry_count}/{MAX_INSIGHTS_RETRIES} failed - "
+                    f"will retry on next recovery cycle"
+                )
+            
             # RECORD STAGE END with error (NEW: stage timing)
             stage_timing_repository.record_stage_end_sync(
                 document_id=document_id,
@@ -2245,10 +2313,12 @@ async def _insights_worker_task(
                 error_message=err_msg
             )
             
-            news_item_repository.set_insight_status_sync(
+            # Increment retry_count in database
+            news_item_repository.set_insight_status_with_retry_sync(
                 news_item_id,
                 InsightStatus.ERROR,
-                error_message=err_msg
+                error_message=err_msg,
+                retry_count=retry_count
             )
             worker_repository.update_worker_status_sync(
                 worker_id, task_doc_id, 'insights', 'error',

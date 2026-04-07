@@ -174,13 +174,23 @@ async def validate_extraction_node(state: InsightState) -> InsightState:
     has_events = has_events_md or has_events_json
     has_minimum_length = len(extracted) > 100
     
-    # Check for refusal/error messages
+    # Check for refusal/error messages from LLM
     is_refusal = ("i'm sorry" in extracted_lower or 
                   "i cannot" in extracted_lower or
-                  "i can't assist" in extracted_lower)
+                  "i can't assist" in extracted_lower or
+                  "incomplete" in extracted_lower or
+                  "lacks sufficient context" in extracted_lower)
     
-    # Valid if has metadata and (actors or events) and minimum length and not a refusal
-    is_valid = has_metadata and (has_actors or has_events) and has_minimum_length and not is_refusal
+    # If LLM refused (insufficient context), mark as invalid immediately
+    if is_refusal:
+        logger.warning(
+            f"⚠️ [validate_extraction_node] LLM REFUSAL detected - "
+            f"content is insufficient or inappropriate. Preview: {extracted[:150]}"
+        )
+        state['extraction_valid'] = False
+        state['error'] = "LLM refused to process (insufficient context)"
+        state['error_step'] = 'extraction_refusal'
+        return state
     
     # Valid if has metadata and (actors or events) and minimum length
     is_valid = has_metadata and (has_actors or has_events) and has_minimum_length
