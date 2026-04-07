@@ -1,5 +1,113 @@
 /* Recovered from production CSS bundle */
-/* Updated 2026-04-07: Compact layout with design tokens */
+/* Updated 2026-04-07: Compact layout with design tokens + Auto-refresh controls */
+
+/* Dashboard header with refresh controls */
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-2);
+  flex-shrink: 0;
+}
+
+.dashboard-title {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.refresh-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.refresh-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--text-secondary);
+}
+
+.refresh-icon.spinning {
+  animation: spin 1s linear infinite;
+}
+
+.refresh-interval-select {
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  min-width: 100px;
+}
+
+.refresh-interval-select:hover {
+  border-color: var(--color-info);
+}
+
+.refresh-interval-select:focus {
+  outline: none;
+  border-color: var(--color-info);
+  box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.1);
+}
+
+.refresh-now-button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-info);
+  border: none;
+  border-radius: var(--radius-md);
+  color: white;
+  font-size: var(--text-sm);
+  font-family: var(--font-body);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.refresh-now-button:hover:not(:disabled) {
+  background: #1976d2;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.refresh-now-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.refresh-now-button .refresh-icon {
+  width: 16px;
+  height: 16px;
+  color: white;
+}
+
+@media (max-width: 768px) {
+  .dashboard-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-3);
+  }
+  
+  .refresh-controls {
+    justify-content: space-between;
+  }
+  
+  .refresh-now-button {
+    flex: 1;
+  }
+}
 
 .error-banner {
   background: #fff3cd;
