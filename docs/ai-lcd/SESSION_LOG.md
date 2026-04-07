@@ -4029,3 +4029,19 @@ curl -X POST /api/documents/{real_doc_id}/requeue
   - Base image: Sistema + PyTorch + ALL Python deps (build raro, ~5-7min)
   - App image: SOLO código fuente .py (build frecuente, ~10-20s)
 - **Próximo paso**: Rebuild completo y testing antes de commit
+
+
+### Cambio: Fix LangGraph - Renombrar nodo "error" a "error_handler"
+- **Decisión**: Resolver conflicto de nombres entre campo de estado y nodo del grafo en LangGraph.
+- **Contexto**: Tras resolver los imports de Docker, el workflow de insights ejecutaba pero fallaba con `ValueError: 'error' is already being used as a state key`. LangGraph no permite que los nodos del grafo tengan el mismo nombre que los campos del estado TypedDict.
+- **Alternativas consideradas**:
+  - Renombrar campo de estado `error` → `error_message` (rechazada: cambiaría muchas referencias en el código)
+  - Renombrar nodo `"error"` → `"error_handler"` (elegida: cambio localizado, semánticamente claro)
+- **Impacto en roadmap**: 
+  - Desbloquea ejecución completa del workflow de insights
+  - Workers ahora ejecutan hasta llamada a OpenAI (falla por quota 429, no por estructura)
+  - Confirma que Fix #132 y #133 funcionaron correctamente
+- **Riesgo**: Muy bajo; solo renombra identificador de nodo, no cambia lógica
+- **Archivos modificados**:
+  - `adapters/driven/llm/graphs/insights_graph.py`: 5 líneas (nodo + edges + docstring)
+- **Próximo blocker**: OpenAI API quota exceeded (issue operativo, requiere recarga de créditos)

@@ -363,7 +363,7 @@ def create_insights_graph() -> StateGraph:
                               ↓ (retry if needed)
                            finalize → END
                               ↓ (on error)
-                            error → END
+                      error_handler → END
     
     Returns:
         StateGraph configured with nodes and edges
@@ -377,7 +377,7 @@ def create_insights_graph() -> StateGraph:
     graph.add_node("analyze", analyze_node)
     graph.add_node("validate_analysis", validate_analysis_node)
     graph.add_node("finalize", finalize_node)
-    graph.add_node("error", error_node)
+    graph.add_node("error_handler", error_node)
     
     # Set entry point
     graph.set_entry_point("extract")
@@ -393,7 +393,7 @@ def create_insights_graph() -> StateGraph:
         {
             "retry": "extract",      # Try extraction again
             "continue": "analyze",   # Proceed to analysis
-            "fail": "error"          # Give up
+            "fail": "error_handler"  # Give up
         }
     )
     
@@ -407,15 +407,15 @@ def create_insights_graph() -> StateGraph:
         {
             "retry": "analyze",      # Try analysis again
             "continue": "finalize",  # Proceed to finalize
-            "fail": "error"          # Give up
+            "fail": "error_handler"  # Give up
         }
     )
     
     # finalize → END
     graph.add_edge("finalize", END)
     
-    # error → END
-    graph.add_edge("error", END)
+    # error_handler → END
+    graph.add_edge("error_handler", END)
     
     return graph
 

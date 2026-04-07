@@ -4960,3 +4960,37 @@ docker compose up -d --force-recreate --no-deps backend
 ```
 
 **Nota**: La imagen base actual ya tiene requirements.txt instalado del build anterior, así que los próximos rebuilds de la app serán instantáneos.
+
+
+### 134. Fix LangGraph: Renombrar nodo "error" a "error_handler" ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/adapters/driven/llm/graphs/insights_graph.py` (líneas 380, 396, 410, 418, 366)
+
+**Problema**: Workers de insights fallaban con `ValueError: 'error' is already being used as a state key` al intentar crear el grafo de LangGraph.
+
+**Causa raíz**: 
+- El estado `InsightState` tiene un campo `error: Optional[str]` (línea 77)
+- El grafo intentaba agregar un nodo llamado `"error"` (línea 380)
+- LangGraph no permite que los nodos tengan el mismo nombre que los campos del estado
+
+**Solución**: Renombrado nodo `"error"` → `"error_handler"` en:
+1. `graph.add_node("error_handler", error_node)`
+2. Conditional edges: `"fail": "error_handler"`
+3. Final edge: `graph.add_edge("error_handler", END)`
+4. Docstring actualizado
+
+**Impacto**: Workflow de insights ahora se ejecuta sin errores de grafo. Los workers llegan hasta la llamada a OpenAI (aunque fallen por quota 429).
+
+**⚠️ NO rompe**: 
+- Scheduler ✅
+- Worker dispatch ✅
+- Imports ✅
+- LangGraph workflow structure ✅
+
+**Verificación**:
+- [x] `python -m py_compile insights_graph.py`
+- [x] Backend rebuild: 100 segundos (solo código)
+- [x] Workers dispatched sin "already being used" error
+- [x] Workflow ejecuta hasta OpenAI call
+- [ ] Pendiente: Resolver quota 429 OpenAI (issue operativo separado)
+- [ ] Pendiente: Verificar insights completen end-to-end con API key válida
