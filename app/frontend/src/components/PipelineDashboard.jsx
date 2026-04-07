@@ -33,7 +33,6 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
   // New states for compact components
   const [analysisData, setAnalysisData] = useState(null);
   const [workerStats, setWorkerStats] = useState(null);
-  const [showFullErrors, setShowFullErrors] = useState(false);
 
   const fetchPipelineData = useCallback(async () => {
     if (!token) return;
@@ -212,26 +211,17 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
           workerStats={workerStats}
           errorGroups={errorGroups}
           onRefresh={fetchPipelineData}
-          onExpandErrors={() => setShowFullErrors(true)}
         />
         
-        {/* Full Error Panel (shown on demand) */}
-        {showFullErrors && (
-          <CollapsibleSection 
-            title="Análisis Detallado de Errores" 
-            icon={ExclamationTriangleIcon} 
-            priority="high"
-            defaultCollapsed={false}
-          >
-            <ErrorAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
-            <button 
-              onClick={() => setShowFullErrors(false)}
-              style={{ marginTop: '12px', padding: '8px 16px', borderRadius: '6px' }}
-            >
-              Cerrar
-            </button>
-          </CollapsibleSection>
-        )}
+        {/* Full Error Panel (always visible but collapsible) */}
+        <CollapsibleSection 
+          title="Análisis Detallado de Errores" 
+          icon={ExclamationTriangleIcon} 
+          priority="high"
+          defaultCollapsed={false}
+        >
+          <ErrorAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+        </CollapsibleSection>
         
         {/* Coordenadas Paralelas (improved) */}
         <ParallelPipelineCoordinates data={parallelData} documents={documents} />

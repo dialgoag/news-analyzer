@@ -95,12 +95,9 @@ export function WorkersErrorsInline({
                 </div>
               ))}
               {errorGroups.length > 2 && (
-                <button 
-                  className="expand-errors-button"
-                  onClick={onExpandErrors}
-                >
-                  Ver todos ({errorGroups.length})
-                </button>
+                <div className="more-errors-hint">
+                  +{errorGroups.length - 2} más (ver panel abajo)
+                </div>
               )}
             </div>
           )}
