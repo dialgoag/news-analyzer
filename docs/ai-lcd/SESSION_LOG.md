@@ -3,7 +3,27 @@
 > Decisiones, cambios importantes, y contexto entre sesiones
 
 **Última actualización**: 2026-04-07  
-**Sesión**: 57 (Indexing Insights End-to-End - Fix #136)
+**Sesión**: 58 (Dashboard Auto-Refresh Global - Fix #137)
+
+---
+
+## 2026-04-07 — Dashboard: Auto-Refresh Global con Selector de Intervalo (Fix #137)
+
+### Cambio: Control centralizado de auto-refresh
+- **Decisión**: Reemplazar auto-refresh fijo (20s) con selector configurable
+- **Razón**: Usuario reportó necesidad de control sobre frecuencia de actualización
+- **Opciones de intervalo**: Pausado, 5s, 10s, 20s, 1min, 5min
+- **Implementación**:
+  - Header dashboard con selector dropdown + botón "Refrescar ahora"
+  - Estado `refreshInterval` con persistencia en localStorage
+  - useEffect condicional: solo setInterval si refreshInterval > 0
+  - Eliminar botón individual de Workers (refresh ahora es global)
+- **Alternativas consideradas**: 
+  - Toggle ON/OFF simple (rechazada: menos flexible)
+  - Input numérico libre (rechazada: puede generar valores inválidos)
+- **Impacto en roadmap**: Mejora UX de monitoreo, complementa dashboard compacto (REQ-014)
+- **Riesgo**: Ninguno - Mejora iterativa sobre funcionalidad existente
+- **Resultado**: Usuario puede pausar refresh durante análisis profundo o acelerar (5s) durante debugging activo
 
 ---
 

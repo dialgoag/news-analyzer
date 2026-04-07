@@ -10,10 +10,28 @@
 > 
 > **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> **📋 ÚLTIMO**: Fix #136 — Indexing Insights End-to-End ✅.
+> **📋 ÚLTIMO**: Fix #137 — Auto-Refresh Global con Selector de Intervalo ✅.
 
 **Última actualización**: 2026-04-07  
-**Versión**: 3.0.24 (indexing insights end-to-end)
+**Versión**: 3.0.25 (dashboard auto-refresh configurable)
+
+---
+
+## ✅ REQ-014: Dashboard Monitoring - COMPLETADO ✅
+
+### [x] Fix #137: Auto-Refresh Global con Selector de Intervalo ✅ (2026-04-07)
+**Estado**: ESTABLE ✅  
+**Implementación**:
+- ✅ Header dashboard con selector (Pausado, 5s, 10s, 20s, 1min, 5min)
+- ✅ Botón "Refrescar ahora" para refresh manual inmediato
+- ✅ Persistencia en localStorage
+- ✅ Eliminar botón individual de Workers
+
+**Archivos modificados**:
+- `app/frontend/src/components/PipelineDashboard.jsx`
+- `app/frontend/src/components/PipelineDashboard.css`
+
+Ver: CONSOLIDATED_STATUS.md § Fix #137
 
 ---
 
