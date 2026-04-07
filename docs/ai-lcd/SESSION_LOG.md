@@ -3864,3 +3864,10 @@ curl -X POST /api/documents/{real_doc_id}/requeue
 - **Alternativas consideradas**: Mantener como “referencia histórica” (rechazada por riesgo de drift y confusión).
 - **Impacto en roadmap**: Avanza objetivo de dejar `app.py` como bootstrap mínimo y consolidar hexagonal.
 - **Riesgo**: Bajo; rutas activas viven en `adapters/driving/api/v1/routers/*` y se validó rebuild + smoke.
+
+
+### Cambio: Cierre de duplicados query/news-items en `app.py`
+- **Decisión**: Forzar que `/api/query` y `/api/news-items/*/insights` vivan solo en routers v2 para evitar drift.
+- **Alternativas consideradas**: Mantener fallback en `app.py` (rechazada por duplicación de lógica y rutas).
+- **Impacto en roadmap**: Reduce `app.py` a bootstrap/infra y acerca el objetivo de hexagonal completa.
+- **Riesgo**: Bajo; se corrigió path del router query y se validó auth + disponibilidad tras rebuild.

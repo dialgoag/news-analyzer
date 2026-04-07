@@ -1267,3 +1267,9 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 - [x] Eliminado bloque legacy dashboard/workers no publicado en `app/backend/app.py` (ESTABLE, no modificar).
 - [x] Verificado backend healthy tras rebuild (`make rebuild-backend`, `make ps`).
 - [ ] Pendiente: cerrar deuda restante de SQL directo en scheduler interno y completar suite de regresión integral.
+
+
+### ✅ Actualización 2026-04-07 — Cierre query/news-items
+- [x] Eliminados duplicados `/api/query` y `/api/news-items/{id}/insights` de `app/backend/app.py` (ESTABLE).
+- [x] Corregido router `query.py` a path `/query` bajo prefijo `/api`.
+- [ ] Pendiente siguiente: migrar SQL directo remanente en jobs/scheduler internos de `app.py` a servicios/repositorios.

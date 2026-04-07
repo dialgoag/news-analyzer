@@ -22,7 +22,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("", response_model=QueryResponse)
+@router.post("/query", response_model=QueryResponse)
 async def query_rag(
     request: QueryRequest,
     current_user: CurrentUser = Depends(get_current_user),

@@ -4634,3 +4634,16 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 - [x] `python -m py_compile app/backend/app.py`
 - [x] `make rebuild-backend` + `make ps` (backend healthy)
 - [x] Smoke HTTP: `/health` 200 y endpoints API responden (401 esperado sin token válido)
+
+
+### 126. App.py cleanup final: query/news-items solo por routers v2 ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/app.py`, `app/backend/adapters/driving/api/v1/routers/query.py`, `app/backend/adapters/driving/api/v1/routers/news_items.py`
+**Problema**: `app.py` aún publicaba `/api/query` y `/api/news-items/{id}/insights`; al quitar duplicados apareció mismatch en router query (`/api` en vez de `/api/query`).
+**Solución**: Eliminados endpoints/modelos duplicados en `app.py`; corregido router query a `POST /query`; news-items router alineado con auth y payload histórico.
+**Impacto**: `app.py` queda con endpoints de infraestructura solamente; rutas de negocio pasan por routers hexagonales.
+**⚠️ NO rompe**: `/health`, `/info`, `/`, middleware auth y registro de routers v2.
+**Verificación**:
+- [x] `python -m py_compile app/backend/app.py .../query.py .../news_items.py`
+- [x] `make rebuild-backend` + backend healthy
+- [x] Smoke: `/api/query` y `/api/news-items/*/insights` devuelven auth-required (403/401, no 404)

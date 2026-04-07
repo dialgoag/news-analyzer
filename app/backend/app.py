@@ -1539,27 +1539,6 @@ class InsightsPipelineUpdate(BaseModel):
     ollama_model: Optional[str] = None  # empty/null clears override (use env / default)
 
 
-class QueryRequest(BaseModel):
-    query: str
-    top_k: int = 5
-    temperature: float = 0.0  # 0.0 = completely deterministic, eliminates variability in responses
-
-
-class SourceInfo(BaseModel):
-    filename: str
-    document_id: str
-    similarity_score: float
-    chunk_index: Optional[int] = None
-    text: Optional[str] = None 
-
-
-class QueryResponse(BaseModel):
-    answer: str
-    sources: List[SourceInfo]
-    processing_time: float
-    num_sources: int
-
-
 class DocumentMetadata(BaseModel):
     filename: str
     upload_date: str
@@ -3219,114 +3198,37 @@ def run_inbox_scan():
 # Document list/status/insights/segmentation/news-items/download → adapters.driving.api.v1.routers.documents
 
 
-@app.get("/api/news-items/{news_item_id}/insights")
-async def get_news_item_insights(
-    news_item_id: str,
-    current_user: CurrentUser = Depends(get_current_user)
-):
-    """Get LLM insights for one news item (markdown)."""
-    row = news_item_insights_store.get_by_news_item_id(news_item_id)
-    if not row or row.get("status") != news_item_insights_store.STATUS_DONE:
-        raise HTTPException(status_code=404, detail="Insights not available for this news item")
-    return {
-        "news_item_id": news_item_id,
-        "document_id": row.get("document_id"),
-        "title": row.get("title") or "",
-        "content": row.get("content") or "",
-    }
-
-
-# ============================================================================
-# RAG QUERY
-# ============================================================================
-
-@app.post("/api/query", response_model=QueryResponse)
-async def query_rag(
-    request: QueryRequest,
-    current_user: CurrentUser = Depends(get_current_user)
-):
-    """
-    Main query - Complete RAG Pipeline WITH CONVERSATIONAL MEMORY
-
-    Requires: Authentication (all roles can make queries)
-
-    Processes:
-    1. Retrieve conversation history for the user
-    2. Query embedding
-    3. Retrieval from Qdrant
-    4. LLM generation with historical context
-    5. Save response in memory
-    6. Return answer + sources
-    """
-
-    # Use real user ID instead of "default"
-    user_id = str(current_user.user_id)
-    if not rag_pipeline:
-        raise HTTPException(status_code=503, detail="RAG Pipeline not initialized")
-    
-    try:
-        start_time = datetime.now()
-
-        # Initialize conversation for this user if it doesn't exist
-        if user_id not in user_conversations:
-            user_conversations[user_id] = []
-
-        conversation_history = user_conversations[user_id]
-
-        logger.info("=" * 80)
-        logger.info(f"❓ QUERY (user: {user_id}): '{request.query}'")
-        logger.info(f"   top_k: {request.top_k}")
-        logger.info(f"   temperature: {request.temperature}")
-        logger.info(f"   History length: {len(conversation_history)} exchanges")
-        logger.info("=" * 80)
-
-        # Pass history to the pipeline
-        answer, sources = rag_pipeline.query(
-            query=request.query,
-            top_k=request.top_k,
-            temperature=request.temperature,
-            history=conversation_history  # ← CONVERSATIONAL MEMORY
-        )
-
-        # Save the new exchange in memory
-        conversation_history.append({
-            "user": request.query,
-            "assistant": answer
-        })
-
-        # Limit to last 20 exchanges to not consume too much memory
-        if len(conversation_history) > 20:
-            user_conversations[user_id] = conversation_history[-20:]
-
-        processing_time = (datetime.now() - start_time).total_seconds()
-
-        logger.info("=" * 80)
-        logger.info(f"✅ QUERY COMPLETED in {processing_time:.2f}s")
-        logger.info(f"   Answer length: {len(answer)} chars")
-        logger.info(f"   Sources: {len(sources)}")
-        for src in sources:
-            logger.info(f"     - {src['filename']} (relevance: {src['similarity_score']:.2%})")
-        logger.info(f"   Conversation saved ({len(user_conversations[user_id])} exchanges)")
-        logger.info("=" * 80)
-        
-        return QueryResponse(
-            answer=answer,
-            sources=[SourceInfo(**src) for src in sources],
-            processing_time=processing_time,
-            num_sources=len(sources)
-        )
-        
-    except Exception as e:
-        logger.error("=" * 80)
-        logger.error(f"❌ QUERY ERROR: {str(e)}")
-        logger.error(traceback.format_exc())
-        logger.error("=" * 80)
-        raise HTTPException(status_code=500, detail=str(e))
+# News-item insights and RAG query APIs are served only by
+# adapters.driving.api.v1.routers.news_items and .query
 
 
 # ============================================================================
 # ADMIN ENDPOINTS
 # ============================================================================
+
+def _index_insight_in_qdrant(
+    news_item_id: str,
+    document_id: str,
+    filename: str,
+    title: str,
+    content: str,
+) -> bool:
+    """Index a generated insight into Qdrant as content_type=insight."""
+    if not qdrant_connector or not embeddings_service:
+        return False
+    if not (content or "").strip():
+        return False
+    vector = embeddings_service.embed_text(content, is_query=False)
+    qdrant_connector.insert_insight_vector(
+        vector=vector,
+        news_item_id=news_item_id,
+        document_id=document_id,
+        filename=filename or "",
+        text=content,
+        title=title or "",
+    )
+    return True
+
 
 def _run_reindex_all():
     """
