@@ -1024,3 +1024,27 @@ class PostgresWorkerRepository(BasePostgresRepository, WorkerRepository):
             return [self.map_row_to_dict(cursor, row) for row in rows]
         finally:
             self.get_connection_pool().putconn(conn)
+
+    def delete_all_worker_tasks_sync(self) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM worker_tasks")
+            deleted = cursor.rowcount
+            conn.commit()
+            return deleted
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def reset_all_processing_tasks_sync(self) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE processing_queue SET status = 'pending' WHERE status = 'processing'"
+            )
+            count = cursor.rowcount
+            conn.commit()
+            return count
+        finally:
+            self.get_connection_pool().putconn(conn)

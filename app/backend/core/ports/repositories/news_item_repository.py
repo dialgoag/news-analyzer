@@ -269,6 +269,10 @@ class NewsItemRepository(ABC):
         """SYNC: first pending/queued insight row for a document."""
         pass
 
+    def reset_generating_insights_sync(self) -> int:
+        """SYNC: set insights_generating rows back to insights_pending."""
+        pass
+
     @abstractmethod
     async def count_insights_by_status(self) -> dict:
         """Return counts of news_item_insights grouped by status."""

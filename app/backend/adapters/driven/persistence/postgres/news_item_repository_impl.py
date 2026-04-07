@@ -729,6 +729,23 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
             return self.map_row_to_dict(cursor, row)
         finally:
             self.get_connection_pool().putconn(conn)
+
+    def reset_generating_insights_sync(self) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE news_item_insights
+                SET status = 'insights_pending', error_message = NULL, updated_at = NOW()
+                WHERE status = 'insights_generating'
+                """
+            )
+            count = cursor.rowcount
+            conn.commit()
+            return count
+        finally:
+            self.get_connection_pool().putconn(conn)
     
     # ========================================
     # PRIVATE: Mapping helpers

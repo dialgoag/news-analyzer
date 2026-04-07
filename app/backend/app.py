@@ -2946,22 +2946,14 @@ async def detect_crashed_workers():
     ═══════════════════════════════════════════════════════════════════
     """
     try:
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-
         # 1) worker_tasks: everything started/assigned is orphaned;
         #    completed entries are stale history that accumulates forever
-        cursor.execute("DELETE FROM worker_tasks")
-        wt_deleted = cursor.rowcount
+        wt_deleted = worker_repository.delete_all_worker_tasks_sync()
         if wt_deleted:
             logger.warning(f"🧹 Startup: deleted {wt_deleted} worker_tasks (all orphaned on restart)")
 
         # 2) processing_queue: 'processing' entries have no live worker
-        cursor.execute(
-            "UPDATE processing_queue SET status = %s WHERE status = %s",
-            (QueueStatus.PENDING, QueueStatus.PROCESSING),
-        )
-        pq_reset = cursor.rowcount
+        pq_reset = worker_repository.reset_all_processing_tasks_sync()
         if pq_reset:
             logger.warning(f"🧹 Startup: reset {pq_reset} processing_queue → pending")
 
@@ -2974,30 +2966,24 @@ async def detect_crashed_workers():
         }
         ds_total = 0
         for stuck_status, rollback_status in stage_rollback.items():
-            cursor.execute(
-                "UPDATE document_status SET status = %s, error_message = NULL "
-                "WHERE status = %s RETURNING document_id",
-                (rollback_status, stuck_status),
-            )
-            count = cursor.rowcount
+            docs = document_repository.list_all_sync(limit=None, status=stuck_status)
+            count = len(docs)
             if count:
+                for doc in docs:
+                    document_repository.update_status_sync(
+                        doc["document_id"],
+                        PipelineStatus.from_string(rollback_status, status_type="document"),
+                        clear_error_message=True,
+                    )
                 ds_total += count
                 logger.warning(
                     f"🧹 Startup: {count} docs {stuck_status} → {rollback_status}"
                 )
 
         # 4) insights: 'generating' with no live thread → pending
-        cursor.execute(
-            "UPDATE news_item_insights SET status = %s, error_message = NULL "
-            "WHERE status = %s",
-            (InsightStatus.PENDING, InsightStatus.GENERATING),
-        )
-        ins_reset = cursor.rowcount
+        ins_reset = news_item_repository.reset_generating_insights_sync()
         if ins_reset:
             logger.warning(f"🧹 Startup: reset {ins_reset} insights {InsightStatus.GENERATING} → {InsightStatus.PENDING}")
-
-        conn.commit()
-        conn.close()
 
         total = wt_deleted + pq_reset + ds_total + ins_reset
         if total:

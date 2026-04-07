@@ -408,3 +408,11 @@ class WorkerRepository(ABC):
     def list_pending_tasks_for_dispatch_sync(self, limit: int) -> List[Dict]:
         """SYNC version - Pending processing_queue tasks ordered for dispatch."""
         pass
+
+    def delete_all_worker_tasks_sync(self) -> int:
+        """SYNC version - Delete all worker_tasks rows (startup recovery)."""
+        pass
+
+    def reset_all_processing_tasks_sync(self) -> int:
+        """SYNC version - Set all processing_queue processing rows back to pending."""
+        pass
