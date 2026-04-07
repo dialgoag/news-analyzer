@@ -57,8 +57,10 @@ docker compose logs backend | grep "Password:"
 
 ## Documentación
 
-Ver `docs/ai-lcd/` para documentación completa:
+Ver `docs/STATE_OVERVIEW.md` para la fotografía del estado actual antes de profundizar en la documentación AI-LCD.  
+Luego consulta `docs/ai-lcd/` para el detalle completo:
 
+- **[State Overview](docs/STATE_OVERVIEW.md)** -- Snapshot actualizado del sistema y backlog inmediato
 - **[CREDITS](docs/CREDITS.md)** -- Atribución al proyecto original
 - **[CONSOLIDATED_STATUS](docs/ai-lcd/CONSOLIDATED_STATUS.md)** -- Estado actual del proyecto
 - **[SESSION_LOG](docs/ai-lcd/SESSION_LOG.md)** -- Decisiones entre sesiones
