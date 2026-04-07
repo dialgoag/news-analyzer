@@ -3855,3 +3855,12 @@ curl -X POST /api/documents/{real_doc_id}/requeue
 - Todos usan lazy imports para evitar circular deps
 
 **Conclusión final**: Fase 6 **100% COMPLETA** ✅. Todos los endpoints de negocio migrados a routers modulares. Backend estable, arquitectura hexagonal implementada.
+
+
+## 2026-04-07
+
+### Cambio: Purga de código legacy no publicado en `app.py`
+- **Decisión**: Borrar funciones legacy de dashboard/workers que ya no tenían decorators ni llamadas.
+- **Alternativas consideradas**: Mantener como “referencia histórica” (rechazada por riesgo de drift y confusión).
+- **Impacto en roadmap**: Avanza objetivo de dejar `app.py` como bootstrap mínimo y consolidar hexagonal.
+- **Riesgo**: Bajo; rutas activas viven en `adapters/driving/api/v1/routers/*` y se validó rebuild + smoke.

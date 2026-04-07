@@ -1261,3 +1261,9 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 - ❌ Graceful Shutdown endpoint - Testeado y funcional
 - ❌ Convención {stage}_{state} - Estándar adoptado en todo el codebase
 - ❌ PASO 3.5 Reconciliación - Idempotente, no requiere cambios
+
+
+### ✅ Actualización 2026-04-07 — App.py cleanup final
+- [x] Eliminado bloque legacy dashboard/workers no publicado en `app/backend/app.py` (ESTABLE, no modificar).
+- [x] Verificado backend healthy tras rebuild (`make rebuild-backend`, `make ps`).
+- [ ] Pendiente: cerrar deuda restante de SQL directo en scheduler interno y completar suite de regresión integral.

@@ -4621,3 +4621,16 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 - Endpoints de infraestructura (health, info, root) correctamente permanecen en `app.py`
 - Todos los endpoints de negocio migrados a routers modulares
 - **Migración 100% completa** ✅
+
+
+### 125. Cleanup final de handlers legacy en app.py ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/app.py`
+**Problema**: Quedaban funciones legacy no publicadas (dashboard/workers) con SQL histórico y código muerto.
+**Solución**: Eliminado bloque completo legacy (~60KB) y se dejó `app.py` solo con bootstrap/infra + routers v2 como única superficie API.
+**Impacto**: Menos deuda técnica y menor riesgo de regresiones por código no usado.
+**⚠️ NO rompe**: `GET /api/dashboard/*`, `GET /api/workers/status`, `GET /api/auth/me`, `GET /api/reports/daily`, `GET /api/notifications` (servidos por routers v2).
+**Verificación**:
+- [x] `python -m py_compile app/backend/app.py`
+- [x] `make rebuild-backend` + `make ps` (backend healthy)
+- [x] Smoke HTTP: `/health` 200 y endpoints API responden (401 esperado sin token válido)
