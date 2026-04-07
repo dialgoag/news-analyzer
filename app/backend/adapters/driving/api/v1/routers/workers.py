@@ -46,6 +46,15 @@ async def get_workers_status(
         pool_active = True  # Master scheduler siempre corre si backend levantó
         pool_size = len(active_workers)  # Count actual running workers
         
+        # Get worker limits from environment
+        import os
+        TOTAL_WORKERS = int(os.getenv("PIPELINE_WORKERS_COUNT", "25"))
+        OCR_LIMIT = int(os.getenv("OCR_PARALLEL_WORKERS", "3"))
+        CHUNKING_LIMIT = int(os.getenv("CHUNKING_PARALLEL_WORKERS", "6"))
+        INDEXING_LIMIT = int(os.getenv("INDEXING_PARALLEL_WORKERS", "6"))
+        INSIGHTS_LIMIT = int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "3"))
+        INDEXING_INSIGHTS_LIMIT = int(os.getenv("INDEXING_INSIGHTS_PARALLEL_WORKERS", "4"))
+        
         workers_status = []
         worker_idx = 0
         
@@ -292,6 +301,14 @@ async def get_workers_status(
                 "pool_size": pool_size,
                 "pending_tasks": pending_counts,
                 "unhealthy_services": len([w for w in workers_status if w["type"] == "Service" and w["status"] != "healthy"]),
+                "limits": {
+                    "total": TOTAL_WORKERS,
+                    "ocr": OCR_LIMIT,
+                    "chunking": CHUNKING_LIMIT,
+                    "indexing": INDEXING_LIMIT,
+                    "insights": INSIGHTS_LIMIT,
+                    "indexing_insights": INDEXING_INSIGHTS_LIMIT
+                }
             }
         }
         app_module._cache_set("workers_status", result)

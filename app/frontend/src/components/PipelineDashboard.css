@@ -123,6 +123,12 @@
   border-color: var(--color-pending);
 }
 
+.worker-badge--total {
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
+
 .badge-dot {
   width: 6px;
   height: 6px;

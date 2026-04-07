@@ -87,7 +87,9 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
         const workers = workersResponse.value.data?.workers || [];
         const active = workers.filter(w => w.status === 'active').length;
         const idle = workers.filter(w => w.status === 'idle').length;
-        setWorkerStats({ active, idle, workers });
+        const limits = workersResponse.value.data?.summary?.limits || {};
+        const totalLimit = limits.total || 25;
+        setWorkerStats({ active, idle, workers, limits, totalLimit });
       } else {
         console.warn('Could not fetch workers data:', workersResponse.reason);
       }
@@ -247,16 +249,26 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
                   <span className="badge-dot"></span>
                   {workerStats?.idle || 0} idle
                 </div>
+                <div className="worker-badge worker-badge--total">
+                  <span className="badge-dot"></span>
+                  {workerStats?.totalLimit || 25} máx
+                </div>
               </div>
               <div className="utilization-bar">
                 <div className="utilization-bar-track">
                   <div 
                     className="utilization-bar-fill"
-                    style={{ width: `${workerStats ? Math.round((workerStats.active / (workerStats.active + workerStats.idle)) * 100) : 0}%` }}
+                    style={{ 
+                      width: `${workerStats && workerStats.totalLimit ? 
+                        Math.round((workerStats.active / workerStats.totalLimit) * 100) : 0}%` 
+                    }}
                   />
                 </div>
                 <span className="utilization-label">
-                  {workerStats ? Math.round((workerStats.active / (workerStats.active + workerStats.idle)) * 100) : 0}% utilización
+                  {workerStats && workerStats.totalLimit ? 
+                    `${workerStats.active} / ${workerStats.totalLimit} (${Math.round((workerStats.active / workerStats.totalLimit) * 100)}%)` :
+                    '0 / 25 (0%)'
+                  }
                 </span>
               </div>
               <button
