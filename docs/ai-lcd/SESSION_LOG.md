@@ -3954,3 +3954,10 @@ curl -X POST /api/documents/{real_doc_id}/requeue
 - **Alternativas consideradas**: Mantener SQL en workers “por performance” (rechazada; repositorios ya usan pool y mantiene arquitectura).
 - **Impacto en roadmap**: `app.py` queda casi sin SQL directo fuera de jobs legacy puntuales.
 - **Riesgo**: Bajo-medio; se preservó semántica de estado y dedup, cambiando solo capa de acceso.
+
+
+### Cambio: run_news_item_insights_queue_job_parallel migra a repositorios
+- **Decisión**: Eliminar SQL residual del scheduler de insights para cerrar deuda técnica del path de dispatch legacy.
+- **Alternativas consideradas**: Dejar esta función como excepción temporal (rechazada por inconsistencia con refactor previo).
+- **Impacto en roadmap**: `app.py` queda concentrado en orquestación; acceso a datos pasa por puertos.
+- **Riesgo**: Bajo; se preservó lógica de semáforo y asignación atómica existente.

@@ -409,6 +409,10 @@ class WorkerRepository(ABC):
         """SYNC version - Pending processing_queue tasks ordered for dispatch."""
         pass
 
+    def get_pending_task_sync(self, task_type: str) -> Optional[Dict]:
+        """SYNC version - Next pending processing_queue task by task_type."""
+        pass
+
     def delete_all_worker_tasks_sync(self) -> int:
         """SYNC version - Delete all worker_tasks rows (startup recovery)."""
         pass

@@ -1025,6 +1025,28 @@ class PostgresWorkerRepository(BasePostgresRepository, WorkerRepository):
         finally:
             self.get_connection_pool().putconn(conn)
 
+    def get_pending_task_sync(self, task_type: str) -> Optional[dict]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, document_id, filename, task_type, priority
+                FROM processing_queue
+                WHERE status = 'pending'
+                  AND task_type = %s
+                ORDER BY priority DESC, created_at ASC
+                LIMIT 1
+                """,
+                (task_type,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self.map_row_to_dict(cursor, row)
+        finally:
+            self.get_connection_pool().putconn(conn)
+
     def delete_all_worker_tasks_sync(self) -> int:
         conn = self.get_connection_pool().getconn()
         try:

@@ -4797,3 +4797,15 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 **Verificación**:
 - [x] `python -m py_compile` en app + repos modificados
 - [x] Sin `document_status_store.get_connection()` dentro de esos 4 workers
+
+
+### 133. Insights scheduler legacy SQL eliminado ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/app.py` (`run_news_item_insights_queue_job_parallel`), `worker_repository` y `news_item_repository`
+**Problema**: El scheduler de insights aún consultaba `worker_tasks` y `processing_queue` con SQL directo en `app.py`.
+**Solución**: Migrado a métodos sync de repositorio (`get_active_workers_counts_sync`, `get_pending_task_sync`, `set_queue_task_status_sync`, `get_next_pending_insight_sync`, `get_next_pending_insight_for_document_sync`).
+**Impacto**: El path de dispatch de insights queda alineado a arquitectura hexagonal sin SQL embebido.
+**⚠️ NO rompe**: semáforo de concurrencia insights, selección por prioridad, fallback cuando no hay task de cola.
+**Verificación**:
+- [x] `python -m py_compile` en app + repos modificados
+- [x] Sin `document_status_store.get_connection()` ni `cursor.execute()` en `run_news_item_insights_queue_job_parallel`

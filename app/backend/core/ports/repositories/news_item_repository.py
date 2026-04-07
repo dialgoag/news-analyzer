@@ -269,6 +269,10 @@ class NewsItemRepository(ABC):
         """SYNC: first pending/queued insight row for a document."""
         pass
 
+    def get_next_pending_insight_sync(self) -> Optional[dict]:
+        """SYNC: first pending/queued insight globally."""
+        pass
+
     def reset_generating_insights_sync(self) -> int:
         """SYNC: set insights_generating rows back to insights_pending."""
         pass

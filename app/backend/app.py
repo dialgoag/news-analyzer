@@ -2362,57 +2362,40 @@ def run_news_item_insights_queue_job_parallel():
             int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "1")),
             10
         ))
-        
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        
+
         # Check semaphore: active insights workers
-        cursor.execute("""
-            SELECT COUNT(*) as active
-            FROM worker_tasks
-            WHERE status IN ('assigned', 'started')
-            AND worker_type = 'Insights'
-        """)
-        result = cursor.fetchone()
-        active_workers = result[list(result.keys())[0]] if result else 0
+        workers_counts = worker_repository.get_active_workers_counts_sync()
+        active_workers = int((workers_counts.get("active_by_type") or {}).get("Insights", 0))
         
         if active_workers >= parallel_workers:
             logger.debug(f"Insights: {active_workers}/{parallel_workers} busy, skipping")
-            conn.close()
             return
         
         # Get ONE pending insights task
         # First try: from processing_queue if task_type='insights'
-        cursor.execute("""
-            SELECT * FROM processing_queue
-            WHERE status = 'pending' AND task_type = 'insights'
-            ORDER BY priority DESC, created_at ASC
-            LIMIT 1
-        """)
+        task_dict = worker_repository.get_pending_task_sync(TaskType.INSIGHTS)
         
-        task_row = cursor.fetchone()
-        
-        if not task_row:
+        if not task_dict:
             # Fallback hexagonal: usar store/repository en lugar de SQL directo
-            conn.close()
-            pending_items = news_item_insights_store.get_next_pending(limit=1)
-            if not pending_items:
+            insight_row = news_item_repository.get_next_pending_insight_sync()
+            if not insight_row:
                 return
-            insights_dict = pending_items[0]
-            news_item_id = insights_dict['news_item_id']
-            document_id = insights_dict['document_id']
-            filename = insights_dict['filename']
-            title = insights_dict.get('title', '')
+            news_item_id = insight_row['news_item_id']
+            document_id = insight_row['document_id']
+            filename = insight_row.get('filename') or document_id
+            title = insight_row.get('title', '')
         else:
             # From processing_queue
-            task_dict = dict(task_row)
             document_id = task_dict['document_id']
             filename = task_dict['filename']
-            news_item_id = task_dict['document_id']  # Using document_id as proxy
-            title = ""
-        
-        if not conn.closed:
-            conn.close()
+            insight_row = news_item_repository.get_next_pending_insight_for_document_sync(document_id)
+            if not insight_row:
+                task_id = task_dict.get('id')
+                if task_id:
+                    worker_repository.set_queue_task_status_sync(task_id, QueueStatus.COMPLETED)
+                return
+            news_item_id = insight_row['news_item_id']
+            title = insight_row.get('title') or ""
         
         # Create unique worker
         worker_id = f"insights_{os.getpid()}_{int(time.time() * 1000) % 100000}"
@@ -2429,19 +2412,13 @@ def run_news_item_insights_queue_job_parallel():
         if not assigned:
             # Otro worker ya está procesando este insight - saltar (semáforo bloqueado)
             logger.debug(f"⏸️  [Insights] News item {news_item_id} already assigned to another worker, skipping")
-            conn.close()
             return
         
         # Si hay tarea en processing_queue, marcar como processing solo si asignación fue exitosa
-        if task_row:
+        if task_dict:
             task_id = task_dict.get('id')
             if task_id:
-                cursor.execute("""
-                    UPDATE processing_queue
-                    SET status = 'processing'
-                    WHERE id = %s
-                """, (task_id,))
-                conn.commit()
+                worker_repository.set_queue_task_status_sync(task_id, QueueStatus.PROCESSING)
         
         # Spawn background worker in a separate thread (solo si asignación fue exitosa)
         try:

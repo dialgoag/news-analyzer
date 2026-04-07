@@ -730,6 +730,26 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
         finally:
             self.get_connection_pool().putconn(conn)
 
+    def get_next_pending_insight_sync(self) -> Optional[dict]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT news_item_id, document_id, filename, title
+                FROM news_item_insights
+                WHERE status IN ('insights_pending', 'insights_queued')
+                ORDER BY updated_at ASC NULLS LAST, created_at ASC, news_item_id ASC
+                LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self.map_row_to_dict(cursor, row)
+        finally:
+            self.get_connection_pool().putconn(conn)
+
     def reset_generating_insights_sync(self) -> int:
         conn = self.get_connection_pool().getconn()
         try:
