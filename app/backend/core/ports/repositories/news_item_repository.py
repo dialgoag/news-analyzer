@@ -228,6 +228,19 @@ class NewsItemRepository(ABC):
         """SYNC: count done insights pending indexing in Qdrant."""
         pass
 
+    def list_insights_pending_indexing_sync(self, document_id: str, limit: Optional[int] = None) -> List[dict]:
+        """
+        SYNC: list insights with status=DONE and indexed_in_qdrant_at IS NULL for a document.
+        
+        Args:
+            document_id: Document identifier
+            limit: Maximum number of insights to return
+            
+        Returns:
+            List of insight dicts with keys: news_item_id, document_id, filename, title, content, status
+        """
+        pass
+
     def list_insight_errors_sync(self, news_item_ids: Optional[Sequence[str]] = None) -> List[dict]:
         """SYNC: list insight rows in error, optionally filtered by IDs."""
         pass

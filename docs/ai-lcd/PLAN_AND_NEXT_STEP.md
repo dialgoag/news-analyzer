@@ -10,10 +10,42 @@
 > 
 > **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> **📋 ÚLTIMO**: Fix #132 — Dashboard Final Limpio (Workers Stuck eliminado) ✅.
+> **📋 ÚLTIMO**: Fix #136 — Indexing Insights End-to-End ✅.
 
 **Última actualización**: 2026-04-07  
-**Versión**: 3.0.23 (dashboard compacto refinado)
+**Versión**: 3.0.24 (indexing insights end-to-end)
+
+---
+
+## ✅ REQ-015: Insights Workers End-to-End - COMPLETADO ✅
+
+### [x] Fix #136: Indexing Insights como Etapa de Primera Clase ✅ (2026-04-07)
+**Estado**: ESTABLE ✅  
+**Implementación**:
+- ✅ `TaskType.INDEXING_INSIGHTS` agregado a pipeline_states.py
+- ✅ Repository method: `list_insights_pending_indexing_sync(document_id, limit)`
+- ✅ Worker: `_indexing_insights_worker_task()` - indexa insights en Qdrant
+- ✅ Scheduler transition (PASO 4.5): insights DONE → enqueue indexing_insights
+- ✅ Dispatcher: agregado a `_task_handlers` con límite `INDEXING_INSIGHTS_PARALLEL_WORKERS=4`
+- ✅ Stage timing: usa `'insights_indexing'` (consistente con migration 018)
+- ✅ Flujo completo: Upload → OCR → Chunking → Indexing → Insights → Indexing Insights → Done
+
+**No cambiar**: Etapa crítica que completa el pipeline end-to-end. Sin esto, documentos nunca llegaban a COMPLETED.
+
+**Archivos modificados**:
+- `app/backend/pipeline_states.py` (TaskType.INDEXING_INSIGHTS)
+- `app/backend/core/ports/repositories/news_item_repository.py` (+16 líneas)
+- `app/backend/adapters/.../news_item_repository_impl.py` (+48 líneas)
+- `app/backend/app.py` (+101 líneas worker, +35 transition, +1 dispatcher, +1 límite)
+
+**Verificación**:
+- [x] Build exitoso (~102s)
+- [x] 22 insights indexados en Qdrant en ~30s
+- [x] Workers completing: `✅ Indexing insights completed: 22/22 indexed`
+- [x] Logs muestran: `✓ Insight indexed: ...`
+- [x] `indexed_in_qdrant_at` marcado correctamente
+
+Ver: CONSOLIDATED_STATUS.md § Fix #136, SESSION_LOG.md § 2026-04-07 Sesión 57
 
 ---
 

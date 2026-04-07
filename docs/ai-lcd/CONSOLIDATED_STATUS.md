@@ -1,11 +1,63 @@
 # 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-04-01
 
-> **Versión definitiva**: Fix #132 Dashboard Final Limpio; Fix #131 Límites Workers; Fix #130 Contador Errores Único; Fix #129 Todos Colapsables; Fix #128 Workers+Errores Side-by-Side; Fix #127 Sin Duplicación; Fix #126 Panel Errores Completo; Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #135 Validación Flexible Insights (JSON+Markdown); Fix #134 LangGraph Node Renaming; Fix #133 Docker Layering Optimization; Fix #132 Docker Import Fixes; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
+> **Versión definitiva**: Fix #136 Indexing Insights como Etapa de Primera Clase; Fix #135 Validación Flexible Insights (JSON+Markdown); Fix #134 LangGraph Node Renaming; Fix #133 Docker Layering Optimization; Fix #132 Docker Import Fixes; Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
 **Última actualización**: 2026-04-07  
-**Prioridad**: REQ-014 — Dashboard Compacto COMPLETADO (Fixes #125-#132)
+**Prioridad**: REQ-015 — Insights Workers End-to-End COMPLETADO (Fixes #132-#136)
 
 **Backlog (solo documentación, 2026-04-06)**: Pasos futuros para cerrar la brecha entre insights por noticia (LangGraph + `InsightMemory`) y reportes que aún arman contexto desde chunks — ver `PLAN_AND_NEXT_STEP.md` backlog ítem **7** y `SESSION_LOG.md` § 2026-04-06.
+
+---
+
+### 136. Indexing Insights como Etapa de Primera Clase ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: 
+- `app/backend/pipeline_states.py` línea 115 (TaskType.INDEXING_INSIGHTS)
+- `app/backend/core/ports/repositories/news_item_repository.py` líneas 231-246
+- `app/backend/adapters/.../news_item_repository_impl.py` líneas 590-637
+- `app/backend/app.py` líneas 2225-2325 (worker), 997-1030 (transition), 1070, 1148
+
+**Problema**:
+- Documentación (Fix #88) indicaba que `indexing_insights` debía ser etapa de primera clase
+- Código actual: Insights se generaban (status DONE) pero **NO se indexaban en Qdrant**
+- Documentos nunca llegaban a `COMPLETED` porque esperaban `indexed_in_qdrant_at` (línea 1008)
+- Faltaba: `TaskType.INDEXING_INSIGHTS`, worker, scheduler transition, dispatcher
+
+**Solución**:
+- **TaskType.INDEXING_INSIGHTS** agregado a pipeline_states
+- **Método repository**: `list_insights_pending_indexing_sync(document_id, limit)` (puerto + implementación)
+- **Worker**: `_indexing_insights_worker_task()` siguiendo patrón de `_indexing_worker_task()`
+  - Usa stage `'insights_indexing'` (según migration 018)
+  - Obtiene insights con status=DONE e indexed_in_qdrant_at IS NULL
+  - Llama `_index_insight_in_qdrant()` para cada insight
+  - Marca `indexed_in_qdrant_at` timestamp después de indexar
+  - Record stage timing (start/end)
+- **Scheduler transition** (PASO 4.5): Documents con insights DONE pending indexing → enqueue INDEXING_INSIGHTS task (priority=2)
+- **Dispatcher**: Agregado INDEXING_INSIGHTS a `_task_handlers` con límite configurable
+- **Límites**: `INDEXING_INSIGHTS_PARALLEL_WORKERS` (default 4)
+
+**Impacto**:
+- ✅ Flujo completo: `Upload → OCR → Chunking → Indexing → Insights → Indexing Insights → Done`
+- ✅ Insights se indexan automáticamente en Qdrant (9+ insights en ~30s en test)
+- ✅ Documentos completan correctamente (status COMPLETED) después de indexar todos los insights
+- ✅ Insights participan en búsqueda semántica RAG
+- ✅ Workers muestran completion: `✅ Indexing insights completed: 22/22 indexed`
+
+**⚠️ NO rompe**:
+- Generación de insights (Fix #135) ✅
+- OCR/Chunking/Indexing ✅
+- Arquitectura hexagonal mantenida (usa repositories, no SQL directo) ✅
+- Pattern matching con workers existentes ✅
+- Recovery de crashed workers (línea 746 ya existía) ✅
+
+**Verificación**:
+- [x] Build exitoso (~102s)
+- [x] Tasks encoladas: `📥 Enqueued 3 document(s) for indexing insights`
+- [x] Workers despachados: `✅ [Master] Dispatched indexing_insights worker`
+- [x] Insights indexados: `✓ Insight indexed: ...`
+- [x] Workers completan: `✅ Indexing insights completed: 22/22 indexed`
+- [x] `indexed_in_qdrant_at` marcado con timestamp
+- [x] Sin errores de constraint (stage='insights_indexing' válido en migration 018)
 
 ---
 

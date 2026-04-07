@@ -114,6 +114,7 @@ class TaskType:
     INDEXING = "indexing"
     INSIGHTS = "insights"
     INDEXING_INSIGHTS = "indexing_insights"
+    INDEXING_INSIGHTS = "indexing_insights"
 
     ALL = [OCR, CHUNKING, INDEXING, INSIGHTS, INDEXING_INSIGHTS]
 

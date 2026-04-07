@@ -3,7 +3,47 @@
 > Decisiones, cambios importantes, y contexto entre sesiones
 
 **Última actualización**: 2026-04-07  
-**Sesión**: 56 (Dashboard Compacto - Refinamientos Finales - Fixes #126-#132)
+**Sesión**: 57 (Indexing Insights End-to-End - Fix #136)
+
+---
+
+## 2026-04-07 — Indexing Insights como Etapa de Primera Clase (Fix #136)
+
+### Cambio: Implementar indexing de insights en Qdrant como etapa independiente
+- **Decisión**: Implementar `TaskType.INDEXING_INSIGHTS` como etapa de primera clase siguiendo patrón existente
+- **Razón**: 
+  - Usuario observó: "después de insights no se supone que iría indexing insights?"
+  - Documentación (Fix #88) indicaba que debía existir pero no estaba implementado
+  - Insights se generaban (DONE) pero nunca se indexaban en Qdrant automáticamente
+  - Documentos quedaban stuck en `INDEXING_DONE` esperando que `indexed_in_qdrant_at` se marcara
+  - Flujo incompleto: `Upload → OCR → Chunking → Indexing → Insights → Done ❌` (faltaba step)
+- **Alternativas consideradas**: 
+  - Opción A: Indexar dentro del insights worker (rechazada: viola separation of concerns, mezcla gen + indexing)
+  - **Opción B (elegida)**: Etapa independiente con worker propio (consistente con OCR→Chunking→Indexing pattern)
+  - Opción C: Batch job periódico (rechazada: no real-time, no tiene recovery ni visibilidad)
+- **Impacto en roadmap**: 
+  - REQ-015 (Insights End-to-End) ✅ COMPLETADO - Flujo completo funcional
+  - Desbloquea completion real de documentos (todos los insights indexados → COMPLETED)
+  - Base para analytics y dashboards futuros (insights en Qdrant permiten queries complejas)
+- **Riesgo**: Bajo - Patrón bien establecido (4 workers anteriores: OCR, Chunking, Indexing, Insights)
+- **Implementación**:
+  - **TaskType.INDEXING_INSIGHTS** en pipeline_states.py
+  - **Repository port + impl**: `list_insights_pending_indexing_sync(document_id, limit)`
+  - **Worker**: `_indexing_insights_worker_task()` - indexa insights con status=DONE sin indexed_in_qdrant_at
+  - **Scheduler transition** (PASO 4.5): docs con insights pending → enqueue indexing_insights task
+  - **Dispatcher**: agregado a `_task_handlers` con límite `INDEXING_INSIGHTS_PARALLEL_WORKERS=4`
+  - **Stage name**: `'insights_indexing'` (no `'indexing_insights'`) - ya existía en migration 018
+- **Resultados**: 
+  - 22 insights indexados en Qdrant en ~30 segundos
+  - Workers completando: `✅ Indexing insights completed: 22/22 indexed`
+  - Flujo completo: `Upload → OCR → Chunking → Indexing → Insights → Indexing Insights → Done ✅`
+
+### Observación técnica: Naming consistency
+- **Migration 018** define stage como `'insights_indexing'` en constraint check
+- **Código antiguo** usaba `'indexing_insights'` en referencias comentadas (línea 746 recovery)
+- **Fix**: Usamos `'insights_indexing'` para stage timing (consistente con DB constraint)
+- **TaskType** usa `INDEXING_INSIGHTS` (snake_case en constante Python)
+- **Lección**: Siempre verificar migrations antes de agregar nuevos stages
 
 ---
 

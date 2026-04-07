@@ -994,6 +994,41 @@ def master_pipeline_scheduler():
             if enqueued_docs:
                 logger.info(f"📥 Enqueued {enqueued_docs} document(s) for insights processing")
         
+        # PASO 4.5: Insights DONE pero no indexados → crear task indexing_insights
+        ready_for_indexing_insights = []
+        for row in document_repository.list_all_sync(limit=None, status=DocStatus.INDEXING_DONE):
+            doc_id = row["document_id"]
+            insights = news_item_repository.list_insights_by_document_id_sync(doc_id)
+            if not insights:
+                continue
+            
+            # Check if has insights pending indexing
+            has_pending = any(
+                insight.get("status") == InsightStatus.DONE and not insight.get("indexed_in_qdrant_at")
+                for insight in insights
+            )
+            
+            if has_pending:
+                ready_for_indexing_insights.append(row)
+            
+            if len(ready_for_indexing_insights) >= 100:
+                break
+        
+        if ready_for_indexing_insights:
+            enqueued_indexing = 0
+            for row in ready_for_indexing_insights:
+                doc_id, filename = row['document_id'], row['filename']
+                success = worker_repository.enqueue_task_sync(
+                    doc_id,
+                    filename or doc_id,
+                    TaskType.INDEXING_INSIGHTS,
+                    priority=2  # Higher priority than insights generation
+                )
+                if success:
+                    enqueued_indexing += 1
+            if enqueued_indexing:
+                logger.info(f"📥 Enqueued {enqueued_indexing} document(s) for indexing insights")
+        
         # PASO 5: Documentos con todos los insights completados Y indexados en Qdrant → Marcar como 'completed'
         ready_for_completion = []
         for row in document_repository.list_all_sync(limit=None, status=DocStatus.INDEXING_DONE):
@@ -1034,6 +1069,7 @@ def master_pipeline_scheduler():
                 TaskType.CHUNKING: max(1, min(int(os.getenv("CHUNKING_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
                 TaskType.INDEXING: max(1, min(int(os.getenv("INDEXING_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
                 TaskType.INSIGHTS: max(1, min(int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "1")), TOTAL_WORKERS)),
+                TaskType.INDEXING_INSIGHTS: max(1, min(int(os.getenv("INDEXING_INSIGHTS_PARALLEL_WORKERS", "4")), TOTAL_WORKERS)),
             }
             
             workers_counts = worker_repository.get_active_workers_counts_sync()
@@ -1109,6 +1145,7 @@ def master_pipeline_scheduler():
                             TaskType.OCR: lambda: asyncio.run(_ocr_worker_task(doc_id, filename, worker_id)),
                             TaskType.CHUNKING: lambda: asyncio.run(_chunking_worker_task(doc_id, filename, worker_id)),
                             TaskType.INDEXING: lambda: asyncio.run(_indexing_worker_task(doc_id, filename, worker_id)),
+                            TaskType.INDEXING_INSIGHTS: lambda: asyncio.run(_indexing_insights_worker_task(doc_id, filename, worker_id)),
                         }
 
                         if task_type in _task_handlers:
@@ -2218,6 +2255,109 @@ async def _insights_worker_task(
                 error_message=err_msg
             )
             worker_repository.mark_task_completed_sync(task_doc_id, 'insights')
+        except Exception as e2:
+            logger.error(f"[{worker_id}] Failed to mark error: {e2}")
+
+
+async def _indexing_insights_worker_task(document_id: str, filename: str, worker_id: str):
+    """
+    Worker task: Index completed insights into Qdrant for semantic search.
+    
+    Processes all insights for a document that have status=DONE but not yet indexed.
+    
+    NOTE: assign_worker() was already called atomically by master scheduler before
+    this worker was dispatched. This ensures only ONE worker processes each document.
+    
+    Pattern follows _indexing_worker_task() for consistency.
+    REQ-136: Indexing Insights as first-class stage (Fix #88 from docs)
+    """
+    try:
+        logger.info(f"[{worker_id}] Assigned Indexing Insights task for: {filename}")
+        
+        # 1. RECORD STAGE START (stage timing) - Use 'insights_indexing' as per migration 018
+        stage_timing_repository.record_stage_start_sync(
+            document_id=document_id,
+            stage='insights_indexing',
+            metadata={'worker_id': worker_id, 'filename': filename}
+        )
+        
+        # 2. Mark as started
+        worker_repository.update_worker_status_sync(
+            worker_id, document_id, TaskType.INDEXING_INSIGHTS, WorkerStatus.STARTED
+        )
+        
+        # Get insights pending indexing
+        insights_pending = news_item_repository.list_insights_pending_indexing_sync(document_id, limit=None)
+        
+        if not insights_pending:
+            logger.info(f"[{worker_id}] No insights pending indexing for {filename}")
+            # RECORD STAGE END (no work to do = success)
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'insights_indexing', 'done'
+            )
+            worker_repository.update_worker_status_sync(
+                worker_id, document_id, TaskType.INDEXING_INSIGHTS, WorkerStatus.COMPLETED
+            )
+            worker_repository.mark_task_completed_sync(document_id, TaskType.INDEXING_INSIGHTS)
+            return
+        
+        logger.info(f"[{worker_id}] Indexing {len(insights_pending)} insights into Qdrant...")
+        
+        # Index each insight
+        indexed_count = 0
+        for insight in insights_pending:
+            news_item_id = insight['news_item_id']
+            content = insight.get('content') or ''
+            title = insight.get('title') or ''
+            
+            try:
+                # Call existing indexing function
+                success = await asyncio.to_thread(
+                    _index_insight_in_qdrant,
+                    news_item_id,
+                    document_id,
+                    filename,
+                    title,
+                    content
+                )
+                
+                if success:
+                    # Mark as indexed in database
+                    news_item_repository.set_insight_indexed_in_qdrant_sync(news_item_id)
+                    indexed_count += 1
+                else:
+                    logger.warning(f"[{worker_id}] Failed to index insight {news_item_id}")
+                    
+            except Exception as e:
+                logger.error(f"[{worker_id}] Error indexing insight {news_item_id}: {e}")
+                # Continue with next insight (partial success is ok)
+        
+        # 3. RECORD STAGE END as done
+        stage_timing_repository.record_stage_end_sync(
+            document_id, 'insights_indexing', 'done'
+        )
+        
+        worker_repository.update_worker_status_sync(
+            worker_id, document_id, TaskType.INDEXING_INSIGHTS, WorkerStatus.COMPLETED
+        )
+        worker_repository.mark_task_completed_sync(document_id, TaskType.INDEXING_INSIGHTS)
+        logger.info(f"[{worker_id}] ✅ Indexing insights completed: {indexed_count}/{len(insights_pending)} indexed")
+        
+    except Exception as e:
+        logger.error(f"[{worker_id}] Indexing insights worker error: {e}", exc_info=True)
+        try:
+            err_msg = str(e)[:200]
+            
+            # RECORD STAGE END with error
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'insights_indexing', 'error', error_message=err_msg
+            )
+            
+            worker_repository.update_worker_status_sync(
+                worker_id, document_id, TaskType.INDEXING_INSIGHTS, WorkerStatus.ERROR,
+                error_message=err_msg
+            )
+            worker_repository.mark_task_completed_sync(document_id, TaskType.INDEXING_INSIGHTS)
         except Exception as e2:
             logger.error(f"[{worker_id}] Failed to mark error: {e2}")
 

@@ -586,6 +586,41 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
         finally:
             self.get_connection_pool().putconn(conn)
 
+    def list_insights_pending_indexing_sync(self, document_id: str, limit: Optional[int] = None) -> List[dict]:
+        """List insights with status=DONE and indexed_in_qdrant_at IS NULL for a document."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            query = """
+                SELECT news_item_id, document_id, filename, title, content, status
+                FROM news_item_insights
+                WHERE document_id = %s
+                  AND status = 'insights_done'
+                  AND indexed_in_qdrant_at IS NULL
+                  AND content IS NOT NULL
+                ORDER BY created_at
+            """
+            params = [document_id]
+            if limit:
+                query += " LIMIT %s"
+                params.append(limit)
+            
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            return [
+                {
+                    "news_item_id": row["news_item_id"] if isinstance(row, dict) else row[0],
+                    "document_id": row["document_id"] if isinstance(row, dict) else row[1],
+                    "filename": row["filename"] if isinstance(row, dict) else row[2],
+                    "title": row["title"] if isinstance(row, dict) else row[3],
+                    "content": row["content"] if isinstance(row, dict) else row[4],
+                    "status": row["status"] if isinstance(row, dict) else row[5],
+                }
+                for row in rows
+            ]
+        finally:
+            self.get_connection_pool().putconn(conn)
+
     def list_insight_errors_sync(self, news_item_ids: Optional[Sequence[str]] = None) -> List[dict]:
         conn = self.get_connection_pool().getconn()
         try:
