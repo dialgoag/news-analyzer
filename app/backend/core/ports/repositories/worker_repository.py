@@ -355,3 +355,56 @@ class WorkerRepository(ABC):
     ) -> bool:
         """SYNC version - Update worker task status."""
         pass
+
+    def has_queue_task_sync(
+        self,
+        document_id: str,
+        task_type: str,
+        statuses: Optional[List[str]] = None,
+    ) -> bool:
+        """SYNC version - Check if processing_queue has a task for document/type."""
+        pass
+
+    def delete_old_completed_sync(self, hours: int = 1) -> int:
+        """SYNC version - Delete old completed worker_tasks rows."""
+        pass
+
+    def list_stuck_workers_sync(
+        self,
+        threshold_minutes: int = 5,
+        statuses: Optional[List[str]] = None,
+    ) -> List[Dict]:
+        """SYNC version - Return stale active workers for runtime recovery."""
+        pass
+
+    def delete_worker_task_sync(self, worker_id: str) -> bool:
+        """SYNC version - Delete worker_task by worker_id."""
+        pass
+
+    def set_queue_task_status_sync(
+        self,
+        task_id: int,
+        status: str,
+    ) -> bool:
+        """SYNC version - Update processing_queue status by id."""
+        pass
+
+    def reset_processing_task_sync(
+        self,
+        document_id: str,
+        task_type: str,
+    ) -> int:
+        """SYNC version - Reset processing task to pending for document/type."""
+        pass
+
+    def reset_orphaned_processing_sync(self, exclude_task_type: Optional[str] = None) -> int:
+        """SYNC version - Reset processing_queue orphans back to pending."""
+        pass
+
+    def get_active_workers_counts_sync(self) -> Dict[str, Dict[str, int] | int]:
+        """SYNC version - Active worker totals and grouped counts."""
+        pass
+
+    def list_pending_tasks_for_dispatch_sync(self, limit: int) -> List[Dict]:
+        """SYNC version - Pending processing_queue tasks ordered for dispatch."""
+        pass

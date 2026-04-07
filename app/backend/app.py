@@ -634,15 +634,10 @@ def _initialize_processing_queue():
       crash/restart            →  rolls back {stage}_processing → {prev_stage}_done
     """
     try:
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT document_id, filename FROM document_status "
-            "WHERE status = %s ORDER BY ingested_at ASC",
-            (DocStatus.UPLOAD_PENDING,),
+        pending_docs = document_repository.list_all_sync(
+            limit=None,
+            status=DocStatus.UPLOAD_PENDING,
         )
-        pending_docs = cursor.fetchall()
-        conn.close()
 
         if pending_docs:
             for row in pending_docs:
@@ -704,121 +699,92 @@ def master_pipeline_scheduler():
             TaskType.INSIGHTS: DocStatus.INDEXING_DONE,
         }
         try:
-            conn_cleanup = document_status_store.get_connection()
-            cursor_cleanup = conn_cleanup.cursor()
-            
-            # Clean stale completed entries (accumulate forever otherwise)
-            cursor_cleanup.execute(
-                "DELETE FROM worker_tasks WHERE status = 'completed' "
-                "AND completed_at < NOW() - INTERVAL '1 hour'"
-            )
-            stale_cleaned = cursor_cleanup.rowcount
+            stale_cleaned = worker_repository.delete_old_completed_sync(hours=1)
             if stale_cleaned:
                 logger.debug(f"🧹 Cleaned {stale_cleaned} stale completed worker_tasks")
 
-            cursor_cleanup.execute("""
-                SELECT worker_id, document_id, task_type
-                FROM worker_tasks
-                WHERE status IN (%s, %s)
-                AND started_at < NOW() - INTERVAL '5 minutes'
-            """, (WorkerStatus.STARTED, WorkerStatus.ASSIGNED))
-            crashed_workers = cursor_cleanup.fetchall()
+            crashed_workers = worker_repository.list_stuck_workers_sync(
+                threshold_minutes=5,
+                statuses=[WorkerStatus.STARTED, WorkerStatus.ASSIGNED],
+            )
             
             if crashed_workers:
                 logger.warning(f"🔧 Detected {len(crashed_workers)} crashed workers, recovering...")
                 
-                for worker_id, doc_id, task_type in crashed_workers:
+                for row in crashed_workers:
+                    worker_id = row.get("worker_id")
+                    doc_id = row.get("document_id")
+                    task_type = row.get("task_type")
                     # Infer insights when doc_id="insight_{id}" (worker_tasks puede tener task_type NULL)
                     if not task_type and doc_id and str(doc_id).startswith("insight_"):
                         task_type = TaskType.INSIGHTS
                     if not task_type:
                         logger.debug(f"   ⏭ Skipping {worker_id} — no task_type (phantom entry)")
-                        cursor_cleanup.execute(
-                            "DELETE FROM worker_tasks WHERE worker_id = %s",
-                            (worker_id,),
-                        )
+                        worker_repository.delete_worker_task_sync(worker_id)
                         continue
 
-                    cursor_cleanup.execute(
-                        "DELETE FROM worker_tasks WHERE worker_id = %s",
-                        (worker_id,),
-                    )
+                    worker_repository.delete_worker_task_sync(worker_id)
                     if (task_type or "").lower() == "insights" and doc_id and str(doc_id).startswith("insight_doc_"):
                         # Insights lock per document_id: doc_id="insight_doc_{document_id}"
                         crashed_document_id = doc_id[len("insight_doc_"):]
-                        cursor_cleanup.execute(
-                            "UPDATE processing_queue SET status = %s "
-                            "WHERE document_id = %s AND task_type = %s AND status = %s",
-                            (QueueStatus.PENDING, crashed_document_id, TaskType.INSIGHTS, QueueStatus.PROCESSING),
+                        worker_repository.reset_processing_task_sync(
+                            crashed_document_id,
+                            TaskType.INSIGHTS,
                         )
-                        cursor_cleanup.execute(
-                            "UPDATE news_item_insights SET status = %s, error_message = NULL "
-                            "WHERE document_id = %s AND status = %s",
-                            (InsightStatus.PENDING, crashed_document_id, InsightStatus.GENERATING),
+                        recovered_rows = news_item_repository.set_insights_pending_for_document_sync(
+                            crashed_document_id,
+                            InsightStatus.GENERATING,
                         )
-                        if cursor_cleanup.rowcount:
+                        if recovered_rows:
                             logger.info(
                                 f"   ↻ Recovered insights for document {crashed_document_id[:30]}... "
-                                f"({cursor_cleanup.rowcount} item(s)) → pending"
+                                f"({recovered_rows} item(s)) → pending"
                             )
                     elif (task_type or "").lower() == "insights" and doc_id and str(doc_id).startswith("insight_"):
                         # Legacy insights lock: doc_id="insight_{news_item_id}"
                         news_item_id = doc_id[8:]  # strip "insight_"
-                        cursor_cleanup.execute(
-                            "UPDATE news_item_insights SET status = %s, error_message = NULL "
-                            "WHERE news_item_id = %s AND status = %s",
-                            (InsightStatus.PENDING, news_item_id, InsightStatus.GENERATING),
+                        updated_rows = news_item_repository.set_insight_status_if_current_sync(
+                            news_item_id,
+                            InsightStatus.GENERATING,
+                            InsightStatus.PENDING,
+                            clear_error=True,
                         )
-                        if cursor_cleanup.rowcount:
+                        if updated_rows:
                             logger.info(f"   ↻ Recovered insights for {news_item_id[:30]}... → pending")
                     elif (task_type or "").lower() == "indexing_insights" and doc_id and str(doc_id).startswith("insight_"):
                         news_item_id = doc_id[8:]
-                        cursor_cleanup.execute(
-                            "UPDATE news_item_insights SET status = %s "
-                            "WHERE news_item_id = %s AND status = %s",
-                            (InsightStatus.DONE, news_item_id, InsightStatus.INDEXING),
+                        updated_rows = news_item_repository.set_insight_status_if_current_sync(
+                            news_item_id,
+                            InsightStatus.INDEXING,
+                            InsightStatus.DONE,
                         )
-                        if cursor_cleanup.rowcount:
+                        if updated_rows:
                             logger.info(f"   ↻ Recovered indexing_insights for {news_item_id[:30]}... → done (retry)")
                     else:
                         # OCR/Chunking/Indexing: processing_queue + document_status
-                        cursor_cleanup.execute(
-                            "UPDATE processing_queue SET status = %s "
-                            "WHERE document_id = %s AND task_type = %s AND status = %s",
-                            (QueueStatus.PENDING, doc_id, task_type, QueueStatus.PROCESSING),
+                        worker_repository.reset_processing_task_sync(
+                            doc_id,
+                            task_type,
                         )
                         rollback_to = _RUNTIME_ROLLBACK.get(task_type)
                         if rollback_to:
-                            cursor_cleanup.execute(
-                                "UPDATE document_status SET status = %s, error_message = NULL "
-                                "WHERE document_id = %s AND status IN (%s)",
-                                (rollback_to, doc_id,
-                                 PipelineTransitions.processing_status(
-                                     PipelineTransitions.stage_for_task(task_type))),
+                            current_status = PipelineTransitions.processing_status(
+                                PipelineTransitions.stage_for_task(task_type)
                             )
+                            current_doc = document_repository.get_by_id_sync(doc_id)
+                            if current_doc and current_doc.get("status") == current_status:
+                                document_repository.update_status_sync(
+                                    doc_id,
+                                    PipelineStatus.from_string(rollback_to, status_type="document"),
+                                    clear_error_message=True,
+                                )
                         logger.info(f"   ↻ Recovered {task_type} for {doc_id[:30]}... → {rollback_to}")
-                
-                conn_cleanup.commit()
-            else:
-                # Stale delete needs commit even when no crashed workers
-                if stale_cleaned:
-                    conn_cleanup.commit()
             
             # Reset orphaned processing (processing sin worker activo)
             # EXCLUIR insights: worker_tasks usa document_id="insight_{id}", processing_queue usa doc_id
-            cursor_cleanup.execute("""
-                UPDATE processing_queue
-                SET status = 'pending'
-                WHERE status = 'processing'
-                AND task_type != 'insights'
-                AND NOT EXISTS (
-                    SELECT 1 FROM worker_tasks wt
-                    WHERE wt.document_id = processing_queue.document_id
-                    AND wt.task_type = processing_queue.task_type
-                    AND wt.status IN ('assigned', 'started')
-                )
-            """)
-            orphans_fixed = cursor_cleanup.rowcount
+            orphans_fixed = worker_repository.reset_orphaned_processing_sync(
+                exclude_task_type=TaskType.INSIGHTS
+            )
             if orphans_fixed:
                 if orphans_fixed > 20:
                     logger.error(f"⚠️ Reset {orphans_fixed} orphans in one cycle — posible loop, revisar")
@@ -826,23 +792,9 @@ def master_pipeline_scheduler():
                     logger.warning(f"🧹 Reset {orphans_fixed} orphaned processing_queue → pending (no active worker)")
 
             # Reset orphaned indexing_insights (status=indexing sin worker_tasks — legacy o insert fallido)
-            idx_insights_orphans = 0
-            cursor_cleanup.execute("""
-                UPDATE news_item_insights nii
-                SET status = 'insights_done' WHERE nii.status = 'insights_indexing'
-                AND NOT EXISTS (
-                    SELECT 1 FROM worker_tasks wt
-                    WHERE wt.document_id = 'insight_' || nii.news_item_id
-                    AND wt.task_type = 'indexing_insights' AND wt.status IN ('assigned', 'started')
-                )
-            """)
-            idx_insights_orphans = cursor_cleanup.rowcount
+            idx_insights_orphans = news_item_repository.reset_orphaned_indexing_insights_sync()
             if idx_insights_orphans:
                 logger.warning(f"🧹 Reset {idx_insights_orphans} orphaned indexing_insights → done (retry)")
-            
-            if stale_cleaned or crashed_workers or orphans_fixed or idx_insights_orphans:
-                conn_cleanup.commit()
-            conn_cleanup.close()
         except Exception as e:
             logger.error(f"❌ Error cleaning crashed workers: {e}")
         
@@ -854,22 +806,8 @@ def master_pipeline_scheduler():
                 for doc in docs_to_reprocess:
                     doc_id = doc['document_id']
                     filename = doc['filename']
-                    
-                    # Verificar si ya está en la cola de procesamiento
-                    # TODO Fase 5F: Migrar esta query a worker_repository method
-                    conn_temp = document_status_store.get_connection()
-                    cursor_temp = conn_temp.cursor()
-                    cursor_temp.execute("""
-                        SELECT COUNT(*) FROM processing_queue
-                        WHERE document_id = %s
-                        AND task_type = %s
-                        AND status IN (%s, %s)
-                    """, (doc_id, TaskType.OCR, QueueStatus.PENDING, QueueStatus.PROCESSING))
-                    result = cursor_temp.fetchone()
-                    in_queue = result[list(result.keys())[0]] if result else None
-                    conn_temp.close()
-                    
-                    if not in_queue:
+
+                    if not worker_repository.has_queue_task_sync(doc_id, TaskType.OCR):
                         worker_repository.enqueue_task_sync(doc_id, filename, TaskType.OCR, priority=10)
                         logger.info(f"   ✅ Enqueued {filename} for reprocessing")
                     else:
@@ -897,24 +835,19 @@ def master_pipeline_scheduler():
             except Exception as e:
                 logger.error(f"❌ Inbox monitor error: {e}")
         
-        # Get database connection with proper error handling
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        
-        # PASO 1: Documentos con upload_done sin OCR task → Crear task OCR
-        cursor.execute("""
-            SELECT ds.document_id, ds.filename
-            FROM document_status ds
-            WHERE ds.status IN (%s, %s)
-            AND NOT EXISTS (
-                SELECT 1 FROM processing_queue pq
-                WHERE pq.document_id = ds.document_id
-                AND pq.task_type = %s
-                AND pq.status IN (%s, %s)
-            )
-            LIMIT 50
-        """, (DocStatus.UPLOAD_DONE, DocStatus.OCR_PENDING, TaskType.OCR, QueueStatus.PENDING, QueueStatus.PROCESSING))
-        pending_for_ocr = cursor.fetchall()
+        # PASO 1: Documentos con upload_done/ocr_pending sin OCR task → crear task OCR
+        pending_for_ocr = []
+        for status in (DocStatus.UPLOAD_DONE, DocStatus.OCR_PENDING):
+            docs = document_repository.list_all_sync(limit=None, status=status)
+            for row in docs:
+                doc_id = row["document_id"]
+                if worker_repository.has_queue_task_sync(doc_id, TaskType.OCR):
+                    continue
+                pending_for_ocr.append(row)
+                if len(pending_for_ocr) >= 50:
+                    break
+            if len(pending_for_ocr) >= 50:
+                break
         if debug_mode:
             logger.debug(f"🔄 [Master Pipeline] Found {len(pending_for_ocr)} pending documents for OCR")
         if pending_for_ocr:
@@ -925,32 +858,25 @@ def master_pipeline_scheduler():
         else:
             if debug_mode:
                 logger.debug(f"🔄 [Master Pipeline] No pending documents found. Checking database...")
-                # Debug: check total document count
-                cursor.execute("SELECT COUNT(*) FROM document_status")
-                result = cursor.fetchone()
-                total_docs = result[list(result.keys())[0]] if result else None
-                cursor.execute("SELECT COUNT(*) FROM document_status WHERE status IN (%s, %s)", (DocStatus.UPLOAD_DONE, DocStatus.OCR_PENDING))
-                result = cursor.fetchone()
-                pending_count = result[list(result.keys())[0]] if result else None
+                total_docs = len(document_repository.list_all_sync(limit=None))
+                pending_count = len(document_repository.list_all_sync(limit=None, status=DocStatus.UPLOAD_DONE)) + len(
+                    document_repository.list_all_sync(limit=None, status=DocStatus.OCR_PENDING)
+                )
                 logger.debug(f"   Total documents in DB: {total_docs}, Pending: {pending_count}")
         
         # PASO 2: Documentos con OCR completado sin Chunking task → Crear Chunking tasks
-        cursor.execute("""
-            SELECT ds.document_id, ds.filename
-            FROM document_status ds
-            WHERE ds.processing_stage = %s
-            AND ds.status = %s
-            AND ds.ocr_text IS NOT NULL
-            AND LENGTH(ds.ocr_text) > 0
-            AND NOT EXISTS (
-                SELECT 1 FROM processing_queue pq
-                WHERE pq.document_id = ds.document_id
-                AND pq.task_type = %s
-                AND pq.status IN (%s, %s)
-            )
-            LIMIT 50
-        """, (Stage.OCR, DocStatus.OCR_DONE, TaskType.CHUNKING, QueueStatus.PENDING, QueueStatus.PROCESSING))
-        ready_for_chunking = cursor.fetchall()
+        ready_for_chunking = []
+        for row in document_repository.list_all_sync(limit=None, status=DocStatus.OCR_DONE):
+            if row.get("processing_stage") != Stage.OCR:
+                continue
+            if not (row.get("ocr_text") or "").strip():
+                continue
+            doc_id = row["document_id"]
+            if worker_repository.has_queue_task_sync(doc_id, TaskType.CHUNKING):
+                continue
+            ready_for_chunking.append(row)
+            if len(ready_for_chunking) >= 50:
+                break
         if ready_for_chunking:
             for row in ready_for_chunking:
                 doc_id, filename = row['document_id'], row['filename']
@@ -959,19 +885,18 @@ def master_pipeline_scheduler():
         
         # PASO 3: Documentos listos para Indexing sin task en cola → Crear Indexing tasks
         # Incluye: chunking_done (normal) e indexing_pending (recovery/rollback sin task creada)
-        cursor.execute("""
-            SELECT ds.document_id, ds.filename
-            FROM document_status ds
-            WHERE ds.status IN (%s, %s)
-            AND NOT EXISTS (
-                SELECT 1 FROM processing_queue pq
-                WHERE pq.document_id = ds.document_id
-                AND pq.task_type = %s
-                AND pq.status IN (%s, %s)
-            )
-            LIMIT 50
-        """, (DocStatus.CHUNKING_DONE, DocStatus.INDEXING_PENDING, TaskType.INDEXING, QueueStatus.PENDING, QueueStatus.PROCESSING))
-        ready_for_indexing = cursor.fetchall()
+        ready_for_indexing = []
+        for status in (DocStatus.CHUNKING_DONE, DocStatus.INDEXING_PENDING):
+            docs = document_repository.list_all_sync(limit=None, status=status)
+            for row in docs:
+                doc_id = row["document_id"]
+                if worker_repository.has_queue_task_sync(doc_id, TaskType.INDEXING):
+                    continue
+                ready_for_indexing.append(row)
+                if len(ready_for_indexing) >= 50:
+                    break
+            if len(ready_for_indexing) >= 50:
+                break
         if ready_for_indexing:
             for row in ready_for_indexing:
                 doc_id, filename = row['document_id'], row['filename']
@@ -980,19 +905,30 @@ def master_pipeline_scheduler():
         
         # PASO 3.5: Reconciliación — news_items de docs indexados/completed sin registro en news_item_insights
         # Detecta items que nunca se encolaron (e.g. procesados antes de que existiera el pipeline de insights)
-        cursor.execute("""
-            SELECT ni.news_item_id, ni.document_id, ni.filename, ni.title, ni.text_hash,
-                   COALESCE(ni.item_index, 0) as item_index
-            FROM news_items ni
-            JOIN document_status ds ON ds.document_id = ni.document_id
-            WHERE ds.status IN (%s, %s)
-            AND NOT EXISTS (
-                SELECT 1 FROM news_item_insights nii
-                WHERE nii.news_item_id = ni.news_item_id
-            )
-            LIMIT 100
-        """, (DocStatus.INDEXING_DONE, DocStatus.COMPLETED))
-        orphan_news_items = cursor.fetchall()
+        orphan_news_items = []
+        eligible_docs = []
+        eligible_docs.extend(document_repository.list_all_sync(limit=None, status=DocStatus.INDEXING_DONE))
+        eligible_docs.extend(document_repository.list_all_sync(limit=None, status=DocStatus.COMPLETED))
+        for doc in eligible_docs:
+            doc_id = doc["document_id"]
+            for item in news_item_repository.list_by_document_id_sync(doc_id):
+                news_item_id = item.get("news_item_id")
+                if not news_item_id:
+                    continue
+                if news_item_repository.list_insights_by_news_item_id_sync(news_item_id):
+                    continue
+                orphan_news_items.append({
+                    "news_item_id": news_item_id,
+                    "document_id": item.get("document_id") or doc_id,
+                    "filename": item.get("filename") or doc.get("filename"),
+                    "title": item.get("title") or "",
+                    "text_hash": item.get("text_hash"),
+                    "item_index": int(item.get("item_index") or 0),
+                })
+                if len(orphan_news_items) >= 100:
+                    break
+            if len(orphan_news_items) >= 100:
+                break
         if orphan_news_items:
             for row in orphan_news_items:
                 news_item_insights_store.enqueue(
@@ -1008,59 +944,90 @@ def master_pipeline_scheduler():
             # Reopen completed docs that now have pending insights back to indexing_done
             reopened_doc_ids = set(row['document_id'] for row in orphan_news_items)
             for reopen_id in reopened_doc_ids:
-                cursor.execute("""
-                    UPDATE document_status
-                    SET status = %s, processing_stage = %s
-                    WHERE document_id = %s AND status = %s
-                """, (DocStatus.INDEXING_DONE, Stage.INDEXING, reopen_id, DocStatus.COMPLETED))
-            conn.commit()
+                current_doc = document_repository.get_by_id_sync(reopen_id)
+                if current_doc and current_doc.get("status") == DocStatus.COMPLETED:
+                    document_repository.update_status_sync(
+                        reopen_id,
+                        PipelineStatus.create(StageEnum.INDEXING, StateEnum.DONE),
+                        processing_stage=Stage.INDEXING,
+                    )
             reopened = sum(1 for _ in reopened_doc_ids)
             logger.info(f"🔄 Reopened {reopened} completed docs to indexing_done for pending insights")
         
         # PASO 4: News items sin Insights task → Marcar como pending para workers
-        cursor.execute("""
-            SELECT nii.news_item_id, nii.document_id, nii.filename, nii.title
-            FROM news_item_insights nii
-            WHERE nii.status NOT IN (%s, %s)
-            ORDER BY nii.news_item_id ASC
-            LIMIT 100
-        """, (InsightStatus.DONE, InsightStatus.GENERATING))
-        ready_for_insights = cursor.fetchall()
+        ready_for_insights = []
+        seen_news = set()
+        for doc in document_repository.list_all_sync(limit=None):
+            doc_id = doc["document_id"]
+            for insight in news_item_repository.list_insights_by_document_id_sync(doc_id):
+                news_item_id = insight.get("news_item_id")
+                if not news_item_id or news_item_id in seen_news:
+                    continue
+                status = insight.get("status")
+                if status in (InsightStatus.DONE, InsightStatus.GENERATING):
+                    continue
+                seen_news.add(news_item_id)
+                ready_for_insights.append(insight)
+                if len(ready_for_insights) >= 100:
+                    break
+            if len(ready_for_insights) >= 100:
+                break
         if ready_for_insights:
-            for news_item_id, doc_id, filename, title in ready_for_insights:
-                cursor.execute("""
-                    UPDATE news_item_insights
-                    SET status = %s
-                    WHERE news_item_id = %s AND status NOT IN (%s, %s)
-                """, (InsightStatus.PENDING, news_item_id, InsightStatus.DONE, InsightStatus.GENERATING))
-            conn.commit()
+            docs_to_enqueue: Dict[str, str] = {}
+            for row in ready_for_insights:
+                news_item_id = row['news_item_id']
+                doc_id = row['document_id']
+                filename = row.get('filename') or ''
+                current_status = row.get("status")
+                if current_status not in (InsightStatus.DONE, InsightStatus.GENERATING):
+                    news_item_repository.set_insight_status_if_current_sync(
+                        news_item_id,
+                        current_status,
+                        InsightStatus.PENDING,
+                    )
+                if doc_id:
+                    docs_to_enqueue.setdefault(doc_id, filename)
             logger.info(f"✅ Marked {len(ready_for_insights)} news items as pending for insights processing")
+            
+            enqueued_docs = 0
+            for doc_id, filename in docs_to_enqueue.items():
+                success = worker_repository.enqueue_task_sync(
+                    doc_id,
+                    filename or doc_id,
+                    TaskType.INSIGHTS,
+                    priority=1
+                )
+                if success:
+                    enqueued_docs += 1
+            if enqueued_docs:
+                logger.info(f"📥 Enqueued {enqueued_docs} document(s) for insights processing")
         
         # PASO 5: Documentos con todos los insights completados Y indexados en Qdrant → Marcar como 'completed'
-        cursor.execute("""
-            SELECT ds.document_id, ds.filename
-            FROM document_status ds
-            WHERE ds.status = %s
-            AND EXISTS (
-                SELECT 1 FROM news_items ni WHERE ni.document_id = ds.document_id
+        ready_for_completion = []
+        for row in document_repository.list_all_sync(limit=None, status=DocStatus.INDEXING_DONE):
+            doc_id = row["document_id"]
+            news_items = news_item_repository.list_by_document_id_sync(doc_id)
+            if not news_items:
+                continue
+            insights = news_item_repository.list_insights_by_document_id_sync(doc_id)
+            if not insights:
+                continue
+            all_done_and_indexed = all(
+                insight.get("status") == InsightStatus.DONE and insight.get("indexed_in_qdrant_at")
+                for insight in insights
             )
-            AND NOT EXISTS (
-                SELECT 1 FROM news_item_insights nii
-                WHERE nii.document_id = ds.document_id
-                AND (nii.status != %s OR nii.indexed_in_qdrant_at IS NULL)
-            )
-            LIMIT 50
-        """, (DocStatus.INDEXING_DONE, InsightStatus.DONE))
-        ready_for_completion = cursor.fetchall()
+            if all_done_and_indexed:
+                ready_for_completion.append(row)
+            if len(ready_for_completion) >= 50:
+                break
         if ready_for_completion:
             for row in ready_for_completion:
                 doc_id, filename = row['document_id'], row['filename']
-                cursor.execute("""
-                    UPDATE document_status
-                    SET status = %s, processing_stage = %s
-                    WHERE document_id = %s
-                """, (DocStatus.COMPLETED, Stage.COMPLETED, doc_id))
-            conn.commit()
+                document_repository.update_status_sync(
+                    doc_id,
+                    PipelineStatus.terminal(TerminalStateEnum.COMPLETED),
+                    processing_stage=Stage.COMPLETED,
+                )
             logger.info(f"✅ Marked {len(ready_for_completion)} documents as completed (all insights done)")
         
         # PASO 6: Despachar workers genéricamente para TODAS las colas
@@ -1077,21 +1044,9 @@ def master_pipeline_scheduler():
                 TaskType.INSIGHTS: max(1, min(int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "1")), TOTAL_WORKERS)),
             }
             
-            cursor.execute("""
-                SELECT COUNT(*) as total_active
-                FROM worker_tasks
-                WHERE status IN (%s, %s)
-            """, (WorkerStatus.ASSIGNED, WorkerStatus.STARTED))
-            result = cursor.fetchone()
-            total_active = result[list(result.keys())[0]] if result else 0
-            
-            cursor.execute("""
-                SELECT worker_type, COUNT(*) as count
-                FROM worker_tasks
-                WHERE status IN (%s, %s)
-                GROUP BY worker_type
-            """, (WorkerStatus.ASSIGNED, WorkerStatus.STARTED))
-            active_by_type = {row['worker_type']: row['count'] for row in cursor.fetchall()}
+            workers_counts = worker_repository.get_active_workers_counts_sync()
+            total_active = int(workers_counts.get("total_active") or 0)
+            active_by_type = dict(workers_counts.get("active_by_type") or {})
             
             if debug_mode:
                 logger.debug(f"🔄 [Master] Active workers: {total_active}/{TOTAL_WORKERS} total")
@@ -1102,27 +1057,9 @@ def master_pipeline_scheduler():
             slots_available = TOTAL_WORKERS - total_active
             
             if slots_available > 0:
-                # Obtener tareas pending: orden pipeline (OCR→Chunking→Indexing→Insights) para no matar de hambre OCR
-                # CRITICAL: Usar SELECT FOR UPDATE SKIP LOCKED para evitar race conditions
-                cursor.execute("""
-                    SELECT id, document_id, filename, task_type, priority
-                    FROM processing_queue
-                    WHERE status = %s
-                    ORDER BY
-                        CASE task_type
-                            WHEN 'ocr' THEN 1
-                            WHEN 'chunking' THEN 2
-                            WHEN 'indexing' THEN 3
-                            WHEN 'insights' THEN 4
-                            ELSE 5
-                        END,
-                        priority DESC,
-                        created_at ASC
-                    LIMIT %s
-                    FOR UPDATE SKIP LOCKED
-                """, (QueueStatus.PENDING, slots_available * 2))
-                
-                pending_tasks = cursor.fetchall()
+                pending_tasks = worker_repository.list_pending_tasks_for_dispatch_sync(
+                    max(1, slots_available * 2)
+                )
                 
                 dispatched_count = 0
                 import insights_pipeline_control as _ipc
@@ -1153,21 +1090,14 @@ def master_pipeline_scheduler():
                         selected_insight_news_item_id = None
                         selected_insight_title = ""
                         if task_type == TaskType.INSIGHTS:
-                            cursor.execute("""
-                                SELECT news_item_id, title FROM news_item_insights
-                                WHERE document_id = %s AND status IN (%s, %s)
-                                ORDER BY item_index ASC, news_item_id ASC
-                                LIMIT 1
-                            """, (doc_id, InsightStatus.PENDING, InsightStatus.QUEUED))
-                            insights_row = cursor.fetchone()
+                            insights_row = news_item_repository.get_next_pending_insight_for_document_sync(doc_id)
                             if insights_row:
                                 selected_insight_news_item_id = insights_row['news_item_id']
                                 selected_insight_title = insights_row.get('title') or ""
                                 # Lock por documento: garantiza procesamiento serial de news por documento.
                                 assign_doc_id = f"insight_doc_{doc_id}"
                             else:
-                                cursor.execute("UPDATE processing_queue SET status = %s WHERE id = %s", (QueueStatus.COMPLETED, task_id))
-                                conn.commit()
+                                worker_repository.set_queue_task_status_sync(task_id, QueueStatus.COMPLETED)
                                 continue
                         
                         # CRITICAL: Primero intentar asignar worker (verifica duplicados atómicamente con SELECT FOR UPDATE)
@@ -1181,12 +1111,7 @@ def master_pipeline_scheduler():
                             logger.debug(f"⏸️  [{task_type}] Document {assign_doc_id} already assigned to another worker, skipping")
                             continue
                         
-                        cursor.execute("""
-                            UPDATE processing_queue
-                            SET status = %s
-                            WHERE id = %s
-                        """, (QueueStatus.PROCESSING, task_id))
-                        conn.commit()  # Commit la actualización de status
+                        worker_repository.set_queue_task_status_sync(task_id, QueueStatus.PROCESSING)
                         
                         _task_handlers = {
                             TaskType.OCR: lambda: asyncio.run(_ocr_worker_task(doc_id, filename, worker_id)),
@@ -1223,8 +1148,7 @@ def master_pipeline_scheduler():
                                 worker_thread.start()
                                 dispatched_count += 1
                             else:
-                                cursor.execute("UPDATE processing_queue SET status = %s WHERE id = %s", (QueueStatus.COMPLETED, task_id))
-                                conn.commit()
+                                worker_repository.set_queue_task_status_sync(task_id, QueueStatus.COMPLETED)
                                 # assign_doc_id contiene "insight_{news_item_id}" que se obtuvo arriba
                                 worker_repository.update_worker_status_sync(
                                     worker_id, assign_doc_id, 'insights', 'error',
@@ -1233,8 +1157,7 @@ def master_pipeline_scheduler():
                                 continue
                         else:
                             logger.warning(f"⚠️  [{task_type}] Unknown task type, marking as pending")
-                            cursor.execute("UPDATE processing_queue SET status = %s WHERE id = %s", (QueueStatus.PENDING, task_id))
-                            conn.commit()
+                            worker_repository.set_queue_task_status_sync(task_id, QueueStatus.PENDING)
                             continue
                         
                         logger.info(f"✅ [Master] Dispatched {task_type} worker {worker_id} for {filename}")
@@ -1243,7 +1166,7 @@ def master_pipeline_scheduler():
                         
                     except Exception as dispatch_error:
                         logger.error(f"❌ [Master] Failed to dispatch {task_type} worker: {dispatch_error}")
-                        cursor.execute("UPDATE processing_queue SET status = %s WHERE id = %s", (QueueStatus.PENDING, task_id))
+                        worker_repository.set_queue_task_status_sync(task_id, QueueStatus.PENDING)
                 
                 if dispatched_count > 0:
                     logger.info(f"🚀 [Master] Dispatched {dispatched_count} workers ({slots_available} slots available)")
@@ -3236,17 +3159,17 @@ def _run_reindex_all():
     Use after changing embedding model or instruction prefix.
     Only docs with ocr_text are re-indexed (skips OCR+chunking).
     """
-    if not qdrant_connector or not document_status_store or not processing_queue_store:
-        logger.error("❌ Reindex: missing qdrant_connector or document_status_store")
+    if not qdrant_connector:
+        logger.error("❌ Reindex: missing qdrant_connector")
         return
-    conn = document_status_store.get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT document_id, filename FROM document_status
-        WHERE ocr_text IS NOT NULL AND LENGTH(TRIM(ocr_text)) > 0
-    """)
-    docs = [dict(r) for r in cursor.fetchall()]
-    conn.close()
+    docs = [
+        {
+            "document_id": row["document_id"],
+            "filename": row.get("filename"),
+        }
+        for row in document_repository.list_all_sync(limit=None)
+        if (row.get("ocr_text") or "").strip()
+    ]
     if not docs:
         logger.warning("⚠️ Reindex: no documents with ocr_text found")
         return
@@ -3277,16 +3200,13 @@ def _run_reindex_all():
 
     # Re-index existing insights (deleted with delete_document; DB still has them)
     if qdrant_connector and embeddings_service and doc_ids:
-        conn2 = document_status_store.get_connection()
-        cur2 = conn2.cursor()
-        cur2.execute(
-            """SELECT news_item_id, document_id, filename, title, content
-               FROM news_item_insights
-               WHERE document_id = ANY(%s) AND status IN (%s, %s) AND content IS NOT NULL AND LENGTH(TRIM(content)) > 0""",
-            (doc_ids, news_item_insights_store.STATUS_DONE, news_item_insights_store.STATUS_INDEXING),
-        )
-        insights_to_reindex = [dict(r) for r in cur2.fetchall()]
-        conn2.close()
+        insights_to_reindex = []
+        for doc_id in doc_ids:
+            for insight in news_item_repository.list_insights_by_document_id_sync(doc_id):
+                status = insight.get("status")
+                content = (insight.get("content") or "").strip()
+                if status in ("insights_done", "insights_indexing") and content:
+                    insights_to_reindex.append(insight)
         for r in insights_to_reindex:
             try:
                 _index_insight_in_qdrant(

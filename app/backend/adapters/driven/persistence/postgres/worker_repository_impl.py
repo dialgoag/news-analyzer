@@ -815,3 +815,212 @@ class PostgresWorkerRepository(BasePostgresRepository, WorkerRepository):
             return False
         finally:
             self.get_connection_pool().putconn(conn)
+
+    def has_queue_task_sync(
+        self,
+        document_id: str,
+        task_type: str,
+        statuses: Optional[List[str]] = None,
+    ) -> bool:
+        """SYNC version - Check if processing_queue has a task for document/type."""
+        statuses = statuses or ["pending", "processing"]
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT 1
+                FROM processing_queue
+                WHERE document_id = %s
+                  AND task_type = %s
+                  AND status = ANY(%s)
+                LIMIT 1
+                """,
+                (document_id, task_type, statuses),
+            )
+            return cursor.fetchone() is not None
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def delete_old_completed_sync(self, hours: int = 1) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                DELETE FROM worker_tasks
+                WHERE status = 'completed'
+                  AND completed_at < NOW() - (%s * INTERVAL '1 hour')
+                """,
+                (hours,),
+            )
+            deleted = cursor.rowcount
+            conn.commit()
+            return deleted
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def list_stuck_workers_sync(
+        self,
+        threshold_minutes: int = 5,
+        statuses: Optional[List[str]] = None,
+    ) -> List[dict]:
+        statuses = statuses or ["started", "assigned"]
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT worker_id, document_id, task_type
+                FROM worker_tasks
+                WHERE status = ANY(%s)
+                  AND started_at < NOW() - (%s * INTERVAL '1 minute')
+                """,
+                (statuses, threshold_minutes),
+            )
+            rows = cursor.fetchall()
+            return [self.map_row_to_dict(cursor, row) for row in rows]
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def delete_worker_task_sync(self, worker_id: str) -> bool:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM worker_tasks WHERE worker_id = %s", (worker_id,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            return deleted
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def set_queue_task_status_sync(self, task_id: int, status: str) -> bool:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE processing_queue SET status = %s WHERE id = %s",
+                (status, task_id),
+            )
+            updated = cursor.rowcount > 0
+            conn.commit()
+            return updated
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def reset_processing_task_sync(self, document_id: str, task_type: str) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE processing_queue
+                SET status = 'pending'
+                WHERE document_id = %s
+                  AND task_type = %s
+                  AND status = 'processing'
+                """,
+                (document_id, task_type),
+            )
+            reset_count = cursor.rowcount
+            conn.commit()
+            return reset_count
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def reset_orphaned_processing_sync(self, exclude_task_type: Optional[str] = None) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            if exclude_task_type:
+                cursor.execute(
+                    """
+                    UPDATE processing_queue
+                    SET status = 'pending'
+                    WHERE status = 'processing'
+                      AND task_type != %s
+                      AND NOT EXISTS (
+                        SELECT 1 FROM worker_tasks wt
+                        WHERE wt.document_id = processing_queue.document_id
+                          AND wt.task_type = processing_queue.task_type
+                          AND wt.status IN ('assigned', 'started')
+                      )
+                    """,
+                    (exclude_task_type,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE processing_queue
+                    SET status = 'pending'
+                    WHERE status = 'processing'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM worker_tasks wt
+                        WHERE wt.document_id = processing_queue.document_id
+                          AND wt.task_type = processing_queue.task_type
+                          AND wt.status IN ('assigned', 'started')
+                      )
+                    """
+                )
+            reset_count = cursor.rowcount
+            conn.commit()
+            return reset_count
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def get_active_workers_counts_sync(self) -> dict:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT COUNT(*) as total_active
+                FROM worker_tasks
+                WHERE status IN ('assigned', 'started')
+                """
+            )
+            total_row = cursor.fetchone() or {}
+            total_active = int((total_row["total_active"] if isinstance(total_row, dict) else total_row[0]) or 0)
+            cursor.execute(
+                """
+                SELECT worker_type, COUNT(*) as count
+                FROM worker_tasks
+                WHERE status IN ('assigned', 'started')
+                GROUP BY worker_type
+                """
+            )
+            grouped = {}
+            for row in cursor.fetchall():
+                row_dict = self.map_row_to_dict(cursor, row)
+                grouped[row_dict["worker_type"]] = int(row_dict["count"] or 0)
+            return {"total_active": total_active, "active_by_type": grouped}
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def list_pending_tasks_for_dispatch_sync(self, limit: int) -> List[dict]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, document_id, filename, task_type, priority
+                FROM processing_queue
+                WHERE status = 'pending'
+                ORDER BY
+                    CASE task_type
+                        WHEN 'ocr' THEN 1
+                        WHEN 'chunking' THEN 2
+                        WHEN 'indexing' THEN 3
+                        WHEN 'insights' THEN 4
+                        ELSE 5
+                    END,
+                    priority DESC,
+                    created_at ASC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+            return [self.map_row_to_dict(cursor, row) for row in rows]
+        finally:
+            self.get_connection_pool().putconn(conn)

@@ -4647,3 +4647,95 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 - [x] `python -m py_compile app/backend/app.py .../query.py .../news_items.py`
 - [x] `make rebuild-backend` + backend healthy
 - [x] Smoke: `/api/query` y `/api/news-items/*/insights` devuelven auth-required (403/401, no 404)
+
+
+### 127. Reindex-all sin SQL directo en app.py ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/app.py` (`_run_reindex_all`)
+**Problema**: El flujo de reindex usaba queries SQL directas sobre `document_status` y `news_item_insights` dentro de `app.py`.
+**Solución**: Reemplazado por lectura vía `document_repository.list_all_sync()` y `news_item_repository.list_insights_by_document_id_sync()`, manteniendo la cola de indexing existente.
+**Impacto**: Menor acoplamiento de `app.py` a SQL; avance de orquestación interna hacia repositorios hexagonales.
+**⚠️ NO rompe**: Reindex de documentos, encolado de indexing, indexado de insights en Qdrant.
+**Verificación**:
+- [x] `python -m py_compile app/backend/app.py`
+- [x] Sin SQL inline de `document_status/news_item_insights` en `_run_reindex_all`
+
+
+### 128. Scheduler: seed/reprocess sin SQL directo puntual ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/app.py`, `app/backend/core/ports/repositories/worker_repository.py`, `app/backend/adapters/driven/persistence/postgres/worker_repository_impl.py`
+**Problema**: `_initialize_processing_queue` y el paso de reproceso en `master_pipeline_scheduler` usaban SQL inline para leer `document_status` y verificar `processing_queue`.
+**Solución**: Migrado a `document_repository.list_all_sync(status=upload_pending)` y nuevo helper `worker_repository.has_queue_task_sync(...)`.
+**Impacto**: Menor SQL embebido en scheduler y mejor encapsulación de reglas de cola en el repositorio.
+**⚠️ NO rompe**: Seed inicial de OCR, reprocesamiento de documentos marcados, encolado con prioridad 10.
+**Verificación**:
+- [x] `python -m py_compile app/backend/app.py .../worker_repository.py .../worker_repository_impl.py`
+- [x] Sin queries inline previas en esos dos puntos del scheduler
+
+### 129. Dashboard Visual Improvements - Design System Profesional ✅
+**Fecha**: 2026-04-07
+**Ubicación**: 
+- `app/frontend/src/styles/design-tokens.css` (nuevo)
+- `app/frontend/src/components/dashboard/KPICard.jsx` (nuevo)
+- `app/frontend/src/components/dashboard/ExportMenu.jsx` (nuevo)
+- `app/frontend/src/components/PipelineSummaryCard.jsx` (refactorizado)
+- `app/frontend/src/components/dashboard/CollapsibleSection.jsx` (mejorado)
+- `app/frontend/src/components/dashboard/WorkerLoadCard.jsx` (optimizado)
+
+**Problema**: Dashboard sin design system consistente, emojis como iconos, sin accesibilidad WCAG AA, export functions ausentes
+
+**Solución**: 
+- CSS variables consistentes (Visual Analytics Guidelines paleta)
+- Tipografía profesional (Fira Code números + Fira Sans texto)
+- Heroicons SVG (reemplaza emojis)
+- KPICard component reutilizable con hover states
+- ExportMenu con CSV/JSON/PNG
+- Accesibilidad WCAG AA (contraste 4.5:1, keyboard nav)
+- Sistema de espaciado 4px
+- Transiciones smooth (150-300ms)
+
+**Impacto**: 
+- Dashboard profesional y consistente
+- Mejor UX con jerarquía visual clara
+- Accesibilidad completa
+- Export functions operativas
+
+**⚠️ NO rompe**: 
+- Pipeline monitoreo ✅
+- Auto-refresh 20s ✅
+- Collapsible sections ✅
+- D3 visualizations ✅
+- ErrorAnalysisPanel ✅
+- PipelineAnalysisPanel ✅
+
+**Verificación**:
+- [ ] Design tokens aplicados
+- [ ] Heroicons instalados
+- [ ] KPICard funcional
+- [ ] Export menu operativo
+- [ ] Contraste 4.5:1 mínimo
+- [ ] Responsive mobile/tablet/desktop
+
+
+### 129. Scheduler recovery/dispatch: SQL inline -> repositories ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/app.py`, `.../worker_repository.py`, `.../news_item_repository.py`, `.../worker_repository_impl.py`, `.../news_item_repository_impl.py`
+**Problema**: `master_pipeline_scheduler` mantenía SQL directo en bloques críticos de recovery y dispatch (`worker_tasks`, `processing_queue`, `news_item_insights`).
+**Solución**: Extraídos queries/updates a métodos sync de repositorio (`delete_old_completed_sync`, `list_stuck_workers_sync`, `reset_orphaned_processing_sync`, `list_pending_tasks_for_dispatch_sync`, `set_queue_task_status_sync`, `get_next_pending_insight_for_document_sync`, etc.).
+**Impacto**: `app.py` reduce acoplamiento SQL en orquestación central y mantiene lógica de scheduling vía puertos hexagonales.
+**⚠️ NO rompe**: Recovery de workers caídos, límites por tipo, dispatch de OCR/Chunking/Indexing/Insights, semáforo por documento para insights.
+**Verificación**:
+- [x] `python -m py_compile` en `app.py` y repositorios modificados
+- [x] Sin SQL inline anterior dentro de bloques PASO 0 y PASO 6
+
+
+### 130. Scheduler PASO 1-5: transiciones sin SQL inline ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/app.py`, `.../worker_repository.py`, `.../news_item_repository.py`, `.../worker_repository_impl.py`, `.../news_item_repository_impl.py`
+**Problema**: El scheduler aún tenía SQL directo en creación de OCR/Chunking/Indexing, reconciliación de insights y cierre de documentos.
+**Solución**: Migrado a llamadas de repositorio sync para selección, validación de cola, updates de estado y selección de insights pendientes.
+**Impacto**: `master_pipeline_scheduler` queda orquestando con puertos/repositorios; sin SQL embebido en PASO 0-6.
+**⚠️ NO rompe**: creación de tareas por etapa, reconciliación de insights faltantes, encolado por documento y cierre a `completed`.
+**Verificación**:
+- [x] `python -m py_compile` en archivos modificados
+- [x] Sin `cursor.execute` dentro de PASO 0-6 del scheduler

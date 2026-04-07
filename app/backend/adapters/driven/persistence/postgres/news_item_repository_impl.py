@@ -631,6 +631,104 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
             return deleted
         finally:
             self.get_connection_pool().putconn(conn)
+
+    def set_insights_pending_for_document_sync(self, document_id: str, from_status: str) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE news_item_insights
+                SET status = 'insights_pending', error_message = NULL, updated_at = NOW()
+                WHERE document_id = %s
+                  AND status = %s
+                """,
+                (document_id, from_status),
+            )
+            count = cursor.rowcount
+            conn.commit()
+            return count
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def set_insight_status_if_current_sync(
+        self,
+        news_item_id: str,
+        from_status: str,
+        to_status: str,
+        clear_error: bool = False,
+    ) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            if clear_error:
+                cursor.execute(
+                    """
+                    UPDATE news_item_insights
+                    SET status = %s, error_message = NULL, updated_at = NOW()
+                    WHERE news_item_id = %s AND status = %s
+                    """,
+                    (to_status, news_item_id, from_status),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE news_item_insights
+                    SET status = %s, updated_at = NOW()
+                    WHERE news_item_id = %s AND status = %s
+                    """,
+                    (to_status, news_item_id, from_status),
+                )
+            count = cursor.rowcount
+            conn.commit()
+            return count
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def reset_orphaned_indexing_insights_sync(self) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE news_item_insights nii
+                SET status = 'insights_done', updated_at = NOW()
+                WHERE nii.status = 'insights_indexing'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM worker_tasks wt
+                    WHERE wt.document_id = 'insight_' || nii.news_item_id
+                      AND wt.task_type = 'indexing_insights'
+                      AND wt.status IN ('assigned', 'started')
+                  )
+                """
+            )
+            count = cursor.rowcount
+            conn.commit()
+            return count
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def get_next_pending_insight_for_document_sync(self, document_id: str) -> Optional[dict]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT news_item_id, title
+                FROM news_item_insights
+                WHERE document_id = %s
+                  AND status IN ('insights_pending', 'insights_queued')
+                ORDER BY item_index ASC, news_item_id ASC
+                LIMIT 1
+                """,
+                (document_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self.map_row_to_dict(cursor, row)
+        finally:
+            self.get_connection_pool().putconn(conn)
     
     # ========================================
     # PRIVATE: Mapping helpers

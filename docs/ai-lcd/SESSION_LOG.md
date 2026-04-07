@@ -3871,3 +3871,31 @@ curl -X POST /api/documents/{real_doc_id}/requeue
 - **Alternativas consideradas**: Mantener fallback en `app.py` (rechazada por duplicación de lógica y rutas).
 - **Impacto en roadmap**: Reduce `app.py` a bootstrap/infra y acerca el objetivo de hexagonal completa.
 - **Riesgo**: Bajo; se corrigió path del router query y se validó auth + disponibilidad tras rebuild.
+
+
+### Cambio: Reindex-all migra lectura SQL a repositorios
+- **Decisión**: Priorizar `_run_reindex_all` como primer job interno sin SQL directo por ser flujo administrativo de alto impacto.
+- **Alternativas consideradas**: Reescribir todo el scheduler en un solo paso (rechazada por riesgo y tamaño).
+- **Impacto en roadmap**: Reduce deuda técnica de `app.py` y habilita migración incremental del scheduler.
+- **Riesgo**: Bajo; se conserva la semántica de encolado y reindexado de insights.
+
+
+### Cambio: Scheduler incremental hacia repositorios (seed + reprocess)
+- **Decisión**: Migrar primero secciones de bajo riesgo y alta frecuencia en scheduler antes de atacar dispatch/recovery completos.
+- **Alternativas consideradas**: Refactor total del scheduler en una sola PR (rechazada por riesgo operativo).
+- **Impacto en roadmap**: Reduce deuda técnica por capas y acerca el scheduler al patrón hexagonal.
+- **Riesgo**: Bajo; sólo cambia origen de lectura/verificación, no la semántica de encolado.
+
+
+### Cambio: Master scheduler migra recovery+dispatch a puertos
+- **Decisión**: Priorizar bloques con mayor riesgo operacional (runtime recovery y dispatch loop) para sacar SQL de `app.py`.
+- **Alternativas consideradas**: Mantener SQL en scheduler hasta refactor total (rechazada por deuda y riesgo de drift).
+- **Impacto en roadmap**: Acerca cierre de hexagonal en backend; faltan aún transiciones intermedias del scheduler.
+- **Riesgo**: Medio-bajo; se preservó comportamiento con wrappers repository sync y misma semántica de estados.
+
+
+### Cambio: Cierre de SQL inline en PASO 1-5 del scheduler
+- **Decisión**: Completar de una vez la migración de transiciones PASO 1-5 para mantener consistencia con PASO 0 y 6.
+- **Alternativas consideradas**: Dejar PASO 1-5 para iteración posterior (rechazada por mantener doble patrón en el mismo flujo).
+- **Impacto en roadmap**: `app.py` queda más cerca de bootstrap puro; siguiente foco son handlers internos fuera de scheduler.
+- **Riesgo**: Medio (cambio amplio en orquestación); mitigado con compile + auditoría y sin alterar contratos de workers.

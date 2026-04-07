@@ -1273,3 +1273,27 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 - [x] Eliminados duplicados `/api/query` y `/api/news-items/{id}/insights` de `app/backend/app.py` (ESTABLE).
 - [x] Corregido router `query.py` a path `/query` bajo prefijo `/api`.
 - [ ] Pendiente siguiente: migrar SQL directo remanente en jobs/scheduler internos de `app.py` a servicios/repositorios.
+
+
+### ✅ Actualización 2026-04-07 — Reindex-all a repositorios
+- [x] `_run_reindex_all` dejó de consultar SQL directo en `app/backend/app.py`.
+- [x] Lectura de documentos/insights movida a `document_repository` y `news_item_repository`.
+- [ ] Pendiente siguiente: migrar SQL directo del `master_pipeline_scheduler` (reconciliación y dispatch loops).
+
+
+### ✅ Actualización 2026-04-07 — Scheduler seed/reprocess
+- [x] `_initialize_processing_queue` usa `document_repository` en vez de SQL directo.
+- [x] Paso de reproceso usa `worker_repository.has_queue_task_sync` en vez de query inline.
+- [ ] Pendiente siguiente: migrar SQL directo restante en recovery/dispatch del `master_pipeline_scheduler`.
+
+
+### ✅ Actualización 2026-04-07 — Scheduler recovery/dispatch
+- [x] PASO 0 (runtime recovery) usa `worker_repository`/`news_item_repository` en lugar de SQL directo.
+- [x] PASO 6 (dispatch) usa repositorios para conteos, selección de pendientes y updates de cola.
+- [ ] Pendiente siguiente: migrar SQL directo restante de transiciones PASO 1-5 en `master_pipeline_scheduler`.
+
+
+### ✅ Actualización 2026-04-07 — Scheduler PASO 1-5
+- [x] PASO 1-5 migrados a repositorios sync (sin SQL inline en `master_pipeline_scheduler`).
+- [x] PASO 0 y PASO 6 ya migrados previamente, consolidando todo el scheduler por puertos.
+- [ ] Pendiente siguiente: atacar SQL directo restante en handlers internos fuera del scheduler (`_shutdown_workers`, workers específicos).

@@ -247,6 +247,28 @@ class NewsItemRepository(ABC):
         """SYNC: delete news_item_insights rows for a document."""
         pass
 
+    def set_insights_pending_for_document_sync(self, document_id: str, from_status: str) -> int:
+        """SYNC: set document insights to pending from a specific status."""
+        pass
+
+    def set_insight_status_if_current_sync(
+        self,
+        news_item_id: str,
+        from_status: str,
+        to_status: str,
+        clear_error: bool = False,
+    ) -> int:
+        """SYNC: conditional status transition for one insight row."""
+        pass
+
+    def reset_orphaned_indexing_insights_sync(self) -> int:
+        """SYNC: set insights_indexing rows without active workers back to insights_done."""
+        pass
+
+    def get_next_pending_insight_for_document_sync(self, document_id: str) -> Optional[dict]:
+        """SYNC: first pending/queued insight row for a document."""
+        pass
+
     @abstractmethod
     async def count_insights_by_status(self) -> dict:
         """Return counts of news_item_insights grouped by status."""
