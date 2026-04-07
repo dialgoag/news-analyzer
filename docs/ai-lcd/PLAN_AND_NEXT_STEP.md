@@ -1352,7 +1352,15 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 - [x] Movido requirements.txt de imagen app → imagen base (CPU y CUDA)
 - [x] Dockerfiles actualizados (4 archivos)
 - [x] Documentación actualizada (CONSOLIDATED_STATUS § Fix #133, SESSION_LOG)
-- [ ] Pendiente: Rebuild imagen base con requirements.txt
-- [ ] Pendiente: Rebuild imagen app (debe ser rápido, solo código)
-- [ ] Pendiente: Testing completo (health check, insights workers, dashboard)
-- [ ] Pendiente: Commit + Push con mensaje consolidado
+- [x] Rebuild imagen base con requirements.txt (65s)
+- [x] Rebuild imagen app (104s - primera vez, próximas ~10-20s)
+- [x] Testing completo (health check ✅, insights workers ✅, dashboard ✅)
+- [x] Commit realizado: "feat(backend): route report writes through repository ports"
+- [x] Push completado ✅
+
+**Estado final**: 
+- Fix #132 (Docker imports) ✅ COMPLETADO Y PUSHEADO
+- Fix #133 (Docker optimization) ✅ COMPLETADO Y PUSHEADO
+- Imagen base: Incluye PyTorch + requirements.txt (build raro)
+- Imagen app: Solo código fuente (rebuild 10-20s cada cambio)
+- Workers insights: Funcionando (error LangGraph es issue separado)
