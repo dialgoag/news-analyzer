@@ -1671,7 +1671,7 @@ async def get_info():
 # AUTHENTICATION ENDPOINTS
 # ============================================================================
 
-@app.post("/api/auth/login", response_model=LoginResponse)
+# Legacy endpoint removed: use router `POST /api/auth/login`
 async def login(request: LoginRequest):
     """
     User login - returns JWT token
@@ -1716,7 +1716,7 @@ async def login(request: LoginRequest):
     )
 
 
-@app.get("/api/auth/me", response_model=UserInfo)
+# Legacy endpoint removed: use router `GET /api/auth/me`
 async def get_current_user_info(current_user: CurrentUser = Depends(get_current_user)):
     """Get current user information"""
     user = db.get_user_by_id(current_user.user_id)
@@ -1731,7 +1731,7 @@ async def get_current_user_info(current_user: CurrentUser = Depends(get_current_
     )
 
 
-@app.get("/api/auth/users", response_model=UserListResponse)
+# Legacy endpoint removed: use router `GET /api/auth/users`
 async def list_users(current_user: CurrentUser = Depends(require_admin)):
     """List all users (ADMIN only)"""
     users = db.list_users()
@@ -1752,7 +1752,7 @@ async def list_users(current_user: CurrentUser = Depends(require_admin)):
     )
 
 
-@app.post("/api/auth/users", response_model=UserInfo)
+# Legacy endpoint removed: use router `POST /api/auth/users`
 async def create_user(
     user_data: UserCreate,
     current_user: CurrentUser = Depends(require_admin)
@@ -1783,7 +1783,7 @@ async def create_user(
     )
 
 
-@app.put("/api/auth/users/{user_id}", response_model=MessageResponse)
+# Legacy endpoint removed: use router `PUT /api/auth/users/{user_id}`
 async def update_user(
     user_id: int,
     user_data: UserUpdate,
@@ -1798,7 +1798,7 @@ async def update_user(
     return MessageResponse(message=f"User {user_id} updated")
 
 
-@app.delete("/api/auth/users/{user_id}", response_model=MessageResponse)
+# Legacy endpoint removed: use router `DELETE /api/auth/users/{user_id}`
 async def delete_user(
     user_id: int,
     current_user: CurrentUser = Depends(require_admin)
@@ -1818,7 +1818,7 @@ async def delete_user(
     return MessageResponse(message=f"User {user_id} deleted")
 
 
-@app.post("/api/auth/change-password", response_model=MessageResponse)
+# Legacy endpoint removed: use router `POST /api/auth/change-password`
 async def change_password(
     request: PasswordChange,
     current_user: CurrentUser = Depends(get_current_user)
@@ -3618,7 +3618,7 @@ def _execute_restore(archive_path: str, restore_db: bool, restore_uploads: bool,
 # DAILY REPORTS (reporte diario por fecha de noticia)
 # ============================================================================
 
-@app.get("/api/reports/daily")
+# Legacy endpoint removed: use router `GET /api/reports/daily`
 async def list_daily_reports(
     limit: int = 100,
     current_user: CurrentUser = Depends(get_current_user),
@@ -3648,7 +3648,7 @@ async def list_daily_reports(
     return {"reports": result}
 
 
-@app.get("/api/reports/daily/{report_date}")
+# Legacy endpoint removed: use router `GET /api/reports/daily/{report_date}`
 async def get_daily_report(
     report_date: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -3665,7 +3665,7 @@ async def get_daily_report(
     }
 
 
-@app.get("/api/reports/daily/{report_date}/download", response_class=PlainTextResponse)
+# Legacy endpoint removed: use router `GET /api/reports/daily/{report_date}/download`
 async def download_daily_report(
     report_date: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -3681,7 +3681,7 @@ async def download_daily_report(
     )
 
 
-@app.post("/api/reports/daily/{report_date}/generate")
+# Legacy endpoint removed: use router `POST /api/reports/daily/{report_date}/generate`
 async def trigger_daily_report_generation(
     report_date: str,
     current_user: CurrentUser = Depends(require_admin),
@@ -3702,7 +3702,7 @@ async def trigger_daily_report_generation(
 # WEEKLY REPORTS (reporte semanal por rango news_date)
 # ============================================================================
 
-@app.get("/api/reports/weekly")
+# Legacy endpoint removed: use router `GET /api/reports/weekly`
 async def list_weekly_reports(
     limit: int = 52,
     current_user: CurrentUser = Depends(get_current_user),
@@ -3732,7 +3732,7 @@ async def list_weekly_reports(
     return {"reports": result}
 
 
-@app.get("/api/reports/weekly/{week_start}")
+# Legacy endpoint removed: use router `GET /api/reports/weekly/{week_start}`
 async def get_weekly_report(
     week_start: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -3749,7 +3749,7 @@ async def get_weekly_report(
     }
 
 
-@app.get("/api/reports/weekly/{week_start}/download", response_class=PlainTextResponse)
+# Legacy endpoint removed: use router `GET /api/reports/weekly/{week_start}/download`
 async def download_weekly_report(
     week_start: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -3765,7 +3765,7 @@ async def download_weekly_report(
     )
 
 
-@app.post("/api/reports/weekly/{week_start}/generate")
+# Legacy endpoint removed: use router `POST /api/reports/weekly/{week_start}/generate`
 async def trigger_weekly_report_generation(
     week_start: str,
     current_user: CurrentUser = Depends(require_admin),
@@ -3786,7 +3786,7 @@ async def trigger_weekly_report_generation(
 # NOTIFICATIONS (bandeja en la app: reportes actualizados)
 # ============================================================================
 
-@app.get("/api/notifications")
+# Legacy endpoint removed: use router `GET /api/notifications`
 async def list_notifications(
     limit: int = 50,
     current_user: CurrentUser = Depends(get_current_user),
@@ -3797,7 +3797,7 @@ async def list_notifications(
     return {"notifications": items, "unread_count": unread_count}
 
 
-@app.patch("/api/notifications/{notification_id}/read")
+# Legacy endpoint removed: use router `PATCH /api/notifications/{notification_id}/read`
 async def mark_notification_read(
     notification_id: int,
     current_user: CurrentUser = Depends(get_current_user),
@@ -3807,7 +3807,7 @@ async def mark_notification_read(
     return {"ok": True}
 
 
-@app.post("/api/notifications/read-all")
+# Legacy endpoint removed: use router `POST /api/notifications/read-all`
 async def mark_all_notifications_read(
     current_user: CurrentUser = Depends(get_current_user),
 ):
