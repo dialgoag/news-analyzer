@@ -356,15 +356,23 @@ def should_retry_extraction(state: InsightState) -> Literal["retry", "continue",
     Returns:
         - "retry": Try extraction again (if attempts < max)
         - "continue": Proceed to analysis (if valid)
-        - "fail": Give up (if max attempts reached)
+        - "fail": Give up (if max attempts reached OR refusal detected)
     """
+    # If valid, proceed to analysis
     if state['extraction_valid']:
         return "continue"
     
+    # If LLM refused (insufficient context), fail immediately without retry
+    if state.get('error_step') == 'extraction_refusal':
+        logger.error(f"❌ LLM refusal detected - failing without retry (insufficient context)")
+        return "fail"
+    
+    # If not valid and haven't reached max attempts, retry
     if state['extraction_attempts'] < state['max_attempts']:
         logger.info(f"🔄 Retrying extraction (attempt {state['extraction_attempts']}/{state['max_attempts']})")
         return "retry"
     
+    # Max attempts reached
     logger.error(f"❌ Max extraction attempts reached ({state['max_attempts']})")
     return "fail"
 
