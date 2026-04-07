@@ -9,12 +9,9 @@ WORKDIR /app
 ARG APP_UID=10001
 ARG APP_GID=10001
 
-# Dependencias Python
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Código backend
+# Código backend (solo archivos que cambian frecuentemente)
 COPY backend/app.py .
+COPY backend/config.py .
 COPY backend/rag_pipeline.py .
 COPY backend/ocr_service.py .
 COPY backend/ocr_service_ocrmypdf.py .
@@ -37,6 +34,7 @@ COPY backend/insights_pipeline_control.py .
 # Hexagonal Architecture directories (REQ-021)
 COPY backend/core/ core/
 COPY backend/adapters/ adapters/
+COPY backend/shared/ shared/
 
 # Migraciones de base de datos
 COPY backend/migrations/ ./migrations/
@@ -56,6 +54,7 @@ ENV OLLAMA_PORT=11434
 ENV HF_HOME=/app/.cache/huggingface
 ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
 ENV SENTENCE_TRANSFORMERS_HOME=/app/.cache/huggingface
+ENV PYTHONPATH=/app:$PYTHONPATH
 ENV USER=appuser
 ENV LOGNAME=appuser
 

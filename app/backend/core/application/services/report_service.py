@@ -12,11 +12,12 @@ from typing import List, Optional, Sequence, TYPE_CHECKING
 import logging
 
 from core.ports.repositories.document_repository import DocumentRepository
+from core.ports.repositories.report_repository import ReportRepository
+from core.ports.repositories.notification_repository import NotificationRepository
 
 if TYPE_CHECKING:
     from qdrant_connector import QdrantConnector
     from rag_pipeline import RAGPipeline
-    from database import DailyReportStore, WeeklyReportStore, NotificationStore
 
 
 logger = logging.getLogger(__name__)
@@ -31,18 +32,16 @@ class ReportService:
         document_repository: DocumentRepository,
         qdrant_connector: "QdrantConnector",
         rag_pipeline: "RAGPipeline",
-        daily_report_store: "DailyReportStore",
-        weekly_report_store: "WeeklyReportStore",
-        notification_store: "NotificationStore",
+        report_repository: ReportRepository,
+        notification_repository: NotificationRepository,
         max_daily_context_len: int = 120_000,
         max_weekly_context_len: int = 150_000,
     ) -> None:
         self._documents = document_repository
         self._qdrant = qdrant_connector
         self._rag = rag_pipeline
-        self._daily_store = daily_report_store
-        self._weekly_store = weekly_report_store
-        self._notification_store = notification_store
+        self._reports = report_repository
+        self._notifications = notification_repository
         self._max_daily_context_len = max_daily_context_len
         self._max_weekly_context_len = max_weekly_context_len
 
@@ -69,8 +68,8 @@ class ReportService:
 
         try:
             content = self._rag.generate_report_from_context(context, report_date)
-            self._daily_store.insert(report_date, content)
-            self._notification_store.insert("daily", report_date, message=f"Reporte del {report_date} actualizado")
+            self._reports.upsert_daily_sync(report_date, content)
+            self._notifications.create_sync("daily", report_date, message=f"Reporte del {report_date} actualizado")
             logger.info("Daily report generated for %s", report_date)
             return True
         except Exception as exc:  # pragma: no cover - defensive logging
@@ -109,8 +108,8 @@ class ReportService:
 
         try:
             content = self._rag.generate_weekly_report_from_context(context, week_start, week_end)
-            self._weekly_store.insert(week_start, content)
-            self._notification_store.insert("weekly", week_start, message=f"Reporte semanal {week_start} listo")
+            self._reports.upsert_weekly_sync(week_start, content)
+            self._notifications.create_sync("weekly", week_start, message=f"Reporte semanal {week_start} listo")
             logger.info("Weekly report generated for range %s-%s", week_start, week_end)
             return True
         except Exception as exc:  # pragma: no cover

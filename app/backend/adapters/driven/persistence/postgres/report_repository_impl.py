@@ -12,6 +12,46 @@ from .base import BasePostgresRepository
 class PostgresReportRepository(BasePostgresRepository, ReportRepository):
     """Read adapter for daily/weekly reports."""
 
+    def upsert_daily_sync(self, report_date: str, content: str) -> bool:
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            now = datetime.utcnow().isoformat()
+            cursor.execute(
+                """
+                INSERT INTO daily_reports (report_date, content, created_at, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT(report_date) DO UPDATE SET
+                    content = excluded.content,
+                    updated_at = excluded.updated_at
+                """,
+                (report_date, content, now, now),
+            )
+            conn.commit()
+            return True
+        finally:
+            self.release_connection(conn)
+
+    def upsert_weekly_sync(self, week_start: str, content: str) -> bool:
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            now = datetime.utcnow().isoformat()
+            cursor.execute(
+                """
+                INSERT INTO weekly_reports (week_start, content, created_at, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT(week_start) DO UPDATE SET
+                    content = excluded.content,
+                    updated_at = excluded.updated_at
+                """,
+                (week_start, content, now, now),
+            )
+            conn.commit()
+            return True
+        finally:
+            self.release_connection(conn)
+
     def list_daily_sync(self, limit: int = 100) -> List[Dict]:
         conn = self.get_connection()
         try:

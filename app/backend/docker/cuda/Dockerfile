@@ -5,12 +5,9 @@ FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
-# Dependencies
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Backend code
+# Backend code (solo archivos que cambian frecuentemente)
 COPY backend/app.py .
+COPY backend/config.py .
 COPY backend/rag_pipeline.py .
 COPY backend/ocr_service.py .
 COPY backend/ocr_service_ocrmypdf.py .
@@ -33,6 +30,7 @@ COPY backend/insights_pipeline_control.py .
 # Hexagonal Architecture directories (REQ-021)
 COPY backend/core/ core/
 COPY backend/adapters/ adapters/
+COPY backend/shared/ shared/
 
 COPY backend/migrations/ ./migrations/
 COPY backend/entrypoint.sh .
@@ -46,6 +44,7 @@ EXPOSE 8000
 ENV CUDA_VISIBLE_DEVICES=0
 ENV OLLAMA_HOST=ollama
 ENV OLLAMA_PORT=11434
+ENV PYTHONPATH=/app:$PYTHONPATH
 
 HEALTHCHECK --interval=30s --timeout=120s --start-period=120s --retries=5 \
     CMD curl -f http://localhost:8000/health || exit 1

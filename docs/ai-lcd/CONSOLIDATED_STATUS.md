@@ -4838,6 +4838,17 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 - [x] `python -m py_compile app/backend/app.py`
 - [x] Sin referencias a `document_insights_store` ni `ProcessingQueueStore` en `app.py`
 
+### 136. ReportService migra stores legacy a repositorios ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/app.py`, `core/application/services/report_service.py`, `core/ports/repositories/{report,notification}_repository.py`, adapters postgres de reportes/notificaciones
+**Problema**: `ReportService` seguía acoplado a `daily_report_store`, `weekly_report_store` y `notification_store`, dejando dependencias legacy en `app.py`.
+**Solución**: Inyectados `PostgresReportRepository` y `PostgresNotificationRepository`; añadidos métodos write sync en puertos/adapters (`upsert_daily_sync`, `upsert_weekly_sync`, `create_sync`).
+**Impacto**: `app.py` elimina stores legacy de reportes/notificaciones y mantiene generación de reportes vía puertos hexagonales.
+**⚠️ NO rompe**: generación diaria/semanal, persistencia upsert de reportes, creación de notificaciones de reporte.
+**Verificación**:
+- [x] `python -m py_compile` en `app.py`, `report_service.py`, puertos y adapters modificados
+- [x] Sin referencias a `daily_report_store`/`weekly_report_store`/`notification_store` en `app.py`
+
 
 ### 133. Optimización Docker: requirements.txt en imagen base ✅
 **Fecha**: 2026-04-07

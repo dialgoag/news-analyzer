@@ -35,9 +35,6 @@ if TYPE_CHECKING:
 # Authentication imports
 from auth import create_user_token
 from database import (
-    daily_report_store,
-    weekly_report_store,
-    notification_store,
     UserRole,
 )
 from auth_models import (
@@ -58,7 +55,9 @@ from file_ingestion_service import ingest_from_upload, resolve_file_path
 from adapters.driven.persistence.postgres import (
     PostgresDocumentRepository,
     PostgresNewsItemRepository,
-    PostgresWorkerRepository
+    PostgresWorkerRepository,
+    PostgresReportRepository,
+    PostgresNotificationRepository,
 )
 from adapters.driven.persistence.postgres.stage_timing_repository_impl import PostgresStageTimingRepository
 from core.domain.value_objects.document_id import DocumentId
@@ -325,6 +324,8 @@ def set_log_level(level: str):
 document_repository = PostgresDocumentRepository()
 news_item_repository = PostgresNewsItemRepository()
 worker_repository = PostgresWorkerRepository()
+report_repository = PostgresReportRepository()
+notification_repository = PostgresNotificationRepository()
 stage_timing_repository = PostgresStageTimingRepository()
 
 # Cache for Tika health status (avoid blocking on health checks)
@@ -1281,9 +1282,8 @@ async def startup_event():
             document_repository=document_repository,
             qdrant_connector=qdrant_connector,
             rag_pipeline=rag_pipeline,
-            daily_report_store=daily_report_store,
-            weekly_report_store=weekly_report_store,
-            notification_store=notification_store,
+            report_repository=report_repository,
+            notification_repository=notification_repository,
         )
         logger.info("✅ ReportService ready")
 

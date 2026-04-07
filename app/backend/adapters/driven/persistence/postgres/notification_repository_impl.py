@@ -12,6 +12,22 @@ from .base import BasePostgresRepository
 class PostgresNotificationRepository(BasePostgresRepository, NotificationRepository):
     """Read/write adapter for in-app notifications."""
 
+    def create_sync(self, report_kind: str, report_date: str, message: str | None = None) -> bool:
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO notifications (report_kind, report_date, message, created_at)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (report_kind, report_date, message or "", datetime.utcnow().isoformat()),
+            )
+            conn.commit()
+            return True
+        finally:
+            self.release_connection(conn)
+
     def list_for_user_sync(self, user_id: int, limit: int = 50) -> List[Dict]:
         conn = self.get_connection()
         try:

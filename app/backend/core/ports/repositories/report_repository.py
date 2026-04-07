@@ -28,3 +28,13 @@ class ReportRepository(ABC):
     def get_weekly_by_start_sync(self, week_start: str) -> Optional[Dict]:
         """Return a weekly report by week_start (YYYY-MM-DD)."""
         pass
+
+    @abstractmethod
+    def upsert_daily_sync(self, report_date: str, content: str) -> bool:
+        """Insert or update a daily report by report_date."""
+        pass
+
+    @abstractmethod
+    def upsert_weekly_sync(self, week_start: str, content: str) -> bool:
+        """Insert or update a weekly report by week_start."""
+        pass

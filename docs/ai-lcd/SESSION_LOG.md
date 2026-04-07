@@ -3974,6 +3974,12 @@ curl -X POST /api/documents/{real_doc_id}/requeue
 - **Impacto en roadmap**: Reduce deuda residual en `app.py` y deja claro que el camino activo es el scheduler paralelo.
 - **Riesgo**: Bajo; no había referencias activas a esos jobs y se mantuvo intacto el flujo paralelo vigente.
 
+### Cambio: ReportService desacoplado de stores legacy
+- **Decisión**: Completar cierre hexagonal en bootstrap moviendo escritura de reportes/notificaciones a puertos de repositorio.
+- **Alternativas consideradas**: Mantener stores solo dentro de `ReportService` (rechazada por mantener acoplamiento legacy y doble patrón).
+- **Impacto en roadmap**: `app.py` queda sin stores runtime de negocio; más cerca de bootstrap/wiring puro.
+- **Riesgo**: Bajo-medio; mitigado replicando la misma semántica de `insert/upsert` en adapters postgres.
+
 
 ### Cambio: Optimización Docker - requirements.txt en imagen base
 - **Decisión**: Mover instalación de dependencias Python de imagen app a imagen base para maximizar velocidad de rebuilds durante desarrollo.

@@ -38,6 +38,11 @@ RUN pip install --no-cache-dir --index-url ${PYTORCH_CPU_INDEX_URL} \
     torchvision==${TORCHVISION_VERSION} \
     torchaudio==${TORCHAUDIO_VERSION}
 
+# Python dependencies (all heavy libraries)
+# This layer is cached unless requirements.txt changes
+COPY backend/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+
 LABEL org.opencontainers.image.source="news-analyzer" \
       org.opencontainers.image.description="CPU base for fast backend rebuilds" \
-      org.opencontainers.image.version="2026.03"
+      org.opencontainers.image.version="2026.04"

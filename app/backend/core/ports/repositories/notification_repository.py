@@ -10,6 +10,11 @@ class NotificationRepository(ABC):
     """Port for notification list/read persistence."""
 
     @abstractmethod
+    def create_sync(self, report_kind: str, report_date: str, message: str | None = None) -> bool:
+        """Create one notification entry."""
+        pass
+
+    @abstractmethod
     def list_for_user_sync(self, user_id: int, limit: int = 50) -> List[Dict]:
         """Return notifications for a user with read flag."""
         pass
