@@ -14,11 +14,7 @@ import { API_TIMEOUT_MS } from '../config/apiConfig';
 import ParallelPipelineCoordinates from './dashboard/ParallelPipelineCoordinates';
 import { CollapsibleSection } from './dashboard/CollapsibleSection';
 import ErrorAnalysisPanel from './dashboard/ErrorAnalysisPanel';
-import PipelineAnalysisPanel from './dashboard/PipelineAnalysisPanel';
-import StuckWorkersPanel from './dashboard/StuckWorkersPanel';
 import DatabaseStatusPanel from './dashboard/DatabaseStatusPanel';
-import WorkerLoadCard from './dashboard/WorkerLoadCard';
-import PipelineSummaryCard from './dashboard/PipelineSummaryCard';
 import KPIsInline from './dashboard/KPIsInline';
 import PipelineStatusTable from './dashboard/PipelineStatusTable';
 import './PipelineDashboard.css';
@@ -309,17 +305,8 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
           <ParallelPipelineCoordinates data={parallelData} documents={documents} />
         </CollapsibleSection>
         
-        {/* OLD panels as collapsible fallback */}
+        {/* Auxiliary panels (only shown if needed) */}
         <div className="pipeline-dashboard-aux pipeline-dashboard-aux--collapsed">
-          <CollapsibleSection 
-            title="Workers Stuck" 
-            icon={ClockIcon}
-            priority="normal"
-            defaultCollapsed
-          >
-            <StuckWorkersPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
-          </CollapsibleSection>
-
           <CollapsibleSection 
             title="Estado de Base de Datos" 
             icon={CircleStackIcon}
