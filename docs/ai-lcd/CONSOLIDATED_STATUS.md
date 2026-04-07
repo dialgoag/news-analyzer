@@ -1,9 +1,9 @@
 # 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-04-01
 
-> **Versión definitiva**: Fix #135 Validación Flexible Insights (JSON+Markdown); Fix #134 LangGraph Node Renaming; Fix #133 Docker Layering Optimization; Fix #132 Docker Import Fixes; Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
+> **Versión definitiva**: Fix #132 Dashboard Final Limpio; Fix #131 Límites Workers; Fix #130 Contador Errores Único; Fix #129 Todos Colapsables; Fix #128 Workers+Errores Side-by-Side; Fix #127 Sin Duplicación; Fix #126 Panel Errores Completo; Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #135 Validación Flexible Insights (JSON+Markdown); Fix #134 LangGraph Node Renaming; Fix #133 Docker Layering Optimization; Fix #132 Docker Import Fixes; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
 **Última actualización**: 2026-04-07  
-**Prioridad**: REQ-015 — Insights Workers Completando End-to-End (COMPLETADO)
+**Prioridad**: REQ-014 — Dashboard Compacto COMPLETADO (Fixes #125-#132)
 
 **Backlog (solo documentación, 2026-04-06)**: Pasos futuros para cerrar la brecha entre insights por noticia (LangGraph + `InsightMemory`) y reportes que aún arman contexto desde chunks — ver `PLAN_AND_NEXT_STEP.md` backlog ítem **7** y `SESSION_LOG.md` § 2026-04-06.
 
@@ -50,6 +50,134 @@
 - [x] Contenido guardado en DB: 5562-7646 chars por insight
 - [x] Tokens reportados correctamente: 8074-11378 tokens
 - [x] Sin errores "Validation failed" en logs
+
+---
+
+### 132. Dashboard Final: Eliminar panel Workers Stuck ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: `app/frontend/src/components/PipelineDashboard.jsx`
+
+**Problema**: Panel "Workers Stuck" aparecía vacío, sin valor ni datos relevantes
+
+**Solución**: Eliminado del layout dashboard compacto (componente existe para debugging)
+
+**Impacto**: 
+- Build optimizado: CSS 60KB→47KB (20% reducción), JS 505KB→501KB, 10 módulos menos
+- Dashboard más limpio y enfocado en información útil
+
+**⚠️ NO rompe**: StuckWorkersPanel existe, solo no se muestra en layout principal
+
+**Verificación**: [x] Build 1.74s, [x] Deploy exitoso
+
+---
+
+### 131. Workers: Mostrar límites configurados ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: 
+- `app/backend/adapters/driving/api/v1/routers/workers.py`
+- `app/frontend/src/components/PipelineDashboard.jsx`
+
+**Problema**: Widget mostraba "X activos, Y idle" sin contexto del límite total configurado
+
+**Solución**: 
+- Backend: Expone `summary.limits` con todos los límites (total, ocr, chunking, indexing, insights)
+- Frontend: Badge "25 máx" + barra "4 / 25 (16%)"
+
+**Impacto**: Usuario ve capacidad total del sistema y límites por tipo de tarea
+
+**⚠️ NO rompe**: Campo summary.limits opcional, compatible con versiones anteriores
+
+**Verificación**: [x] Límites leídos desde env, [x] Mostrados correctamente en widget
+
+---
+
+### 130. Contador de errores unificado (fuente única) ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: 
+- `app/frontend/src/components/PipelineDashboard.jsx`
+- `app/frontend/src/components/dashboard/ErrorAnalysisPanel.jsx`
+
+**Problema**: Inconsistencia - KPIs mostraba 0 errores, ErrorAnalysisPanel mostraba 2
+
+**Solución**: 
+- Fuente única: `analysisData.errors.groups.filter(is_real_error).length`
+- ErrorAnalysisPanel recibe `preloadedAnalysis` (elimina fetch duplicado)
+- KPIs usa mismo contador
+
+**Impacto**: Consistencia total + performance (un fetch menos)
+
+**⚠️ NO rompe**: Endpoints iguales, solo optimización de fetching
+
+**Verificación**: [x] Números consistentes en KPIs y panel
+
+---
+
+### 129. Todos los componentes ahora colapsables ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: `app/frontend/src/components/PipelineDashboard.jsx`
+
+**Problema**: Inconsistencia UX - algunos componentes colapsables, otros no
+
+**Solución**: Todos usan `CollapsibleSection` wrapper:
+- ✅ Resumen Pipeline (KPIs)
+- ✅ Estado del Pipeline (Table)
+- ✅ Workers
+- ✅ Análisis de Errores
+- ✅ Flujo Pipeline (Coordenadas Paralelas)
+
+**Impacto**: UX consistente, usuario controla visibilidad de cada sección
+
+**⚠️ NO rompe**: Solo mejora presentación
+
+**Verificación**: [x] Todos colapsables, [x] defaultCollapsed configurado
+
+---
+
+### 128. Workers + Errores lado a lado (side-by-side) ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: `app/frontend/src/components/PipelineDashboard.jsx`, `.css`
+
+**Problema**: Workers y Errores apilados verticalmente (desperdicio de espacio)
+
+**Solución**: Grid 1fr | 1fr (50/50 horizontal), responsive stacked en mobile (<1024px)
+
+**Impacto**: ~140px menos altura, mejor uso del espacio horizontal
+
+**⚠️ NO rompe**: Solo cambio de layout CSS
+
+**Verificación**: [x] Side-by-side desktop, [x] Stacked mobile
+
+---
+
+### 127. Eliminar duplicación de panel de errores ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: `app/frontend/src/components/PipelineDashboard.jsx`
+
+**Problema**: Mini-widget errores + Panel completo = Duplicación confusa
+
+**Solución**: WorkersErrorsInline eliminado, solo ErrorAnalysisPanel completo
+
+**Impacto**: Sin duplicación, funcionalidad retry accesible
+
+**⚠️ NO rompe**: Retry intacto
+
+**Verificación**: [x] Panel único, [x] Retry funcional
+
+---
+
+### 126. Restaurar panel de errores completo con retry ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: `app/frontend/src/components/PipelineDashboard.jsx`
+
+**Problema**: Panel ErrorAnalysis oculto tras botón "Ver todos", retry no accesible
+
+**Solución**: Panel siempre visible en CollapsibleSection (defaultCollapsed=false)
+
+**Impacto**: Troubleshooting restaurado
+
+**⚠️ NO rompe**: Solo cambio de visibilidad
+
+**Verificación**: [x] Panel visible, [x] Retry funcional
 
 ---
 

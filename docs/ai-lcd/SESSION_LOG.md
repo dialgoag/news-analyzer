@@ -3,7 +3,31 @@
 > Decisiones, cambios importantes, y contexto entre sesiones
 
 **Última actualización**: 2026-04-07  
-**Sesión**: 55 (Insights Workers End-to-End + Validación Flexible)
+**Sesión**: 56 (Dashboard Compacto - Refinamientos Finales - Fixes #126-#132)
+
+---
+
+## 2026-04-07 — Dashboard Compacto: Refinamientos Finales (Fixes #126-#132)
+
+### Cambio: Iteración sobre dashboard compacto inicial
+- **Decisión**: Refinar dashboard basado en feedback del usuario
+- **Razón**: Dashboard inicial (Fix #125) tenía issues de consistencia y usabilidad reportados por usuario
+- **Refinamientos aplicados** (7 fixes iterativos):
+  1. **Fix #126**: Panel errores siempre visible (no oculto tras botón)
+  2. **Fix #127**: Eliminar duplicación errores (solo ErrorAnalysisPanel)
+  3. **Fix #128**: Workers + Errores side-by-side (mejor uso espacio horizontal)
+  4. **Fix #129**: Todos componentes colapsables (consistencia UX total)
+  5. **Fix #130**: Contador errores unificado (fuente única: analysisData)
+  6. **Fix #131**: Límites workers visibles (4 / 25 activos, correlación con docs)
+  7. **Fix #132**: Eliminar Workers Stuck panel (siempre vacío)
+- **Alternativas consideradas**: Mantener widgets inconsistentes (rechazada por feedback usuario)
+- **Impacto en roadmap**: REQ-014 COMPLETADO con alta calidad
+- **Riesgo**: Ninguno - Mejoras iterativas sin breaking changes
+- **Resultados finales**:
+  - Build optimizado: CSS 60KB→47KB (20%), 10 módulos menos
+  - UX consistente: 100% componentes colapsables
+  - Datos unificados: Sin inconsistencias en contadores
+  - Layout optimizado: Side-by-side donde aplica
 
 ---
 
