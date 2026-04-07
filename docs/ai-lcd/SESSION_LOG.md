@@ -3967,3 +3967,26 @@ curl -X POST /api/documents/{real_doc_id}/requeue
 - **Alternativas consideradas**: Mantener wrappers legacy temporales (rechazada por prolongar doble fuente de verdad en runtime).
 - **Impacto en roadmap**: `app.py` queda más cerca de bootstrap puro; acceso a news items/insights consolidado en puertos.
 - **Riesgo**: Bajo-medio; mitigado replicando semántica de dedup, enqueue y marcado de indexación con nuevos métodos sync en repositorio.
+
+
+### Cambio: Optimización Docker - requirements.txt en imagen base
+- **Decisión**: Mover instalación de dependencias Python de imagen app a imagen base para maximizar velocidad de rebuilds durante desarrollo.
+- **Contexto**: Los rebuilds tomaban 2-3 minutos porque reinstalaban todas las dependencias (langchain, fastapi, sentence-transformers, etc.) cada vez que cambiaba el código. Esto hacía el desarrollo lento y frustrante.
+- **Alternativas consideradas**:
+  - Mantener requirements.txt en app (rechazada: slow feedback loop)
+  - Multi-stage builds complejos (rechazada: innecesario para este caso)
+  - Mover solo algunas deps a base (rechazada: todas las deps son pesadas y rara vez cambian)
+- **Impacto en roadmap**: 
+  - Desarrollo 10-15x más rápido (rebuild 10-20s vs 2-3min)
+  - Mejor experiencia de desarrollo durante iteración de código
+  - Facilita testing rápido de cambios
+- **Riesgo**: Muy bajo; solo reorganiza capas Docker sin cambiar funcionalidad
+- **Archivos modificados**:
+  - `backend/docker/base/cpu/Dockerfile`: +4 líneas (install requirements.txt)
+  - `backend/docker/base/cuda/Dockerfile`: +4 líneas (install requirements.txt)
+  - `backend/Dockerfile.cpu`: -3 líneas (remove requirements.txt install)
+  - `backend/docker/cuda/Dockerfile`: -3 líneas (remove requirements.txt install)
+- **Arquitectura resultante**:
+  - Base image: Sistema + PyTorch + ALL Python deps (build raro, ~5-7min)
+  - App image: SOLO código fuente .py (build frecuente, ~10-20s)
+- **Próximo paso**: Rebuild completo y testing antes de commit

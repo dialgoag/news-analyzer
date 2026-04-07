@@ -1,20 +1,28 @@
 /**
  * PipelineAnalysisPanel — etapas del pipeline + (admin) despacho ON/OFF y LLM insights.
  * Checkbox "Procesar": marcado = paso activo en BD; desmarcado = pausado.
+ * Updated with Design System + Heroicons
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
+import { 
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
+  PlayIcon,
+  PauseIcon
+} from '@heroicons/react/24/outline';
 import { API_TIMEOUT_MS } from '../../config/apiConfig';
 import './PipelineAnalysisPanel.css';
 
+// Using design tokens colors
 const stageColors = {
-  upload: '#f59e0b',
-  ocr: '#3b82f6',
-  chunking: '#8b5cf6',
-  indexing: '#ec4899',
-  insights: '#10b981',
-  'indexing insights': '#06b6d4',
+  upload: '#ff9800',    // --color-pending
+  ocr: '#2196f3',       // --color-completed
+  chunking: '#a78bfa',  // purple variant
+  indexing: '#ec4899',  // pink variant
+  insights: '#4caf50',  // --color-active
+  'indexing insights': '#4dd0e1', // --color-info
 };
 
 /** Nombre de etapa (API analysis) → id en pipeline_runtime_kv */
@@ -165,12 +173,14 @@ export function PipelineAnalysisPanel({ API_URL, token, refreshTrigger, isAdmin 
   return (
     <div className="pipeline-analysis-panel">
       <div className="panel-header">
-        <h3>🔄 Análisis de Pipeline</h3>
-        {total_blockers > 0 && (
-          <span className="blockers-badge">
-            ⚠️ {total_blockers} Bloqueo{total_blockers > 1 ? 's' : ''} Detectado{total_blockers > 1 ? 's' : ''}
-          </span>
-        )}
+        <div className="panel-title-row">
+          {total_blockers > 0 && (
+            <span className="blockers-badge">
+              <ExclamationTriangleIcon className="badge-icon" />
+              {total_blockers} Bloqueo{total_blockers > 1 ? 's' : ''} Detectado{total_blockers > 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
       </div>
 
       {isAdmin && (
@@ -186,6 +196,7 @@ export function PipelineAnalysisPanel({ API_URL, token, refreshTrigger, isAdmin 
               disabled={saving}
               onClick={() => persistRuntime({ resume_all: true })}
             >
+              <PlayIcon className="btn-icon" />
               Todo activo
             </button>
             <button
@@ -194,6 +205,7 @@ export function PipelineAnalysisPanel({ API_URL, token, refreshTrigger, isAdmin 
               disabled={saving}
               onClick={() => persistRuntime({ pause_all: true })}
             >
+              <PauseIcon className="btn-icon" />
               Pausar todo
             </button>
             {saving && <span className="runtime-saving">Guardando…</span>}
@@ -428,14 +440,18 @@ export function PipelineAnalysisPanel({ API_URL, token, refreshTrigger, isAdmin 
 
               {hasReady && (
                 <div className="ready-indicator">
-                  ✅ {stage.ready_for_next} documento{stage.ready_for_next > 1 ? 's' : ''} listo
+                  <CheckCircleIcon className="ready-icon" />
+                  {stage.ready_for_next} documento{stage.ready_for_next > 1 ? 's' : ''} listo
                   {stage.ready_for_next > 1 ? 's' : ''} para siguiente etapa
                 </div>
               )}
 
               {isBlocked && (
                 <div className="blockers-section">
-                  <div className="blockers-title">⚠️ Bloqueos detectados:</div>
+                  <div className="blockers-title">
+                    <ExclamationTriangleIcon className="blockers-icon" />
+                    Bloqueos detectados:
+                  </div>
                   {stage.blockers.map((blocker, idx) => (
                     <div key={idx} className="blocker-item">
                       <div className="blocker-reason">
@@ -451,7 +467,10 @@ export function PipelineAnalysisPanel({ API_URL, token, refreshTrigger, isAdmin 
               )}
 
               {!isBlocked && !hasReady && stage.pending_tasks === 0 && stage.processing_tasks === 0 && (
-                <div className="stage-status-message">✅ Stage funcionando normalmente</div>
+                <div className="stage-status-message">
+                  <CheckCircleIcon className="status-icon" />
+                  Stage funcionando normalmente
+                </div>
               )}
             </div>
           );

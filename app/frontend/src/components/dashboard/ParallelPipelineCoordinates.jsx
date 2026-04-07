@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as d3 from 'd3';
+import { MapIcon } from '@heroicons/react/24/outline';
 import { useDashboardFilters } from '../hooks/useDashboardFilters.jsx';
 import { transformDocumentsForVisualization } from '../../services/documentDataService';
+import ExportMenu from './ExportMenu';
 import './ParallelPipelineCoordinates.css';
 
 const AXES = [
@@ -32,7 +34,9 @@ const GROUPING_OPTIONS = [
   { value: 'week', label: 'Semana' },
   { value: 'month', label: 'Mes' }
 ];
-const TOPIC_COLORS = ['#34d399', '#60a5fa', '#f472b6', '#f97316', '#a78bfa', '#facc15', '#38bdf8', '#fb7185', '#c084fc', '#4ade80'];
+
+// Using design tokens colors
+const TOPIC_COLORS = ['#4caf50', '#2196f3', '#f97316', '#a78bfa', '#facc15', '#38bdf8', '#fb7185', '#c084fc', '#4ade80', '#f472b6'];
 const DEFAULT_TOPIC_META = { key: 'sin-tema', label: 'Sin tema' };
 const MAX_TOPIC_LEGEND_ITEMS = 8;
 
@@ -179,10 +183,10 @@ function getStateCategory(state) {
 
 function getStateColor(state) {
   const category = getStateCategory(state);
-  if (category === 'error') return '#f87171';
-  if (category === 'done') return '#10b981';
-  if (category === 'progress') return '#f97316';
-  return '#38bdf8';
+  if (category === 'error') return '#f44336';   // --color-error
+  if (category === 'done') return '#4caf50';    // --color-active (green for done)
+  if (category === 'progress') return '#ff9800'; // --color-pending (orange for progress)
+  return '#4dd0e1';                              // --color-info
 }
 
 function parseDocDate(doc) {
@@ -231,19 +235,47 @@ function aggregateStatus(docs) {
   return docs.find((item) => item.status)?.status || 'pending';
 }
 
+function getStateIcon(state) {
+  const category = getStateCategory(state);
+  if (category === 'error') return '❌';
+  if (category === 'done') return '✓';
+  if (category === 'progress') return '🔄';
+  return '⏳';
+}
+
 function buildTooltip(line) {
   const news = line.newsMeta || {};
   const groupingInfo = line.groupLabel && line.groupLabel !== line.docName
-    ? `<div class="parallel-tooltip__meta">Grupo: ${line.groupLabel}</div>`
+    ? `<div class="parallel-tooltip__group">📁 Grupo: ${line.groupLabel}</div>`
     : '';
+  
+  // Build pipeline status
+  const stageIcons = {
+    upload: getStateIcon(line.stageStates.upload),
+    ocr: getStateIcon(line.stageStates.ocr),
+    chunking: getStateIcon(line.stageStates.chunking),
+    indexing: getStateIcon(line.stageStates.indexing)
+  };
+  
+  const pipelineStatus = `Upload ${stageIcons.upload} → OCR ${stageIcons.ocr} → Chunking ${stageIcons.chunking} → Indexing ${stageIcons.indexing}`;
+  
   return `
-    <div class="parallel-tooltip__title">${line.docName || line.docId}</div>
-    <div class="parallel-tooltip__meta">Doc ID: ${line.docId}</div>
+    <div class="parallel-tooltip__title">📄 ${line.docName || line.docId}</div>
+    <div class="parallel-tooltip__id">Doc ID: ${line.docId}</div>
     ${groupingInfo}
-    <div class="parallel-tooltip__meta">Tema: ${line.topicLabel || '—'}</div>
-    <div class="parallel-tooltip__meta">News: ${news.title || '—'} (#${news.item_index ?? '—'})</div>
-    <div class="parallel-tooltip__meta">Insights: ${line.axisValues.insights}</div>
-    <div class="parallel-tooltip__meta">Indexing: ${line.axisValues.indexInsights}</div>
+    <div class="parallel-tooltip__topic">📌 Tema: <strong>${line.topicLabel || 'Sin tema'}</strong></div>
+    <div class="parallel-tooltip__news">
+      <strong>📰 News Item #${news.item_index ?? '—'}:</strong>
+      <div class="parallel-tooltip__news-title">${news.title || 'Sin título'}</div>
+    </div>
+    <div class="parallel-tooltip__pipeline">
+      <strong>Pipeline:</strong> ${pipelineStatus}
+    </div>
+    <div class="parallel-tooltip__insights">
+      ├─ Insights: <strong>${line.axisValues.insights}</strong> ${getStateIcon(line.axisValues.insights)}
+      <br />
+      └─ Indexing: <strong>${line.axisValues.indexInsights}</strong> ${getStateIcon(line.axisValues.indexInsights)}
+    </div>
   `;
 }
 
@@ -634,8 +666,9 @@ export default function ParallelPipelineCoordinates({ data, documents = [] }) {
       axisGroup.selectAll('path,line').attr('stroke', 'rgba(148,163,184,0.35)');
       axisGroup.append('text')
         .attr('y', -16)
-        .attr('fill', '#f8fafc')
+        .attr('fill', '#f1f5f9')
         .attr('font-size', '12px')
+        .attr('font-family', 'Fira Code, monospace')
         .attr('text-anchor', 'middle')
         .text(axis.label);
     });
@@ -893,10 +926,16 @@ export default function ParallelPipelineCoordinates({ data, documents = [] }) {
     <div className="parallel-pipeline-card" ref={containerRef}>
       <div className="parallel-card-header">
         <div>
-          <h4>🛰️ Coordenadas Paralelas del Pipeline</h4>
-          <p>
-            Cada línea representa un documento; en el eje de noticias se bifurca según las noticias detectadas.
-            Usa el zoom vertical y desplázate para inspeccionar detalles.
+          <h4>
+            <MapIcon className="parallel-card-header__icon" aria-hidden="true" />
+            Flujo Pipeline: Documento → Noticias → Insights
+          </h4>
+          <p className="parallel-description">
+            Visualiza el recorrido completo de cada documento a través del pipeline. 
+            Las líneas se <strong>bifurcan</strong> en el eje "News Items" (1 doc → N noticias), 
+            luego cada noticia genera insights e indexación. 
+            <br />
+            <em>Filtra por tema, agrupa por fecha, y detecta cuellos de botella.</em>
           </p>
         </div>
         <div className="parallel-header-metrics">
@@ -914,6 +953,20 @@ export default function ParallelPipelineCoordinates({ data, documents = [] }) {
               Limpiar filtros
             </button>
           )}
+          <ExportMenu
+            data={lineData.lines.map(line => ({
+              docId: line.docId,
+              docName: line.docName,
+              topicLabel: line.topicLabel,
+              bucket: line.bucket,
+              groupLabel: line.groupLabel,
+              newsTitle: line.newsMeta?.title,
+              insightStatus: line.axisValues.insights,
+              indexStatus: line.axisValues.indexInsights
+            }))}
+            filename="parallel-coordinates-data"
+            targetElement={containerRef.current}
+          />
         </div>
       </div>
 
@@ -1003,6 +1056,47 @@ export default function ParallelPipelineCoordinates({ data, documents = [] }) {
             <svg ref={svgRef} className="parallel-svg" />
           </div>
           <div ref={tooltipRef} className="parallel-tooltip" />
+          
+          <details className="parallel-help">
+            <summary className="parallel-help-summary">💡 ¿Cómo interpretar esta visualización?</summary>
+            <div className="parallel-help-content">
+              <div className="parallel-help-section">
+                <strong>1. Flujo de Izquierda a Derecha</strong>
+                <p>Las líneas muestran el progreso de los documentos a través del pipeline. El color indica el estado (verde=completado, naranja=procesando, azul=pendiente, rojo=error).</p>
+              </div>
+              <div className="parallel-help-section">
+                <strong>2. Bifurcación en "News Items"</strong>
+                <p>Un documento se divide en N news_items detectados. Cada noticia genera su propia línea hacia Insights e Indexación.</p>
+              </div>
+              <div className="parallel-help-section">
+                <strong>3. Granularidad Múltiple</strong>
+                <p>
+                  • <strong>Ejes 1-4</strong> (Upload, OCR, Chunking, Indexing): Nivel documento (1 línea = 1 PDF)
+                  <br />
+                  • <strong>Eje 5</strong> (News Items): Bifurcación (1 doc → N noticias)
+                  <br />
+                  • <strong>Ejes 6-7</strong> (Insights, Index Insights): Nivel news_item (1 línea = 1 noticia)
+                </p>
+              </div>
+              <div className="parallel-help-section">
+                <strong>4. Controles e Interactividad</strong>
+                <p>
+                  • <strong>Click en línea:</strong> Filtra por documento
+                  <br />
+                  • <strong>Click en banda de tema:</strong> Filtra por tema específico
+                  <br />
+                  • <strong>Agrupaciones:</strong> Agrupa por documento, día, semana o mes para ver tendencias
+                  <br />
+                  • <strong>Zoom vertical:</strong> Ajusta el espaciado para mejor visibilidad
+                </p>
+              </div>
+              <div className="parallel-help-section">
+                <strong>5. Cuellos de Botella</strong>
+                <p>Muchas líneas acumuladas en un eje indican un posible cuello de botella. Revisa el panel "Análisis Pipeline" para más detalles.</p>
+              </div>
+            </div>
+          </details>
+          
           <div className="parallel-legend">
             <span><i className="legend-swatch done" /> Paso completado</span>
             <span><i className="legend-swatch progress" /> En progreso</span>

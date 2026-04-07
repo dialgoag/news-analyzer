@@ -3,10 +3,17 @@
  * 
  * Displays grouped error analysis with ability to clean and retry errors.
  * Shows real errors vs shutdown errors, error causes, and auto-fix capabilities.
+ * Updated with Design System + Heroicons
  */
 
 import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
+import { 
+  ExclamationTriangleIcon, 
+  XCircleIcon, 
+  InformationCircleIcon,
+  ArrowPathIcon
+} from '@heroicons/react/24/outline';
 import { API_TIMEOUT_MS, API_TIMEOUT_ACTION_MS } from '../../config/apiConfig';
 import './ErrorAnalysisPanel.css';
 
@@ -120,12 +127,13 @@ export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
   return (
     <div className="error-analysis-panel">
       <div className="panel-header">
-        <h3>🔍 Análisis de Errores</h3>
         <div className="error-summary">
           <span className={`summary-badge ${errors.real_errors > 0 ? 'real-error' : 'no-error'}`}>
+            <XCircleIcon className="badge-icon" />
             Errores Reales: {errors.real_errors}
           </span>
           <span className={`summary-badge ${errors.shutdown_errors > 0 ? 'shutdown-error' : 'no-error'}`}>
+            <InformationCircleIcon className="badge-icon" />
             Shutdown: {errors.shutdown_errors}
           </span>
           <span className={`summary-badge total`}>
@@ -146,21 +154,26 @@ export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
             disabled={cleaning}
             className="clean-button retry-all-button"
           >
-            {cleaning ? '⏳ Reintentando...' : '🔄 Reintentar todos los errores'}
+            <ArrowPathIcon className="button-icon" />
+            {cleaning ? 'Reintentando...' : 'Reintentar todos los errores'}
           </button>
         </div>
         <div className="error-groups">
           {errors.groups.map((errorGroup, index) => {
             const isShutdownError = errorGroup.error_message.includes('Shutdown ordenado');
             const severity = isShutdownError ? 'low' : errorGroup.can_auto_fix ? 'medium' : 'high';
+            
+            const SeverityIcon = isShutdownError 
+              ? InformationCircleIcon 
+              : errorGroup.can_auto_fix 
+                ? ExclamationTriangleIcon 
+                : XCircleIcon;
 
             return (
               <div key={index} className={`error-card severity-${severity}`}>
                 <div className="error-card-header">
                   <div className="error-title">
-                    <span className="error-icon">
-                      {isShutdownError ? 'ℹ️' : errorGroup.can_auto_fix ? '⚠️' : '❌'}
-                    </span>
+                    <SeverityIcon className="error-icon" />
                     <div>
                       <div className="error-message">{errorGroup.error_message}</div>
                       <div className="error-meta">
@@ -203,14 +216,16 @@ export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
                       disabled={cleaning}
                       className="clean-button"
                     >
-                      {cleaning ? '⏳ Reintentando...' : '🔄 Reintentar este grupo'}
+                      <ArrowPathIcon className="button-icon" />
+                      {cleaning ? 'Reintentando...' : 'Reintentar este grupo'}
                     </button>
                   </div>
                 )}
 
                 {isShutdownError && (
                   <div className="error-note">
-                    ℹ️ Este error es esperado después de un shutdown ordenado. No requiere acción.
+                    <InformationCircleIcon className="note-icon" />
+                    Este error es esperado después de un shutdown ordenado. No requiere acción.
                   </div>
                 )}
               </div>

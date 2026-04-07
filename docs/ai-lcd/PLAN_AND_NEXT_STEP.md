@@ -1334,3 +1334,13 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 - [x] Eliminados imports runtime de `news_item_store` y `news_item_insights_store` en `app.py`.
 - [x] Añadidos métodos sync de soporte en repositorio (`upsert_items_sync`, `enqueue_insight_sync`, `set_insight_indexed_in_qdrant_sync`).
 - [ ] Pendiente siguiente: inventariar legacy restante no crítico (`db`/stores de reportes-notificaciones) para moverlo a servicios/routers dedicados.
+
+
+### ✅ Actualización 2026-04-07 — Optimización Docker layers
+- [x] Movido requirements.txt de imagen app → imagen base (CPU y CUDA)
+- [x] Dockerfiles actualizados (4 archivos)
+- [x] Documentación actualizada (CONSOLIDATED_STATUS § Fix #133, SESSION_LOG)
+- [ ] Pendiente: Rebuild imagen base con requirements.txt
+- [ ] Pendiente: Rebuild imagen app (debe ser rápido, solo código)
+- [ ] Pendiente: Testing completo (health check, insights workers, dashboard)
+- [ ] Pendiente: Commit + Push con mensaje consolidado
