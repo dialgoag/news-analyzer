@@ -1,0 +1,95 @@
+{
+  "run": {
+    "timestamp": "2026-04-07T07:46:54Z",
+    "command": "TOKEN=<jwt admin> ./scripts/run_api_smoke.sh",
+    "log_file": "smoke_1.log",
+    "description": "Smoke suite executed after habilitar routers hexagonales; valores completos disponibles en el log referenciado."
+  },
+  "responses": {
+    "GET /api/documents": {
+      "http_status": 200,
+      "body_summary": {
+        "total": 331,
+        "insights_summary": {
+          "total_indexed": 24732,
+          "with_insights_done": 38
+        },
+        "note": "Payload completo (lista de documentos) preservado en smoke_1.log para trazabilidad."
+      }
+    },
+    "GET /api/workers/status": {
+      "http_status": 200,
+      "body": {
+        "timestamp": "2026-04-07T07:46:53.604119",
+        "workers": [
+          {
+            "id": "tika_service",
+            "status": "unreachable"
+          },
+          {
+            "id": "qdrant_service",
+            "status": "healthy"
+          }
+        ],
+        "summary": {
+          "pending_tasks": {
+            "insights": 25005,
+            "indexing_insights": 0
+          },
+          "unhealthy_services": 1
+        }
+      }
+    },
+    "GET /api/dashboard/summary": {
+      "http_status": 200,
+      "body": {
+        "timestamp": "2026-04-07T07:46:46.791138",
+        "files": {
+          "total": 331,
+          "completed": 331,
+          "errors": 0,
+          "inbox_count": 1
+        },
+        "insights": {
+          "total": 25750,
+          "done": 745,
+          "pending": 25005,
+          "eta_seconds": 93768
+        }
+      }
+    },
+    "GET /api/dashboard/analysis": {
+      "http_status": 200,
+      "body": {
+        "timestamp": "2026-04-07T07:46:53.714192",
+        "errors": {
+          "total_errors": 0
+        },
+        "pipeline": {
+          "stages": [
+            {
+              "name": "Insights",
+              "pending_tasks": 25005,
+              "docs_with_pending_insights": 321
+            }
+          ]
+        }
+      }
+    },
+    "GET /api/admin/data-integrity": {
+      "http_status": 200,
+      "body": {
+        "timestamp": "2026-04-07T07:46:54.038549",
+        "overall_status": "error",
+        "files": {
+          "match": 75.8,
+          "orphaned_count": 80
+        },
+        "insights": {
+          "total": 25750,
+          "link_percentage": 100.0
+        }
+      }
+    }
+  }
+}

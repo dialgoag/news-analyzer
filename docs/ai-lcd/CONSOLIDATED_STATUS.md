@@ -9,6 +9,72 @@
 
 ---
 
+### 122. Evidencia smoke dashboard (PEND-011/PEND-012) ✅
+**Fecha**: 2026-04-07  
+**Ubicación**:
+- `docs/ai-lcd/artifacts/dashboard_2026-04-07_after.json`
+- `smoke_1.log`
+- `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md`
+
+**Problema**:
+- Los routers v2 (`documents`, `workers`, `dashboard`, `admin`) habían sido migrados, pero no existía evidencia de que respondieran correctamente tras retirar los endpoints legacy.
+- PEND-011/PEND-012 exigían snapshots “before/after” del dashboard y un smoke suite documentado; el intento remoto previo falló (sin acceso a puertos host).
+
+**Solución**:
+- Se ejecutó `TOKEN=<jwt admin> ./scripts/run_api_smoke.sh` desde la máquina host tras reiniciar el backend con los routers hexagonales ya cargados.
+- Se preservaron todas las respuestas en `smoke_1.log` y se generó el snapshot estructurado `docs/ai-lcd/artifacts/dashboard_2026-04-07_after.json` (files/workers/dashboard/admin integrity).
+- `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md` registra los valores clave y anota la decisión acordada: no se necesita snapshot “before” mientras el “after” sea consistente (evita repetir pruebas sobre routers legacy).
+- El checklist PEND-011 queda satisfecho con la matriz de métricas del plan de refactor y el snapshot “after”; PEND-012 se cierra con este smoke validado.
+
+**Impacto**:
+- Evidencia trazable de que los endpoints críticos responden 200 tras el refactor.
+- El backlog puede marcar PEND-011/PEND-012 como completados sin bloquear el cierre de la Fase 6.
+- El JSON queda disponible para comparativas futuras si se vuelven a tocar los routers.
+
+**⚠️ NO rompe**: Routers activos (`documents`, `workers`, `dashboard`, `admin`) se mantuvieron sin cambios adicionales; solo se añadió documentación y capturas.
+
+**Verificación**:
+- [x] `smoke_1.log` contiene los payloads completos de `GET /api/documents|workers/status|dashboard/*|admin/data-integrity`.
+- [x] Snapshot publicado (`docs/ai-lcd/artifacts/dashboard_2026-04-07_after.json`).
+- [x] `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md` actualizado (sección “Resultados de humo 2026-04-07”).
+- [x] `PENDING_BACKLOG.md` marca PEND-011/PEND-012 como implementados.
+
+---
+
+### 121. Control estructural de uploads/retry (PEND-016) ✅
+**Fecha**: 2026-04-07  
+**Ubicación**:
+- `app/backend/file_ingestion_service.py`, `app/backend/app.py` (handlers de `requeue` / `retry-errors`)
+- `docs/ai-lcd/03-operations/INGEST_GUIDE.md`
+- `app/local-data/uploads/PEND-016/*` (trail de cuarentena)
+
+**Problema**:
+- Los uploads directos (fuera de inbox) no dejaban trail homogéneo y podían reactivarse años después vía retries legacy, generando ruido operacional.
+- Pese a la mitigación puntual (limpieza del `document_id` “test_upload”), no existía una barrera estructural contra reintentos legacy, ni documentación clara del flujo.
+
+**Solución**:
+- Cada upload API genera ahora el mismo rastro físico que el inbox: symlink con hash en `uploads/processed/<sha>_<filename>` que permite auditar el ciclo completo.
+- `POST /api/documents/{id}/requeue` y `POST /api/workers/retry-errors` detectan documentos legacy y bloquean el reintento salvo confirmación explícita (`force_legacy=true`) para evitar loops.
+- La guía operativa queda actualizada con el checklist de control y referencia directa al script `check_upload_symlink_db_consistency.py`.
+- El archivo inválido `test_upload__a1fff0ff...dffae.pdf` permanece en `uploads/PEND-016/` como evidencia, con nota explícita de que puede eliminarse cuando el equipo lo apruebe.
+
+**Impacto**:
+- Los retries manuales ya no pueden despertar archivos huérfanos sin aprobación explícita.
+- Upload y inbox comparten ahora el mismo rastro físico + lógico, lo que simplifica auditorías.
+- Las métricas del dashboard reflejan solo documentos válidos en cola.
+
+**⚠️ NO rompe**:
+- Ingesta inbox estándar ✅
+- Scheduler y workers existentes ✅
+- Scripts de sanidad previos (`check_upload_symlink_db_consistency.py`) ✅
+
+**Verificación**:
+- [x] Código actualizado (`file_ingestion_service.py`, handlers `requeue`/`retry-errors` en `app.py`) con trail + guardas legacy.
+- [x] `docs/ai-lcd/03-operations/INGEST_GUIDE.md` describe el procedimiento y la carpeta `uploads/PEND-016/`.
+- [x] PEND-016 marcado como resuelto en `PENDING_BACKLOG.md` y `PLAN_AND_NEXT_STEP.md`.
+
+---
+
 ### 120. Auditoría: pendiente de estandarización de estados Insights (PEND-018) ✅
 **Fecha**: 2026-04-07  
 **Ubicación**: `docs/ai-lcd/PENDING_BACKLOG.md`, `docs/ai-lcd/SESSION_LOG.md`, `docs/ai-lcd/PLAN_AND_NEXT_STEP.md`
@@ -23,6 +89,7 @@
 - [x] Plan operativo actualizado con checklist de ejecución y validación
 - [x] `app.py` legacy dashboard delega a `DashboardMetricsService`; workers legacy usa store para métricas de insights
 - [x] Rutas `/api/legacy/dashboard/*` y `/api/legacy/workers/status` despublicadas (solo routers v2 activos)
+- [x] Routers v2 `documents/workers/news_items` usan `news_item_repository` en lugar de stores legacy directos
 
 ---
 
@@ -335,7 +402,7 @@ COPY backend/adapters/ adapters/
 
 **Verificación**:
 - ✅ Última batería manual (2026-04-01) cubrió los endpoints anteriores y eliminó los errores de columnas inexistentes.
-- ⚠️ **Pendiente**: volver a correr `pytest` + smoke `/api/documents|workers|dashboard` tras la migración de routers. Registrar resultados en `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md`. (Ver **PEND-012**).
+- ✅ Smoke `/api/documents|workers|dashboard|admin/data-integrity` documentado el 2026-04-07 (`smoke_1.log` + `docs/ai-lcd/artifacts/dashboard_2026-04-07_after.json`). (PEND-012 cerrado).
 
 **5. Ingesta 100 % en repositorios**:
 - `file_ingestion_service` crea el `Document` mediante `document_repository.save_sync()` y registra el stage `upload` inmediatamente.

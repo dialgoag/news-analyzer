@@ -98,7 +98,7 @@ Ver: CONSOLIDATED_STATUS.md § Fix #111, SESSION_LOG.md § 2026-04-01
 |---|-----------------|-----------|-----------------|---------------------------|
 | 1 | (Resuelto 2026-04-06) Endpoints de documentos usan `DocumentRepository`/`StageTimingRepository` | ✅ | `adapters/driving/api/v1/routers/documents.py:24-247, 632`, `app/backend/app.py:3820-3895` | Actualizados para consumir `list_all_sync(..., status, source)`, `delete_sync` y `StageTimingRepository.delete_for_document_sync`. |
 | 2 | (Resuelto 2026-04-06) API de workers usa `WorkerRepository`/`pipeline_runtime_store` | ✅ | `adapters/driving/api/v1/routers/workers.py` | Nuevos métodos (`list_active_with_documents`, `reset_processing_tasks`, etc.) reemplazan `_pg_conn` y toda la lógica de SQL directo. `set_all_pauses()` sustituye las escrituras manuales en `pipeline_runtime_kv`. |
-| 3 | Routers `admin.py` y `dashboard.py` aún usan `document_status_store` | **Media** | `adapters/driving/api/v1/routers/admin.py:20-320`, `dashboard.py:14-520` | Estas rutas duplican lógica de `app.py` y bloquean la eliminación del store legacy. Necesitan migrarse a los puertos hexagonales (`DocumentRepository`, `StageTimingRepository`, `NewsItemRepository`, `WorkerRepository`). Ver **PEND-010** y la auditoría previa de métricas en **PEND-011**. |
+| 3 | Routers `admin.py` y `dashboard.py` aún usan `document_status_store` | **Media** | `adapters/driving/api/v1/routers/admin.py:20-320`, `dashboard.py:14-520` | Estas rutas duplican lógica de `app.py` y bloquean la eliminación del store legacy. Necesitan migrarse a los puertos hexagonales (`DocumentRepository`, `StageTimingRepository`, `NewsItemRepository`, `WorkerRepository`). Ver **PEND-010**; la auditoría de métricas (**PEND-011**) y el smoke final (**PEND-012**) ya quedaron documentados, así que el foco restante es solo de código. |
 | 4 | (Resuelto 2026-04-06) Eliminación limpia `document_stage_timing` e índices derivados | ✅ | `adapters/driving/api/v1/routers/documents.py:611-635`, `app/backend/app.py:3842-3865` | `StageTimingRepository.delete_for_document_sync` + `document_repository.delete_sync` se ejecutan antes de remover insights y news items. |
 | 5 | (Resuelto 2026-04-06) Reportes diario/semanal usan `ReportService` | ✅ | `core/application/services/report_service.py`, `app/backend/app.py:1455-1535` | Se creó `ReportService` (puertos `DocumentRepository` + Qdrant/RAG) y se actualizó `generate_daily_report_for_date` / `generate_weekly_report_for_week` para usarlo. `check_workers_script.py` ahora consume `PostgresWorkerRepository`/`PostgresNewsItemRepository`, sin SQL directo ni `document_status_store`. |
 
@@ -106,15 +106,15 @@ Ver: CONSOLIDATED_STATUS.md § Fix #111, SESSION_LOG.md § 2026-04-01
 
 ---
 
-## 🚨 Incidentes runtime activos (2026-04-06)
+## 🚨 Incidentes runtime activos (2026-04-07)
 
 - **PEND-018** (canon de estados insights con prefijo) — Pendiente: unificar `news_item_insights.status` con semántica de pipeline (`insights_*`), ejecutar migración con app detenida, validar scheduler/workers/dashboard y eliminar legacy.
-- **PEND-016** (ingesta fuera de inbox + retries legacy) — En progreso: limpieza puntual del caso `test_upload` + cuarentena física en `uploads/PEND-016`; symlink/registro específico `91fafac5...` corregido; script de sanity check agregado para detección temprana (`check_upload_symlink_db_consistency.py`); pendiente estandarización estructural de upload/retry.
+- **PEND-016** (ingesta fuera de inbox + retries legacy) — **Resuelto 2026-04-07**: el canal upload ahora deja trail equivalente al inbox (`uploads/processed/<hash>_archivo.pdf` + evento JSONL en `uploads/audit/`), los requeue/retry detectan fuentes legacy y exigen `force_legacy=true`, y la guía operativa refleja el nuevo checklist. El archivo en cuarentena `app/local-data/uploads/PEND-016/test_upload__a1fff0ff...dffae.pdf` se conserva como evidencia hasta eliminar definitivamente el flujo legacy.
 - **PEND-013** (`PoolError unkeyed connection`) — En progreso: hardening aplicado en `BasePostgresRepository` y redeploy ejecutado; validar estabilidad en carga.
 - **PEND-014** (`pipeline_runtime_kv` tuple/dict mismatch) — En progreso: `pipeline_runtime_store` tolera filas tuple/dict; startup sin error tras rebuild.
 - **PEND-015** (`UnsupportedImageFormatError` en OCR) — Pendiente: falta validación temprana de tipo real de archivo + clasificación de error permanente.
 
-Ver fuente única de detalles en `PENDING_BACKLOG.md` (§ Prioridad Alta, PEND-016/013/014/015).
+Ver fuente única de detalles en `PENDING_BACKLOG.md` (§ Prioridad Alta, PEND-013/014/015).
 
 ---
 
@@ -131,18 +131,17 @@ Ver fuente única de detalles en `PENDING_BACKLOG.md` (§ Prioridad Alta, PEND-0
    - Resultado: ninguna consulta SQL directa en el router; todo pasa por adaptadores hexagonales.
 
 3. **Routers admin/dashboard sin legacy store**  
-   - Diagnóstico previo de métricas/datos requeridos (matriz “métrica → fuente → puerto”).  
+   - Diagnóstico previo de métricas/datos requeridos (matriz “métrica → fuente → puerto”) — **completado como parte de PEND-011**.  
    - Sustituir `document_status_store`, `news_item_store` y SQL sueltos por métodos de `DocumentRepository`, `StageTimingRepository`, `NewsItemRepository` y `WorkerRepository`.  
-   - Objetivo: los routers solo orquestan, sin conexiones directas a la BD. (Ver **PEND-010** y **PEND-011**).
+   - Objetivo: los routers solo orquestan, sin conexiones directas a la BD. (Ver **PEND-010**; checklist PEND-012 ya validó los endpoints nuevos).
 
 3.1 **Cierre de legado API publicado (2026-04-07)** ✅  
    - [x] `app.py` dejó de publicar `/api/legacy/dashboard/*` y `/api/legacy/workers/status`.  
+   - [x] `documents.py`, `workers.py`, `news_items.py` migrados a `news_item_repository` (sin stores legacy directos).  
    - [ ] Migrar stores legacy restantes en routers v2:  
-     `documents.py` (`news_item_store`, `news_item_insights_store`, `document_insights_store`),  
-     `workers.py` (`news_item_insights_store`),  
-     `news_items.py` (`news_item_insights_store`),  
      `reports.py` (`daily_report_store`, `weekly_report_store`),  
-     `notifications.py` (`notification_store`).
+     `notifications.py` (`notification_store`),  
+     `auth.py` (`db` legacy de autenticación/usuarios).
 
 4. **Eliminar cascadas en stage timing / fuentes derivadas** ✅ (2026-04-06)  
    - `StageTimingRepository.delete_for_document_sync` + borrado coordinado en insights/news items al eliminar documentos.  
@@ -152,10 +151,10 @@ Ver fuente única de detalles en `PENDING_BACKLOG.md` (§ Prioridad Alta, PEND-0
    - Decidir si se mantienen solo en `app.py` legacy (documentarlo explícitamente) o se migra la lógica a un servicio basado en repositorios.  
    - Si se migra, crear puerto dedicado (p.ej. `ReportService`) que reutilice los métodos nuevos de `DocumentRepository`.
 
-6. **Lote de pruebas pendientes (cuando finalice la migración)**  
-   - Ejecutar suite disponible (`cd app/backend && pytest`) + smoke manual sobre `/api/documents`, `/api/workers`, `/api/dashboard`.  
-   - Registrar resultados y comandos en `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md` o nuevo checklist.  
-   - Sin esta evidencia no se considera cerrada la Fase 6. (Ver **PEND-012**).
+6. **Lote de pruebas (Fase 6)**  
+   - ✅ 2026-04-07: smoke suite ejecutado desde host con `TOKEN=<jwt admin> ./scripts/run_api_smoke.sh`; resultados completos en `smoke_1.log` y snapshot en `docs/ai-lcd/artifacts/dashboard_2026-04-07_after.json`.  
+   - ✅ `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md` actualizado con el resumen y referencias.  
+   - *Nota*: Se acordó que no se requiere snapshot “before”; con este “after” se cierra **PEND-012**. Mantener este paso como referencia para futuros cambios mayores.
 
 7. **Memoria analítica post-insights y reportes (brecha vs. visión híbrida)** — *pendiente, no iniciado*  
    **Contexto**: El pipeline ya es híbrido (OCR/chunking/indexing sin LLM; insights con LangGraph + `InsightMemory`). Tras generar insights, solo se persiste en `news_item_insights` el campo `content` (+ `llm_source`); `extracted_data` / `analysis` viven en caché `InsightMemory`, no como ciudadanos de primer nivel para agregaciones. Los reportes diario/semanal (`app.py` ~1464–1552) arman contexto desde **chunks en Qdrant** y vuelven a llamar al LLM, en lugar de apoyarse en insights ya materializados por noticia.  

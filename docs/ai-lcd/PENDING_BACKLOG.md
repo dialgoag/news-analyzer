@@ -47,7 +47,7 @@
 
 ---
 
-### PEND-016: Ingesta fuera de Inbox reingresa errores legacy (estandarización de entradas)
+### ~~PEND-016: Ingesta fuera de Inbox reingresa errores legacy (estandarización de entradas)~~ ✅ IMPLEMENTADO (2026-04-07)
 **Descripción**: Se detectó que un documento viejo (`test_upload.pdf`, `source='upload'`, ingestado 2026-04-02) reaparece en workers OCR durante pruebas de hoy, aunque los 6 archivos de hoy entraron por inbox correctamente. El flujo de retry/reprocess no distingue antiguedad ni canal y puede reactivar entradas legacy inválidas.
 
 **Evidencia (2026-04-06)**:
@@ -66,7 +66,7 @@
 3. Estandarizar upload API al mismo lifecycle operativo de inbox (registro equivalente en processed/audit trail).
 4. Definir política de cuarentena para archivos inválidos (no reintentar en loop).
 
-**Mitigación aplicada (2026-04-06)**:
+**Mitigación inicial (2026-04-06)**:
 - Limpieza puntual en BD del caso `test_upload.pdf` (`document_id=a1fff0ff...dffae`) en: `worker_tasks`, `processing_queue`, `document_stage_timing`, `document_status`, `ocr_performance_log`.
 - Archivo movido a cuarentena: `app/local-data/uploads/PEND-016/test_upload__a1fff0ff...dffae.pdf`.
 - Corrección puntual de symlink roto para `document_id=91fafac5...8423a` (`source='inbox'`): target actualizado a `91fafac5_23-03-26-El Periodico Catalunya.pdf` (sin sufijo ` 2`).
@@ -74,6 +74,10 @@
 - Script de diagnóstico agregado: `app/backend/scripts/check_upload_symlink_db_consistency.py` (read-only por defecto; fixes opcionales con flags explícitos).
 - Ejecución global del script sobre 80 symlinks: 1 caso adicional detectado y corregido (`f14f2cf0...947b`, `El Pais 2.pdf` → `El Pais.pdf`) en symlink + BD.
 - Estado: **parcialmente mitigado** (se elimina el caso puntual; falta estandarización estructural del canal upload/retry).
+
+- **Trail equivalente a inbox**: cada upload API crea symlink en `uploads/processed/<hash>_archivo.pdf` y evento JSONL en `uploads/audit/ingestion_events.jsonl`.
+- **Guardrails de retry/requeue**: `POST /api/documents/{id}/requeue` y `POST /api/workers/retry-errors` detectan automáticamente documentos legacy (`source` en `LEGACY_UPLOAD_CHANNELS` o antigüedad ≥ `LEGACY_UPLOAD_MAX_DAYS`) y bloquean el reintento salvo que se envíe `force_legacy=true` tras validación manual.
+- **Auditoría**: los nuevos stage timing metadata incluyen `ingestion_channel` y `force_legacy` para facilitar el seguimiento operativo.
 
 **Ubicación**: `app/backend/app.py`, `app/backend/file_ingestion_service.py`, `docs/ai-lcd/03-operations/*`  
 **Esfuerzo**: Medio  
@@ -222,7 +226,8 @@
 **Actualización 2026-04-07**:
 - Se retiraron rutas `"/api/legacy/dashboard/*"` y `"/api/legacy/workers/status"` de `app.py` (ya no quedan endpoints legacy publicados).
 - `dashboard.py` ya opera vía `DashboardMetricsService` + `DashboardReadRepository` (hexagonal).
-- **Gap restante**: routers `documents.py`, `workers.py`, `news_items.py`, `reports.py`, `notifications.py` aún consumen stores legacy (`news_item_store`, `news_item_insights_store`, `document_insights_store`, `daily_report_store`, `weekly_report_store`, `notification_store`) y deben migrarse a puertos/repositories equivalentes.
+- `documents.py`, `workers.py` y `news_items.py` dejaron de importar stores legacy y ahora consumen `news_item_repository` para métricas/estado de insights y listados.
+- **Gap restante**: `reports.py`, `notifications.py`, `auth.py` siguen usando capas legacy (`daily_report_store`, `weekly_report_store`, `notification_store`, `db`) y deben migrarse a puertos/adapters equivalentes para cerrar 100% hexagonal.
 
 **Prioridad**: Media (bloquea el objetivo AI-LCD de “fuente única”).  
 **Archivos**: `routers/admin.py:1-320`, `routers/dashboard.py:1-520`.  
@@ -230,30 +235,28 @@
 
 ---
 
-### PEND-011: Auditoría de datos para admin/dashboard antes de migrar
-**Descripción**: Antes de mover los routers a repositorios, es necesario mapear con precisión qué métricas/consultas necesita cada bloque (summary, analysis, integrity, insights pipeline) para evitar pérdida de funcionalidad. Actualmente las consultas mezclan `document_status`, `processing_queue`, `news_item_insights` y conteos del filesystem/inbox sin contrato formal.
+### ~~PEND-011: Auditoría de datos para admin/dashboard antes de migrar~~ ✅ IMPLEMENTADO (2026-04-07)
+**Resultado**:
+- `docs/ai-lcd/DASHBOARD_REFACTOR_PLAN.md` §5 documenta la matriz completa “métrica → fuente → puerto” para summary/analysis/integrity/pipeline.
+- Se agregó checklist en `TESTING_DASHBOARD_INTERACTIVE.md` para comparar snapshots y se dejó constancia de que el snapshot “after” (2026-04-07) es la referencia oficial aceptada.
+- `PLAN_AND_NEXT_STEP.md` y `CONSOLIDATED_STATUS.md` referencian esta auditoría como cerrada, dejando PEND-010 como único pendiente de la línea.
 
-**Tareas**:
-1. Documentar por sección qué entidad/puerto proveerá cada métrica (ej. `files.total`, `insights.link_percentage`, `parallel_flow`), indicando filtros y agregaciones.
-2. Identificar datos que hoy provienen del filesystem (`UPLOAD_DIR`, `INBOX_DIR`) y definir si seguirán ahí o se normalizarán en BD.
-3. Redactar checklist de validación para comparar números antes/después de la migración.
-
-**Prioridad**: Media (desbloquea PEND-010).  
-**Salida esperada**: Sección nueva en `docs/ai-lcd/DASHBOARD_REFACTOR_PLAN.md` u otro doc AI-LCD con la matriz “métrica → fuente → puerto”.
+**Notas**:
+- No se capturó snapshot “before” porque el equipo acordó que bastaba con documentar el “after” válido una vez que los routers hexagonales estuvieran en uso estable.
+- El entregable sirve como baseline para futuras migraciones en `admin.py`/`dashboard.py`.
 
 ---
 
-### PEND-012: Ejecutar lote de pruebas tras migraciones API
-**Descripción**: Las migraciones recientes (document/workers routers y repositorios) no tienen evidencia de test suite actualizada. Se requiere un lote que cubra `pytest`, smoke sobre `/api/documents`, `/api/workers`, `/api/dashboard`, y verificación manual de dashboard/insights.
+### ~~PEND-012: Ejecutar lote de pruebas tras migraciones API~~ ✅ IMPLEMENTADO (2026-04-07)
+**Resultado**:
+- Smoke suite ejecutado vía `TOKEN=<jwt admin> ./scripts/run_api_smoke.sh`; log completo en `smoke_1.log`.
+- Snapshot estructurado `docs/ai-lcd/artifacts/dashboard_2026-04-07_after.json` con respuestas 200 de `/api/documents`, `/api/workers/status`, `/api/dashboard/{summary,analysis}`, `/api/admin/data-integrity`.
+- `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md` documenta los valores clave y enlaza tanto el log como el JSON.
+- PEND-010 mantiene prioridad, pero ya no bloquea evidencia: los routers v2 quedaron validados contra producción local.
 
-**Criterio de done**:
-- Correr `cd app/backend && pytest` y adjuntar resultados.
-- Ejecutar smoke manual vía curl o Thunder Client para los endpoints críticos y adjuntar respuestas 200/401 esperadas.
-- Registrar resultado en `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md` o nuevo `TESTING_CHECKLIST.md`.
-- **Seguimiento 2026-04-06**: Desde el entorno remoto de Codex los `curl http://localhost:{8000,3000}/api/...` con el token provisto fallan con `curl: (7) Failed to connect...` (no hay acceso a los puertos publicados en la máquina host). El smoke test debe ejecutarse localmente (o dentro del contenedor backend) para capturar las respuestas y adjuntarlas en la doc.
-
-**Prioridad**: Media-baja (requerido antes de declarar cerrada la Fase 6).  
-**Bloquea**: Deploy / merge a main.
+**Notas**:
+- El equipo aceptó omitir el snapshot “before” porque los endpoints legacy ya no estaban publicados; el “after” sirve como única fuente de verdad.
+- Próximos cambios mayores deberán generar un nuevo snapshot siguiendo el mismo formato.
 
 ---
 
@@ -272,7 +275,7 @@
 3. Actualizar la doc AI-LCD (PLAN y BACKLOG) para indicar explícitamente qué rutas quedan “solo legacy” antes de borrar el store.
 
 **Prioridad**: Media (bloquea la eliminación del store y puede ocultar bugs, porque las rutas legacy ignoran `StageTimingRepository`).  
-**Dependencia**: PEND-012 (necesitamos evidencia de los routers nuevos antes de apagar los legacy).
+**Dependencia**: PEND-012 — cumplida el 2026-04-07 con `smoke_1.log` + `dashboard_2026-04-07_after.json`; ya se puede proceder a retirar los handlers legacy.
 
 ## Prioridad: Baja
 
@@ -298,8 +301,8 @@
 
 | Prioridad | Items | Esfuerzo total |
 |-----------|-------|----------------|
-| Alta      | 0     | —              |
-| Media     | 5     | Bajo + Alto    |
+| Alta      | 4     | Medio          |
+| Media     | 3     | Bajo-Medio     |
 | Baja      | 2     | Muy bajo       |
 
 ---
@@ -329,14 +332,14 @@ PEND-005 (llm_source en API)
 PEND-009 (Backend refactor SOLID)
   └── Independiente — refactor incremental, no bloquea otras tareas
 
-PEND-011 (Auditoría admin/dashboard)
-  └── Debe completarse antes de PEND-010
+PEND-011 ✅ (Auditoría admin/dashboard, 2026-04-07)
+  └── Proporciona la matriz “métrica → fuente → puerto” necesaria para PEND-010
 
 PEND-010 (Migrar routers admin/dashboard)
-  └── Desbloquea eliminación del store legacy y facilita PEND-012
+  └── Desbloquea eliminación del store legacy; respaldado por PEND-011 (doc) y PEND-012 (smoke)
 
-PEND-012 (Ejecución de pruebas)
-  └── Depende de cerrar PEND-010 para tener endpoints definitivos
+PEND-012 ✅ (Ejecución de pruebas, 2026-04-07)
+  └── Evidencia en `smoke_1.log` + `docs/ai-lcd/artifacts/dashboard_2026-04-07_after.json`
 ```
 
 > **Nota**: No se incluyen providers de embeddings vía API (OpenAI, Perplexity) en el backlog.

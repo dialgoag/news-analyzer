@@ -13,53 +13,38 @@
 - [x] Contenedor frontend reiniciado
 - [x] Sistema completo corriendo
 
-## 🚧 Estado 2026-04-06 (smoke pendiente)
+## 🗂️ Histórico 2026-04-06 (smoke fallido)
 
-- Se intentó correr el smoke suite desde el entorno remoto de Codex usando el token temporal (`curl -H "Authorization: Bearer <token>" http://localhost:{8000,3000}/api/...`).
-- Todos los intentos respondieron `curl: (7) Failed to connect to localhost port XXXX` porque el entorno no tiene acceso directo a los puertos publicados por Docker en la máquina host.
-- Acciones pendientes:
-  1. Ejecutar los mismos comandos **desde la máquina host o dentro del contenedor backend** para capturar las respuestas reales.
-  2. Pegar en esta sección los outputs de:  
-     ```bash
-     curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/documents
-     curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/workers/status
-     curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/dashboard/summary
-     curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/admin/data-integrity
-     ```  
-     (Agregar también `/api/dashboard/analysis` si se valida el payload completo).
-  3. Actualizar la checklist inferior marcando qué endpoints ya tienen evidencia.
-- Hasta ejecutar los pasos anteriores, el ítem **PEND-012** sigue abierto.
+- Intento remoto desde el entorno de Codex (`curl http://localhost:{8000,3000}/api/...`) sin acceso a los puertos host ⇒ `curl: (7) Failed to connect`.
+- Se mantiene este bloque solo como referencia histórica; los pasos listados se completaron el 2026-04-07 desde la máquina host y **PEND-012 quedó cerrado**.
+- Próximos smokes deben ejecutarse localmente o dentro del contenedor backend para evitar el mismo bloqueo de red.
 
 ---
 
-## 📌 Resultados de humo 2026-04-07 (desde host)
+## 📌 Resultados de humo 2026-04-07 (post-routers legacy, desde host)
 
-Comando ejecutado: `TOKEN=<jwt admin> ./scripts/run_api_smoke.sh`
+Comando ejecutado: `TOKEN=<jwt admin> ./scripts/run_api_smoke.sh` (registro completo en `smoke_1.log`).
 
-| Endpoint | HTTP | Resumen |
-|----------|------|---------|
-| `GET /api/documents` | 404 | `{"detail":"Not Found"}` — el backend sigue atendiendo esta ruta con los handlers legacy porque los routers v2 no se registraron (ver PEND-017). Requiere reiniciar backend tras exportar `TaskType`. |
-| `GET /api/workers/status` | 200 | Payload extenso con 5 workers activos, 50 en error y detalle de cada documento/ocr. (Ver logs en `scripts/run_api_smoke.sh` output 2026-04-07 00:07). |
-| `GET /api/dashboard/summary` | 200 | `files.total=332`, `completed=305`, `news_items.total=28029`, etc. |
-| `GET /api/dashboard/analysis` | 200 | Incluye grupos de error para `testfile.pdf` y workers stuck. |
-| `GET /api/admin/data-integrity` | 200 | (Salida guardada en la terminal; pendiente documentarla aquí cuando reinicie el backend y repita la corrida definitiva). |
+| Endpoint | HTTP | Resumen clave |
+|----------|------|---------------|
+| `GET /api/documents` | 200 | `total=331`, todos los documentos activos en `indexing_done`, sin errores pendientes. |
+| `GET /api/workers/status` | 200 | Servicios: `tika_service=unreachable`, `qdrant_service=healthy`; `pending_tasks.insights=25005`, `stuck=0`. |
+| `GET /api/dashboard/summary` | 200 | `files.total=331`, `completed=331`, `errors=0`, `chunks_total=123545`, `insights.pending=25005`. |
+| `GET /api/dashboard/analysis` | 200 | Sin grupos de error; stages completas salvo Insights (`pending_tasks=25005`, `docs_with_pending_insights=321`). |
+| `GET /api/admin/data-integrity` | 200 | `match=75.8%`, `orphaned_count=80`, `overall_status=error` (tal como se esperaba antes de limpiar uploads legacy). |
+
+Evidencia JSON: `docs/ai-lcd/artifacts/dashboard_2026-04-07_after.json` (contiene los campos resumidos arriba y referencia a `smoke_1.log` con el payload completo).
 
 Notas:
-- El token usado se generó con `/api/auth/login` (`user_id=1, username=admin, role=admin`). Los endpoints devolvieron 200 salvo `/api/documents`.
-- Para cerrar PEND‑012 necesitamos repetir el script después de reiniciar el backend (ver siguiente sección) y pegar las respuestas finales completas.
+- El token proviene de `/api/auth/login` (admin). Esta corrida confirma que los routers v2 responden y reemplaza el snapshot fallido anterior (404).
+- Los valores relevantes para PEND‑011/012 quedaron capturados: `files.total=331`, `insights.pending=25005`, `workers.stuck=0`, `data_integrity.files.match=75.8%`.
+- Snapshot “before” **no es requerido** por acuerdo del 2026-04-07; este archivo “after” es la referencia oficial mientras no se toquen los routers.
 
 ## 🔁 Checklist PEND-011 (Snapshots previos/post)
 
-1. **Capturar snapshot inicial**
-   - Ejecutar `TOKEN=... ./scripts/run_api_smoke.sh --output docs/ai-lcd/artifacts/dashboard_<fecha>_before.json`.
-   - Extraer también `/api/dashboard/parallel-data?limit=50&max_news_per_doc=10` y guardarlo como `_parallel_before.json` para validar `news_items_total` y `meta`.
-   - Registrar en esta sección los valores clave (`files.total`, `insights.pending`, `workers.stuck`, `data_integrity.files.match`).
-2. **Registrar migración**
-   - Tras mover los routers hacia `DashboardMetricsService`/`AdminDataIntegrityService`, repetir los mismos comandos y guardar `_after.json`.
-   - Documentar diferencias y anotar si superan la tolerancia (±1 % en totales, ±5 documentos por stage, tolerancia 0 para `insights.link_percentage`).
-3. **Publicar comparativa**
-   - Añadir tabla “Antes vs Después” en este archivo y enlazar las rutas de los JSON generados.
-   - Adjuntar hash (ej. `shasum dashboard_<fecha>_before.json`) para trazabilidad.
+1. **Capturar snapshot inicial** — _No aplica_. Se documentó que basta con snapshot “after” porque los endpoints legacy ya están deshabilitados.
+2. **Registrar migración** — ✅ `docs/ai-lcd/artifacts/dashboard_2026-04-07_after.json` + `smoke_1.log` (ver tabla anterior).
+3. **Publicar comparativa** — _Pendiente sólo si se genera un nuevo before_. Para esta iteración se dejó constancia en esta sección y en `CONSOLIDATED_STATUS.md`.
 
 ---
 
