@@ -169,14 +169,15 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
   const insightsData = data.insights || { total: 0, done: 0, pending: 0, errors: 0, percentage_done: 0, eta_seconds: 0, parallel_workers: 0 };
   
   // Prepare data for compact components
+  const errorGroups = analysisData?.errors?.groups || [];
+  const realErrorsCount = errorGroups.filter(g => g.is_real_error).length;
+  
   const kpiStats = {
     total_docs: files.total || 0,
     total_news: newsItems.total || 0,
     total_insights: insightsData.total || 0,
-    total_errors: (files.errors || 0) + (newsItems.errors || 0) + (insightsData.errors || 0)
+    total_errors: realErrorsCount // Use same source as ErrorAnalysisPanel
   };
-  
-  const errorGroups = analysisData?.errors?.groups || [];
 
   return (
     <DashboardProvider>
@@ -277,7 +278,12 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
             priority="high"
             defaultCollapsed={false}
           >
-            <ErrorAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+            <ErrorAnalysisPanel 
+              API_URL={API_URL} 
+              token={token} 
+              refreshTrigger={refreshTrigger}
+              preloadedAnalysis={analysisData}
+            />
           </CollapsibleSection>
         </div>
         

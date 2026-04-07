@@ -17,7 +17,7 @@ import {
 import { API_TIMEOUT_MS, API_TIMEOUT_ACTION_MS } from '../../config/apiConfig';
 import './ErrorAnalysisPanel.css';
 
-export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
+export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger, preloadedAnalysis }) {
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -25,10 +25,21 @@ export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
   const lastFetchRef = useRef(0);
   const CACHE_DURATION = 5000; // Cache for 5 seconds to reduce backend load
 
-  // Fetch analysis data with caching
+  // Use preloaded data if available
+  useEffect(() => {
+    if (preloadedAnalysis) {
+      setAnalysis(preloadedAnalysis);
+      setLoading(false);
+      setError(null);
+      lastFetchRef.current = Date.now();
+    }
+  }, [preloadedAnalysis]);
+
+  // Fetch analysis data with caching (fallback if no preloaded data)
   useEffect(() => {
     const fetchAnalysis = async () => {
       if (!token) return;
+      if (preloadedAnalysis) return; // Skip fetch if we have preloaded data
       
       // Check cache
       const now = Date.now();
@@ -57,7 +68,7 @@ export function ErrorAnalysisPanel({ API_URL, token, refreshTrigger }) {
     fetchAnalysis();
     const interval = setInterval(fetchAnalysis, 30000); // Refresh every 30s
     return () => clearInterval(interval);
-  }, [API_URL, token, refreshTrigger, analysis]);
+  }, [API_URL, token, refreshTrigger, preloadedAnalysis, analysis]);
 
   const handleRetryAll = async () => {
     if (!confirm(`¿Reintentar todos los ${errors.total_errors} documento(s) con error?`)) {
