@@ -94,7 +94,7 @@ backend/migrations/014_add_reprocess_flag.py  # Nueva migración
 backend/adapters/driven/persistence/postgres/document_repository_impl.py  # Implementación Postgres
 backend/core/ports/repositories/document_repository.py                    # Métodos públicos
 backend/app.py                                                             # Master Scheduler + auto-unmark en indexing
-docs/REPROCESSING_PERSISTENCE.md              # Documentación completa
+docs/ai-lcd/03-operations/REPROCESSING.md     # Documentación actual del flujo (sustituye a REPROCESSING_PERSISTENCE.md)
 ```
 
 ### 🧪 Testing
@@ -130,7 +130,7 @@ docker compose logs backend | grep "reprocessing"
 ```
 backend/migrations/014_add_reprocess_flag.py
 docs/TIKA_SEPARATE_SERVICE.md
-docs/REPROCESSING_PERSISTENCE.md
+docs/ai-lcd/03-operations/REPROCESSING.md
 ```
 
 ### Archivos Modificados
@@ -251,7 +251,7 @@ docker compose up -d --build
 
 ### Documentación
 - [x] `TIKA_SEPARATE_SERVICE.md` completo
-- [x] `REPROCESSING_PERSISTENCE.md` completo
+- [x] Guía consolidada en `docs/ai-lcd/03-operations/REPROCESSING.md`
 - [x] Scripts de testing incluidos
 - [x] Troubleshooting guide incluido
 
@@ -298,7 +298,7 @@ docker compose up -d --build
 - [x] Master Scheduler integrado
 - [x] Auto-desmarcado en indexing
 - [x] Endpoint /requeue actualizado
-- [x] Documentación REPROCESSING_PERSISTENCE.md
+- [x] Documentación operativa migrada a `docs/ai-lcd/03-operations/REPROCESSING.md`
 - [x] Testing manual completado
 
 ---

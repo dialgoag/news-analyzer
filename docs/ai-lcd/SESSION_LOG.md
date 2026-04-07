@@ -3,7 +3,23 @@
 > Decisiones, cambios importantes, y contexto entre sesiones
 
 **Última actualización**: 2026-04-07  
-**Sesión**: 52 (canon de estados Insights y plan de migración)
+**Sesión**: 53 (migración hexagonal de routers restantes)
+
+---
+
+## 2026-04-07 — Cierre de stores legacy en routers v2
+
+### Cambio: `reports`, `notifications`, `auth` migrados a puertos hexagonales
+- **Decisión**: Reemplazar uso directo de `daily_report_store`, `weekly_report_store`, `notification_store` y `db` en routers por repositorios (`ReportRepository`, `NotificationRepository`, `UserRepository`) con adapters PostgreSQL.
+- **Alternativas consideradas**: Mantener `database.py` en routers hasta descomponer `app.py` completo (rechazada por seguir mezclando driving adapters con infraestructura legacy).
+- **Impacto en roadmap**: Se cierra la brecha pendiente de `PLAN_AND_NEXT_STEP` § 3.1; los routers v2 ya no dependen de stores legacy directos.
+- **Riesgo**: Medio-bajo; cambio concentrado en capa de acceso a datos, verificado con tests unitarios y rebuild backend healthy.
+
+### Cambio: Validación post-migración
+- **Decisión**: Validar sintaxis, tests unitarios críticos (`test_value_objects`, `test_entities`) y arranque real de backend tras rebuild.
+- **Alternativas consideradas**: Solo verificación estática sin levantar contenedor (rechazada por no cubrir wiring/runtime).
+- **Impacto en roadmap**: Evidencia operativa de que el backend carga código nuevo con routers migrados.
+- **Riesgo**: Bajo; checks de health y endpoints auth/reports/notifications responden según permisos esperados.
 
 ---
 
@@ -32,6 +48,12 @@
 - **Alternativas consideradas**: Mantener legacy publicado con redirección interna (rechazada por ambigüedad operativa y duplicación de contratos).
 - **Impacto en roadmap**: Reduce drift entre implementaciones y acelera cierre de PEND-017.
 - **Riesgo**: Bajo; frontend ya consume `/api/dashboard/*` y `/api/workers/status` desde routers modulares.
+
+### Cambio: Routers v2 migrados de stores legacy a `news_item_repository`
+- **Decisión**: Sustituir uso directo de `news_item_store`/`news_item_insights_store`/`document_insights_store` en `documents.py`, `workers.py` y `news_items.py` por métodos sync de `PostgresNewsItemRepository`.
+- **Alternativas consideradas**: Mantener stores hasta refactor completo de auth/reports/notifications (rechazada por mezclar dos contratos de datos en la misma capa driving).
+- **Impacto en roadmap**: Avance tangible hacia PEND-010; los endpoints core de pipeline/documentos quedan más alineados con puertos hexagonales.
+- **Riesgo**: Medio-bajo; se amplía superficie del repositorio con métodos de lectura sync para compatibilidad incremental.
 
 ---
 

@@ -9,6 +9,41 @@
 
 ---
 
+### 123. Migración hexagonal de routers `reports`/`notifications`/`auth` ✅
+**Fecha**: 2026-04-07  
+**Ubicación**:
+- `app/backend/adapters/driving/api/v1/routers/reports.py`
+- `app/backend/adapters/driving/api/v1/routers/notifications.py`
+- `app/backend/adapters/driving/api/v1/routers/auth.py`
+- `app/backend/adapters/driving/api/v1/dependencies.py`
+- `app/backend/core/ports/repositories/{report_repository,notification_repository,user_repository}.py`
+- `app/backend/adapters/driven/persistence/postgres/{report_repository_impl,notification_repository_impl,user_repository_impl}.py`
+
+**Problema**:
+- Los routers v2 restantes todavía dependían de stores legacy de `database.py`, rompiendo el contrato hexagonal en la capa driving.
+
+**Solución**:
+- Se crearon puertos y adapters PostgreSQL dedicados para reportes, notificaciones y usuarios.
+- Los routers ahora consumen dependencias inyectadas (`ReportRepositoryDep`, `NotificationRepositoryDep`, `UserRepositoryDep`) y eliminaron imports directos de stores/db legacy.
+
+**Impacto**:
+- Los endpoints modulares de auth/reportes/notificaciones quedan alineados con puertos hexagonales.
+- Se reduce acoplamiento de routers con infraestructura legacy.
+
+**⚠️ NO rompe**:
+- Login JWT y gestión de usuarios (`/api/auth/*`) ✅
+- Lectura de reportes diarios/semanales (`/api/reports/*`) ✅
+- Inbox de notificaciones (`/api/notifications/*`) ✅
+- Scheduler/workers existentes ✅
+
+**Verificación**:
+- [x] `python -m py_compile` sobre routers/dependencies/adapters nuevos
+- [x] `pytest app/backend/tests/unit/test_value_objects.py app/backend/tests/unit/test_entities.py -q` (54 passed)
+- [x] `make rebuild-backend` + `GET /health = 200`
+- [x] Respuestas de routing esperadas: `/api/auth/login` 401 (credenciales inválidas), `/api/reports/daily` y `/api/notifications` protegidos por auth (403/401 sin token)
+
+---
+
 ### 122. Evidencia smoke dashboard (PEND-011/PEND-012) ✅
 **Fecha**: 2026-04-07  
 **Ubicación**:
@@ -1794,17 +1829,17 @@ Opcional antes de rebuild backend: `POST /api/workers/shutdown` con **Bearer tok
 
 ### 58. Alineación Documentación — Eliminación de Inconsistencias ✅
 **Fecha**: 2026-03-15
-**Ubicación**: docs/ai-lcd/ (REQUESTS_REGISTRY, CONSOLIDATED_STATUS, PLAN_AND_NEXT_STEP, INDEX, REFACTOR_STATUS)
+**Ubicación**: docs/ai-lcd/ (REQUESTS_REGISTRY, CONSOLIDATED_STATUS, PLAN_AND_NEXT_STEP, INDEX; REFACTOR_STATUS archivado en `docs/archive/2026-03-recovery/REFACTOR_STATUS.md`)
 **Problema**: Múltiples inconsistencias entre documentación y código real:
 - REQUESTS_REGISTRY: tabla resumen decía "COMPLETADA" pero detalles decían "EN PROGRESO/EN EJECUCIÓN" (REQ-003, 004, 006, 007, 008)
 - CONSOLIDATED_STATUS: 9 pares de fixes con números duplicados (6, 19, 27, 28, 30, 43, 46, 47, 55)
 - PLAN_AND_NEXT_STEP: fecha desactualizada, versiones obsoletas, referencia rota a test-semantic-zoom.md
-- REFACTOR_STATUS: referencia a docker-compose.cpu.yml eliminado
+- REFACTOR_STATUS (ver archivo en `docs/archive/2026-03-recovery/`): referencia a docker-compose.cpu.yml eliminado
 **Solución**:
 - REQUESTS_REGISTRY: alineados estados detallados con tabla resumen (sin eliminar contenido)
 - CONSOLIDATED_STATUS: renumerados duplicados con sufijo "b" (6b, 19b, 27b, 28b, 30b, 43b, 46b, 47b, 55b)
 - PLAN_AND_NEXT_STEP: actualizada fecha, versión, versiones consolidadas, siguiente paso, referencia corregida
-- REFACTOR_STATUS: actualizada sección Docker con compose actual
+- REFACTOR_STATUS (ver archivo en `docs/archive/2026-03-recovery/`): actualizada sección Docker con compose actual
 - INDEX.md: agregadas entradas para Frontend Modular, Docker Unificado, Startup Recovery
 **Impacto**: Documentación alineada con código real, sin información eliminada
 **⚠️ NO rompe**: Solo documentación, sin cambios en código funcional

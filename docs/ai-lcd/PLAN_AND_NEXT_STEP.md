@@ -7,7 +7,7 @@
 > **📋 ÚLTIMO**: Fix #119 — Docker backend CPU como usuario no-root ✅.
 
 **Última actualización**: 2026-04-07  
-**Versión**: 3.0.18 (Hexagonal Architecture + estandarización estados insights)
+**Versión**: 3.0.19 (routers v2 sin stores legacy directos)
 
 ---
 
@@ -138,10 +138,10 @@ Ver fuente única de detalles en `PENDING_BACKLOG.md` (§ Prioridad Alta, PEND-0
 3.1 **Cierre de legado API publicado (2026-04-07)** ✅  
    - [x] `app.py` dejó de publicar `/api/legacy/dashboard/*` y `/api/legacy/workers/status`.  
    - [x] `documents.py`, `workers.py`, `news_items.py` migrados a `news_item_repository` (sin stores legacy directos).  
-   - [ ] Migrar stores legacy restantes en routers v2:  
-     `reports.py` (`daily_report_store`, `weekly_report_store`),  
-     `notifications.py` (`notification_store`),  
-     `auth.py` (`db` legacy de autenticación/usuarios).
+   - [x] Migrados stores legacy restantes en routers v2 mediante puertos:
+     `reports.py` → `ReportRepository`,
+     `notifications.py` → `NotificationRepository`,
+     `auth.py` → `UserRepository`.
 
 4. **Eliminar cascadas en stage timing / fuentes derivadas** ✅ (2026-04-06)  
    - `StageTimingRepository.delete_for_document_sync` + borrado coordinado en insights/news items al eliminar documentos.  

@@ -82,7 +82,10 @@ por eso existe la carpeta anidada.
 
 ## 6. Recuperación de archivos en macOS
 
-Ver: [docs/MACOS_RECOVERY.md](MACOS_RECOVERY.md)
+- **Time Machine**: restaurar `news-analyzer/app/` al snapshot previo (Finder → Enter Time Machine).
+- **Papelera/Local History**: revisar si el IDE guardó versiones automáticas.
+- **Software de recuperación**: Disk Drill / PhotoRec cuando los archivos fueron borrados con `rm`.
+- **Prevención**: respaldar periódicamente `local-data/` y `.env`; evitar refactors destructivos sin copia.
 
 ---
 

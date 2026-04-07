@@ -67,6 +67,7 @@
 | **DEPLOYMENT_GUIDE.md** | Despliegue paso a paso | `03-operations/` |
 | **ENVIRONMENT_CONFIGURATION.md** | Variables de entorno | `03-operations/` |
 | **TROUBLESHOOTING_GUIDE.md** | Problemas y soluciones | `03-operations/` |
+| **REPROCESSING.md** | Reprocesar documentos preservando insights | `03-operations/` |
 | **ORDERLY_SHUTDOWN_AND_REBUILD.md** | Shutdown API + rebuild backend/frontend | `03-operations/` |
 | **LOCAL_LLM_VS_OPENAI_INSIGHTS.md** | Comparación manual curl Ollama/OpenAI (complemento REQ-021) | `03-operations/` |
 | **DOCKER.md** | Docker Compose unificado (CPU/GPU) | `app/docs/` |
@@ -92,6 +93,9 @@
 
 **...los bugs arreglados hoy?**
 → `CONSOLIDATED_STATUS.md § 🔧 FIXES APLICADOS HOY`
+
+**...cómo reprocesar un documento sin perder insights?**
+→ `03-operations/REPROCESSING.md`
 
 **...el próximo paso?**
 → `PLAN_AND_NEXT_STEP.md § Próximos Pasos`
