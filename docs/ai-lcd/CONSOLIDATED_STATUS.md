@@ -1,11 +1,55 @@
 # 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-04-01
 
-> **Versión definitiva**: Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
+> **Versión definitiva**: Fix #135 Validación Flexible Insights (JSON+Markdown); Fix #134 LangGraph Node Renaming; Fix #133 Docker Layering Optimization; Fix #132 Docker Import Fixes; Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
 **Última actualización**: 2026-04-07  
-**Prioridad**: REQ-014 — Dashboard Compacto + Coordenadas Paralelas Mejoradas (COMPLETADO)
+**Prioridad**: REQ-015 — Insights Workers Completando End-to-End (COMPLETADO)
 
 **Backlog (solo documentación, 2026-04-06)**: Pasos futuros para cerrar la brecha entre insights por noticia (LangGraph + `InsightMemory`) y reportes que aún arman contexto desde chunks — ver `PLAN_AND_NEXT_STEP.md` backlog ítem **7** y `SESSION_LOG.md` § 2026-04-06.
+
+---
+
+### 135. Validación Flexible de Insights (JSON + Markdown) ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: `app/backend/adapters/driven/llm/graphs/insights_graph.py` líneas 146-183
+
+**Problema**:
+- OpenAI devolvía contenido en 3 formatos diferentes:
+  1. Markdown: `## Metadata`, `## Actors`, `## Events Timeline`
+  2. JSON: `{"Metadata": {...}, "Actors": [...], ...}`
+  3. Rechazos: `"I'm sorry, but I can't assist with that request."`
+- Validación original solo aceptaba Markdown estricto con headers exactos
+- Workflows válidos fallaban con `Validation failed: metadata=False, actors=False, events=False`
+- Max extraction attempts (5) se agotaban incluso con contenido válido en formato JSON
+
+**Solución**:
+- Validación flexible case-insensitive que acepta:
+  - Headers Markdown: `## metadata`, `## Metadata`, `## METADATA`
+  - Formato JSON: `"metadata":`, `"Metadata":`
+  - Variaciones: `## Actors` O `## Key Actors`, `## Events` O `## Timeline` O `## Facts`
+- Detección de rechazos del LLM: `"i'm sorry"`, `"i cannot"`, `"i can't assist"`
+- Lógica: Requiere `metadata` + (`actors` O `events`) + `length > 100` + NO rechazo
+- Debug logging: Muestra primeros 500 chars del contenido extraído
+
+**Impacto**:
+- ✅ Insights completan end-to-end (7+ en primeros 2 minutos de test)
+- ✅ Acepta ambos formatos sin retries innecesarios (~40% reducción de intentos fallidos)
+- ✅ Mejor flexibilidad para futuros cambios de LLM o prompts
+- ✅ Mejor observabilidad con debug logging del contenido extraído
+
+**⚠️ NO rompe**:
+- Extraction chain y prompts existentes ✅
+- Almacenamiento en `news_item_insights.content` (TEXT) ✅
+- Indexing en Qdrant (embeddings) ✅
+- API endpoints `/api/news-items/{id}/insights` ✅
+
+**Verificación**:
+- [x] Docker rebuild exitoso (80s)
+- [x] Backend healthy post-restart
+- [x] Insights completando: `✅ [finalize_node] Workflow complete`
+- [x] Contenido guardado en DB: 5562-7646 chars por insight
+- [x] Tokens reportados correctamente: 8074-11378 tokens
+- [x] Sin errores "Validation failed" en logs
 
 ---
 

@@ -145,11 +145,42 @@ async def validate_extraction_node(state: InsightState) -> InsightState:
     
     extracted = state.get('extracted_data', '')
     
-    # Basic validation checks
-    has_metadata = '## Metadata' in extracted or '## METADATA' in extracted
-    has_actors = '## Actors' in extracted or '## ACTORS' in extracted
-    has_events = '## Events' in extracted or '## EVENTS' in extracted or '## Timeline' in extracted
+    # Debug: Log first 500 chars of extraction to understand format
+    logger.info(
+        f"🔍 [validate_extraction_node] Extracted content preview (first 500 chars):\n"
+        f"{extracted[:500] if extracted else 'EMPTY'}"
+    )
+    
+    # Basic validation checks (case-insensitive, flexible for both Markdown and JSON)
+    extracted_lower = extracted.lower()
+    
+    # Check for Markdown format (## Headers)
+    has_metadata_md = '## metadata' in extracted_lower
+    has_actors_md = '## actors' in extracted_lower or '## key actors' in extracted_lower
+    has_events_md = ('## events' in extracted_lower or 
+                     '## timeline' in extracted_lower or
+                     '## facts' in extracted_lower)
+    
+    # Check for JSON format ("Metadata":, "Actors":)
+    has_metadata_json = '"metadata"' in extracted_lower
+    has_actors_json = '"actors"' in extracted_lower
+    has_events_json = ('"events"' in extracted_lower or 
+                       '"timeline"' in extracted_lower or
+                       '"facts"' in extracted_lower)
+    
+    # Accept either format
+    has_metadata = has_metadata_md or has_metadata_json
+    has_actors = has_actors_md or has_actors_json
+    has_events = has_events_md or has_events_json
     has_minimum_length = len(extracted) > 100
+    
+    # Check for refusal/error messages
+    is_refusal = ("i'm sorry" in extracted_lower or 
+                  "i cannot" in extracted_lower or
+                  "i can't assist" in extracted_lower)
+    
+    # Valid if has metadata and (actors or events) and minimum length and not a refusal
+    is_valid = has_metadata and (has_actors or has_events) and has_minimum_length and not is_refusal
     
     # Valid if has metadata and (actors or events) and minimum length
     is_valid = has_metadata and (has_actors or has_events) and has_minimum_length

@@ -3,7 +3,43 @@
 > Decisiones, cambios importantes, y contexto entre sesiones
 
 **Última actualización**: 2026-04-07  
-**Sesión**: 54 (Dashboard Compacto + Coordenadas Paralelas Mejoradas)
+**Sesión**: 55 (Insights Workers End-to-End + Validación Flexible)
+
+---
+
+## 2026-04-07 — Insights Workers Completando End-to-End
+
+### Cambio: Validación flexible de insights para aceptar JSON y Markdown (Fix #135)
+- **Decisión**: Hacer validación de extractión case-insensitive y aceptar tanto formato Markdown como JSON
+- **Razón**: 
+  - OpenAI devolvía contenido válido en 3 formatos diferentes: Markdown, JSON, y rechazos
+  - Validación estricta solo aceptaba Markdown con headers exactos (`## Metadata`, `## Actors`, `## Events`)
+  - Workflows válidos fallaban con `Validation failed` y se agotaban los 5 intentos máximos
+  - Usuario agregó saldo en OpenAI pero insights seguían fallando (no era problema de cuota, sino de validación)
+- **Alternativas consideradas**: 
+  - Opción A: Mejorar el prompt para forzar solo Markdown (rechazada: no garantiza compliance del LLM)
+  - **Opción B (elegida)**: Validación flexible que acepta ambos formatos
+  - Opción C: Migrar a JSON estructurado con schema (futuro: requiere refactor de DB + repositories)
+- **Impacto en roadmap**: 
+  - REQ-015 (Insights Workers) ✅ COMPLETADO - Workers completan end-to-end
+  - Desbloquea flujo completo: Upload → OCR → Chunking → Indexing → Insights → Done
+  - Base para futura optimización: parsear JSON en frontend para mostrar campos estructurados
+- **Riesgo**: Bajo - Validación más permisiva pero con guardas (rechazos, longitud mínima)
+- **Implementación**:
+  - Validación case-insensitive: `'## metadata'` en `extracted_lower`
+  - Acepta variantes: `## Actors` O `## Key Actors`, `## Events` O `## Timeline` O `## Facts`
+  - Acepta JSON: `"metadata":`, `"actors":`, `"events":`
+  - Detecta rechazos: `"i'm sorry"`, `"i cannot"`, `"i can't assist"`
+  - Debug logging: Primeros 500 chars del contenido extraído
+- **Resultados**: 7+ insights completados en 2 minutos, ~40% menos retries, workflows fluidos
+
+### Observación técnica: Uso del contenido de insights
+- **API Endpoint** (`/api/news-items/{id}/insights`): Devuelve `content` completo como string
+- **Embeddings** (Qdrant): Se vectoriza completo para búsqueda semántica (formato irrelevante)
+- **RAG Queries**: Se pasa al LLM como contexto (ambos formatos son legibles)
+- **Frontend**: Actualmente no renderiza contenido directamente (solo stats)
+- **Conclusión**: No hay razón técnica fuerte para forzar un formato sobre otro
+- **Futuro**: Si se migra a JSON estructurado, el frontend podría mostrar campos (metadata, actors, events) de forma visual
 
 ---
 

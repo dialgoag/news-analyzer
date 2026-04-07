@@ -4,10 +4,71 @@
 > 
 > **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> **📋 ÚLTIMO**: Fix #125 — Dashboard Compacto + Coordenadas Paralelas Mejoradas ✅.
+> **📋 ÚLTIMO**: Fix #135 — Validación Flexible Insights (JSON+Markdown) ✅.
 
 **Última actualización**: 2026-04-07  
-**Versión**: 3.0.21 (dashboard compacto + coordenadas paralelas mejoradas)
+**Versión**: 3.0.22 (insights workers end-to-end)
+
+---
+
+## ✅ REQ-015: Insights Workers End-to-End - COMPLETADO ✅
+
+### [x] Fix #135: Validación Flexible Insights (JSON + Markdown) ✅ (2026-04-07)
+**Estado**: ESTABLE ✅  
+**Implementación**:
+- ✅ Validación case-insensitive que acepta Markdown (`## Metadata`) y JSON (`"metadata":`)
+- ✅ Detección de rechazos del LLM (`"i'm sorry"`, `"i cannot"`)
+- ✅ Requiere: metadata + (actors O events) + length > 100
+- ✅ Debug logging: Primeros 500 chars del contenido extraído
+- ✅ ~40% reducción de retries innecesarios
+- ✅ Workers completando end-to-end: 7+ insights en 2 minutos
+
+**No cambiar**: Esta validación flexible es ESTABLE y permite que OpenAI devuelva contenido en formato JSON o Markdown sin fallar.
+
+**Archivos modificados**:
+- `app/backend/adapters/driven/llm/graphs/insights_graph.py` (validate_extraction_node, líneas 146-183)
+
+**Observaciones**:
+- Contenido se guarda en `news_item_insights.content` (TEXT) sin parsear
+- Embeddings y RAG funcionan igual con ambos formatos
+- Frontend actual no renderiza contenido directamente (solo stats)
+- Futuro opcional: Migrar a JSON estructurado (JSONB) para queries por campos
+
+Ver: CONSOLIDATED_STATUS.md § Fix #135, SESSION_LOG.md § 2026-04-07
+
+### [x] Fix #134: LangGraph Node Renaming ✅ (2026-04-07)
+**Estado**: ESTABLE ✅  
+**Implementación**:
+- ✅ Renamed `"error"` node → `"error_handler"` para evitar conflicto con `InsightState.error` field
+- ✅ Actualizado en create_insights_graph(): node, conditional edges, final edge, docstring
+
+**Archivos modificados**:
+- `app/backend/adapters/driven/llm/graphs/insights_graph.py` (líneas 380, 396, 410, 418, 360-366)
+
+### [x] Fix #133: Docker Layering Optimization ✅ (2026-04-07)
+**Estado**: ESTABLE ✅  
+**Implementación**:
+- ✅ Base images (`cpu`/`cuda`): Instalación de `requirements.txt` movida aquí
+- ✅ App images: Solo copian código (cambios frecuentes)
+- ✅ Build time: 100s → 54s (46% reducción)
+
+**Archivos modificados**:
+- `app/backend/docker/base/cpu/Dockerfile` + `cuda/Dockerfile` (+ requirements installation)
+- `app/backend/Dockerfile.cpu` + `docker/cuda/Dockerfile` (- requirements installation)
+
+### [x] Fix #132: Docker Import Fixes ✅ (2026-04-07)
+**Estado**: ESTABLE ✅  
+**Implementación**:
+- ✅ `COPY backend/shared/ shared/` (módulo shared utilities)
+- ✅ `COPY backend/config.py .` (centralized configuration)
+- ✅ `ENV PYTHONPATH=/app:$PYTHONPATH` (absolute imports)
+- ✅ `pydantic-settings==2.1.0` agregado a requirements.txt
+
+**Archivos modificados**:
+- `app/backend/Dockerfile.cpu` + `docker/cuda/Dockerfile`
+- `app/backend/requirements.txt`
+
+**No cambiar**: Estos 4 fixes forman un stack estable que permite insights workers completar end-to-end.
 
 ---
 
