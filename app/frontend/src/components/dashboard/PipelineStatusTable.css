@@ -1,0 +1,275 @@
+/**
+ * PipelineStatusTable - Compact table view replacing stage cards
+ */
+
+.pipeline-status-table-container {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  overflow-x: auto;
+}
+
+.pipeline-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  font-family: var(--font-body);
+}
+
+/* Header */
+.pipeline-table thead {
+  background: var(--bg-elevated);
+  border-bottom: 2px solid var(--border-color);
+}
+
+.pipeline-table th {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.pipeline-table th.col-stat,
+.pipeline-table th.col-status,
+.pipeline-table th.col-actions {
+  text-align: center;
+}
+
+/* Body rows */
+.pipeline-table tbody tr {
+  border-bottom: 1px solid var(--border-light);
+  transition: background var(--transition-fast);
+}
+
+.pipeline-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.pipeline-table tbody tr.has-bottleneck {
+  border-left: 3px solid var(--color-warning);
+  background: rgba(255, 152, 0, 0.05);
+}
+
+.pipeline-table tbody tr.has-errors {
+  border-left: 3px solid var(--color-error);
+  background: rgba(244, 67, 54, 0.05);
+}
+
+.pipeline-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+/* Stage name cell */
+.stage-name-cell {
+  padding: var(--space-2) var(--space-3);
+}
+
+.stage-name-wrapper {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.stage-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: var(--weight-bold);
+  font-family: var(--font-heading);
+  color: white;
+  font-size: var(--text-sm);
+  flex-shrink: 0;
+}
+
+.stage-name {
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  font-family: var(--font-heading);
+}
+
+/* Stat cells */
+.stat-cell {
+  padding: var(--space-2) var(--space-3);
+  text-align: center;
+  font-family: var(--font-heading);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-md);
+  color: var(--text-secondary);
+}
+
+.stat-cell--pending {
+  color: var(--color-info);
+}
+
+.stat-cell--processing {
+  color: var(--color-pending);
+}
+
+.stat-cell--done {
+  color: var(--color-active);
+}
+
+.stat-cell--error {
+  color: var(--color-error);
+  font-weight: var(--weight-bold);
+}
+
+/* Status cell */
+.status-cell {
+  padding: var(--space-2) var(--space-3);
+  text-align: center;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.status-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.status-badge--ok {
+  background: var(--color-active-bg);
+  color: var(--color-active);
+  border: 1px solid var(--color-active);
+}
+
+.status-badge--pending {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+  border: 1px solid var(--color-info);
+}
+
+.status-badge--processing {
+  background: var(--color-pending-bg);
+  color: var(--color-pending);
+  border: 1px solid var(--color-pending);
+}
+
+.status-badge--error {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  border: 1px solid var(--color-error);
+}
+
+/* Actions cell */
+.actions-cell {
+  padding: var(--space-2) var(--space-3);
+  text-align: center;
+}
+
+.pause-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.pause-toggle:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--color-info);
+}
+
+.pause-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pause-toggle.is-paused {
+  border-color: var(--color-active);
+  background: var(--color-active-bg);
+}
+
+.pause-toggle.is-paused:hover:not(:disabled) {
+  background: var(--color-active);
+}
+
+.pause-toggle.is-paused .toggle-icon {
+  color: var(--color-active);
+}
+
+.pause-toggle.is-paused:hover:not(:disabled) .toggle-icon {
+  color: white;
+}
+
+.pause-toggle.is-running {
+  border-color: var(--color-warning);
+}
+
+.pause-toggle.is-running:hover:not(:disabled) {
+  background: var(--color-warning-bg);
+}
+
+.toggle-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--text-secondary);
+}
+
+.no-control {
+  color: var(--text-disabled);
+  font-size: var(--text-xs);
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .pipeline-table {
+    font-size: var(--text-xs);
+  }
+
+  .pipeline-table th,
+  .pipeline-table td {
+    padding: var(--space-1) var(--space-2);
+  }
+
+  .stage-icon {
+    width: 24px;
+    height: 24px;
+    font-size: var(--text-xs);
+  }
+
+  .stat-cell {
+    font-size: var(--text-sm);
+  }
+}
+
+@media (max-width: 768px) {
+  .pipeline-status-table-container {
+    overflow-x: scroll;
+  }
+
+  .pipeline-table {
+    min-width: 700px;
+  }
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .pipeline-table tbody tr,
+  .pause-toggle {
+    transition: none;
+  }
+}

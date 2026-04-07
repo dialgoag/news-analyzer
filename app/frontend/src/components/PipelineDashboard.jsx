@@ -18,6 +18,9 @@ import StuckWorkersPanel from './dashboard/StuckWorkersPanel';
 import DatabaseStatusPanel from './dashboard/DatabaseStatusPanel';
 import WorkerLoadCard from './dashboard/WorkerLoadCard';
 import PipelineSummaryCard from './dashboard/PipelineSummaryCard';
+import KPIsInline from './dashboard/KPIsInline';
+import PipelineStatusTable from './dashboard/PipelineStatusTable';
+import WorkersErrorsInline from './dashboard/WorkersErrorsInline';
 import './PipelineDashboard.css';
 
 export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = false }) {
@@ -26,6 +29,11 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
   const [parallelData, setParallelData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  
+  // New states for compact components
+  const [analysisData, setAnalysisData] = useState(null);
+  const [workerStats, setWorkerStats] = useState(null);
+  const [showFullErrors, setShowFullErrors] = useState(false);
 
   const fetchPipelineData = useCallback(async () => {
     if (!token) return;
@@ -38,12 +46,20 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
       });
       setData(summaryResponse.data);
 
-      const [docsResponse, parallelResponse] = await Promise.allSettled([
+      const [docsResponse, parallelResponse, analysisResponse, workersResponse] = await Promise.allSettled([
         axios.get(`${API_URL}/api/documents`, {
           headers: { Authorization: `Bearer ${token}` },
           timeout: API_TIMEOUT_MS
         }),
         axios.get(`${API_URL}/api/dashboard/parallel-data`, {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: API_TIMEOUT_MS
+        }),
+        axios.get(`${API_URL}/api/dashboard/analysis`, {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: API_TIMEOUT_MS
+        }),
+        axios.get(`${API_URL}/api/workers/status`, {
           headers: { Authorization: `Bearer ${token}` },
           timeout: API_TIMEOUT_MS
         })
@@ -60,6 +76,22 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
       } else {
         console.warn('Could not fetch parallel data:', parallelResponse.reason);
       }
+      
+      if (analysisResponse.status === 'fulfilled') {
+        setAnalysisData(analysisResponse.value.data || null);
+      } else {
+        console.warn('Could not fetch analysis data:', analysisResponse.reason);
+      }
+      
+      if (workersResponse.status === 'fulfilled') {
+        const workers = workersResponse.value.data?.workers || [];
+        const active = workers.filter(w => w.status === 'active').length;
+        const idle = workers.filter(w => w.status === 'idle').length;
+        setWorkerStats({ active, idle, workers });
+      } else {
+        console.warn('Could not fetch workers data:', workersResponse.reason);
+      }
+      
       setError(null);
     } catch (err) {
       console.error('Error fetching pipeline data:', err);
@@ -129,10 +161,20 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
   const chunkingData = data.chunking || { total_chunks: 0, indexed: 0, pending: 0, errors: 0, percentage_indexed: 0 };
   const indexingData = data.indexing || { total: 0, active: 0, pending: 0, errors: 0, percentage_indexed: 0 };
   const insightsData = data.insights || { total: 0, done: 0, pending: 0, errors: 0, percentage_done: 0, eta_seconds: 0, parallel_workers: 0 };
+  
+  // Prepare data for compact components
+  const kpiStats = {
+    total_docs: files.total || 0,
+    total_news: newsItems.total || 0,
+    total_insights: insightsData.total || 0,
+    total_errors: (files.errors || 0) + (newsItems.errors || 0) + (insightsData.errors || 0)
+  };
+  
+  const errorGroups = analysisData?.errors?.groups || [];
 
   return (
     <DashboardProvider>
-      <div className="pipeline-container">
+      <div className="pipeline-container pipeline-container--compact">
         {error && (
           <div
             className="error-banner pipeline-dashboard-error-banner"
@@ -149,31 +191,53 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
             ⚠️ {error} — mostrando últimos datos (refresh 20s)
           </div>
         )}
-
-        <div className="pipeline-dashboard-aux">
+        
+        {/* NEW: Compact KPIs at top */}
+        <KPIsInline stats={kpiStats} />
+        
+        {/* NEW: Compact Pipeline Table */}
+        {analysisData?.pipeline?.stages && (
+          <PipelineStatusTable 
+            stages={analysisData.pipeline.stages}
+            isAdmin={isAdmin}
+            onPauseToggle={(stageKey, paused) => {
+              console.log('Pause toggle:', stageKey, paused);
+              // TODO: Implement pause toggle API call
+            }}
+          />
+        )}
+        
+        {/* NEW: Workers + Errors Inline */}
+        <WorkersErrorsInline 
+          workerStats={workerStats}
+          errorGroups={errorGroups}
+          onRefresh={fetchPipelineData}
+          onExpandErrors={() => setShowFullErrors(true)}
+        />
+        
+        {/* Full Error Panel (shown on demand) */}
+        {showFullErrors && (
           <CollapsibleSection 
-            title="Errores" 
+            title="Análisis Detallado de Errores" 
             icon={ExclamationTriangleIcon} 
             priority="high"
             defaultCollapsed={false}
           >
             <ErrorAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+            <button 
+              onClick={() => setShowFullErrors(false)}
+              style={{ marginTop: '12px', padding: '8px 16px', borderRadius: '6px' }}
+            >
+              Cerrar
+            </button>
           </CollapsibleSection>
-
-          <CollapsibleSection 
-            title="Análisis de Pipeline" 
-            icon={ArrowPathIcon}
-            priority="normal"
-            defaultCollapsed={false}
-          >
-            <PipelineAnalysisPanel
-              API_URL={API_URL}
-              token={token}
-              refreshTrigger={refreshTrigger}
-              isAdmin={isAdmin}
-            />
-          </CollapsibleSection>
-
+        )}
+        
+        {/* Coordenadas Paralelas (improved) */}
+        <ParallelPipelineCoordinates data={parallelData} documents={documents} />
+        
+        {/* OLD panels as collapsible fallback */}
+        <div className="pipeline-dashboard-aux pipeline-dashboard-aux--collapsed">
           <CollapsibleSection 
             title="Workers Stuck" 
             icon={ClockIcon}
@@ -191,41 +255,6 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
           >
             <DatabaseStatusPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} embedded />
           </CollapsibleSection>
-        </div>
-
-        <div className="visualizations-grid">
-          <div className="visualizations-row">
-            <CollapsibleSection 
-              title="Resumen Pipeline" 
-              icon={MapIcon}
-              priority="high"
-              defaultCollapsed={false}
-            >
-              <PipelineSummaryCard
-                files={files}
-                newsItems={newsItems}
-                insights={insightsData}
-              />
-            </CollapsibleSection>
-            <CollapsibleSection 
-              title="Carga de Workers" 
-              icon={ChartBarIcon}
-              priority="high"
-              defaultCollapsed={false}
-            >
-              <WorkerLoadCard API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
-            </CollapsibleSection>
-          </div>
-          <div className="visualizations-row visualizations-row--full">
-            <CollapsibleSection 
-              title="Coordenadas Paralelas" 
-              icon={MapIcon}
-              priority="normal"
-              defaultCollapsed={false}
-            >
-              <ParallelPipelineCoordinates data={parallelData} documents={documents} />
-            </CollapsibleSection>
-          </div>
         </div>
       </div>
     </DashboardProvider>

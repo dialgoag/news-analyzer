@@ -1,11 +1,65 @@
 # 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-04-01
 
-> **Versión definitiva**: Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
+> **Versión definitiva**: Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
 **Última actualización**: 2026-04-07  
-**Prioridad**: REQ-021 — Backend Refactor: Hexagonal + DDD + LangChain/LangGraph/LangMem
+**Prioridad**: REQ-014 — Dashboard Compacto + Coordenadas Paralelas Mejoradas (COMPLETADO)
 
 **Backlog (solo documentación, 2026-04-06)**: Pasos futuros para cerrar la brecha entre insights por noticia (LangGraph + `InsightMemory`) y reportes que aún arman contexto desde chunks — ver `PLAN_AND_NEXT_STEP.md` backlog ítem **7** y `SESSION_LOG.md` § 2026-04-06.
+
+---
+
+### 125. Dashboard Compacto + Coordenadas Paralelas Mejoradas ✅
+**Fecha**: 2026-04-07  
+**Ubicación**:
+- `app/frontend/src/components/dashboard/KPIsInline.jsx` + `.css` (NUEVO)
+- `app/frontend/src/components/dashboard/PipelineStatusTable.jsx` + `.css` (NUEVO)
+- `app/frontend/src/components/dashboard/WorkersErrorsInline.jsx` + `.css` (NUEVO)
+- `app/frontend/src/components/dashboard/ParallelPipelineCoordinates.jsx` + `.css` (MODIFICADO)
+- `app/frontend/src/components/PipelineDashboard.jsx` + `.css` (MODIFICADO)
+
+**Problema**:
+- Dashboard ocupaba ~2500px de altura con paneles grandes y redundantes
+- Coordenadas Paralelas tenían líneas de ancho sutil (1.2-5.6px), no se notaban diferencias
+- No había bifurcación visual real: 1 documento → N news items se veía como líneas separadas sin conexión
+- Colores uniformes: no diferenciaban nivel documento vs nivel news item
+- Faltaba leyenda visual explicando el flujo de bifurcación
+
+**Solución**:
+- **Componentes Compactos**:
+  - `KPIsInline`: Badges horizontales en lugar de cards grandes (docs, news, insights, errores)
+  - `PipelineStatusTable`: Tabla horizontal compacta para stages del pipeline (reemplaza cards grandes)
+  - `WorkersErrorsInline`: Mini widgets side-by-side para workers y errores (reemplaza paneles grandes)
+- **Coordenadas Paralelas Mejoradas**:
+  - Ancho de líneas: 2-20px (10x más visible, proporcional a # news items)
+  - Bifurcación visual: Offset vertical (`getBifurcationOffset()`) para separar visualmente news items
+  - Colores diferenciados por segmento:
+    - Azul (#2196f3): Nivel documento (upload, ocr, chunking, indexing)
+    - Cyan/Topic (#4dd0e1 + topic colors): Bifurcación hacia news items
+    - Verde/Estado (#4caf50): Nivel news item (insights, indexing insights)
+  - Leyenda visual de bifurcación: 3 ejemplos SVG explicando flujo documento → bifurcación → news items
+  - Altura reducida a 450px máximo
+
+**Impacto**:
+- Dashboard compacto: De ~2500px → ~1000px de altura (60% reducción)
+- Coordenadas paralelas: 10x más legibles, bifurcación visible, colores informativos
+- Mejor UX: Menos scroll, información más densa, navegación más rápida
+- Performance: Responsive design con breakpoints para mobile/tablet
+
+**⚠️ NO rompe**:
+- Endpoints de API existentes ✅
+- Funcionalidad de filtros/tooltips/interactividad ✅
+- Componentes legacy (CollapsibleSection, ErrorAnalysisPanel) ✅
+- Build pipeline y Docker compose ✅
+
+**Verificación**:
+- [x] `npm run build` exitoso (1335 módulos transformados, 2.5s)
+- [x] `docker-compose build --no-cache frontend` exitoso
+- [x] `docker-compose up -d frontend` deployado
+- [x] Dashboard cargando con nuevos componentes compactos
+- [x] Coordenadas paralelas mostrando bifurcación visual con anchos 2-20px
+- [x] Leyenda visual de bifurcación visible y clara
+- [x] Responsive design funcional (mobile, tablet, desktop)
 
 ---
 

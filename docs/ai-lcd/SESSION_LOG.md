@@ -3,7 +3,34 @@
 > Decisiones, cambios importantes, y contexto entre sesiones
 
 **Última actualización**: 2026-04-07  
-**Sesión**: 53 (migración hexagonal de routers restantes)
+**Sesión**: 54 (Dashboard Compacto + Coordenadas Paralelas Mejoradas)
+
+---
+
+## 2026-04-07 — Dashboard Compacto + Coordenadas Paralelas Mejoradas
+
+### Cambio: Rediseño completo del dashboard de monitoreo (Fix #125)
+- **Decisión**: Implementar componentes compactos + mejorar Coordenadas Paralelas con bifurcación visual real (1 doc → N news)
+- **Razón**: 
+  - Dashboard original ocupaba ~2500px de altura (ineficiente)
+  - Coordenadas Paralelas tenían anchos 1.2-5.6px (imperceptibles)
+  - Usuario reportó: "no se ven bien del todo... las líneas deberian cambiar de ancho y color y eso no sucede"
+  - Necesidad de optimizar espacio vertical y mostrar insights importantes de forma compacta
+- **Alternativas consideradas**: 
+  - Opción A: Solo mejorar Coordenadas Paralelas
+  - Opción B: Solo compactar componentes
+  - **Opción C (elegida)**: Todo de una vez - Máxima optimización en una iteración
+- **Impacto en roadmap**: 
+  - REQ-014 (Dashboard Monitoring) ✅ COMPLETADO
+  - PEND-022 (Dashboard Visual Improvements) ✅ COMPLETADO
+  - Espacio liberado para futura PEND-023 (News Analytics Dashboards)
+- **Riesgo**: Bajo - Componentes legacy se mantienen funcionales como fallback
+- **Implementación**:
+  - `KPIsInline`: Badges horizontales (reemplaza cards grandes)
+  - `PipelineStatusTable`: Tabla compacta (reemplaza grid de stage cards)
+  - `WorkersErrorsInline`: Mini widgets side-by-side
+  - Coordenadas Paralelas: Ancho 2-20px, bifurcación con offset, colores por nivel (doc/news/insight), leyenda visual SVG
+- **Resultados**: Dashboard de 2500px → 1000px (60% reducción), bifurcación 10x más visible
 
 ---
 

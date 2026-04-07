@@ -453,6 +453,45 @@
   border-top: 1px solid var(--border-light);
 }
 
+/* Bifurcation Legend */
+.parallel-bifurcation-legend {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.bifurcation-legend-title {
+  font-size: var(--text-sm);
+  font-family: var(--font-heading);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  margin-bottom: var(--space-2);
+}
+
+.bifurcation-legend-items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.legend-visual-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-family: var(--font-body);
+  color: var(--text-secondary);
+}
+
+.legend-svg {
+  flex-shrink: 0;
+  background: var(--bg-base);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1);
+}
+
 /* Help Panel */
 .parallel-help {
   margin: var(--space-3) 0;

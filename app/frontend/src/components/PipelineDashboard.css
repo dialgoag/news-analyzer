@@ -1,5 +1,5 @@
 /* Recovered from production CSS bundle */
-/* Updated 2026-04-07: Using design tokens */
+/* Updated 2026-04-07: Compact layout with design tokens */
 
 .error-banner {
   background: #fff3cd;
@@ -12,16 +12,27 @@
 }
 
 .pipeline-container {
-  padding: var(--space-2) 10px 10px;
+  padding: var(--space-3);
   background: var(--bg-base);
   color: var(--text-primary);
   height: 100%;
   max-height: 100%;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
   box-sizing: border-box;
+}
+
+/* Compact layout optimization */
+.pipeline-container--compact {
+  gap: var(--space-3);
+}
+
+.pipeline-container--compact > * {
+  flex-shrink: 0;
 }
 
 .pipeline-header {
@@ -42,22 +53,12 @@
   margin-bottom: var(--space-2);
 }
 
-.pipeline-dashboard-aux {
-  flex: 0 1 auto;
-  max-height: min(320px, 38vh);
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-.pipeline-dashboard-aux::-webkit-scrollbar {
-  width: 6px;
-}
-
-.pipeline-dashboard-aux::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.35);
-  border-radius: var(--radius-sm);
+/* Aux section - now collapsed by default */
+.pipeline-dashboard-aux--collapsed {
+  margin-top: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .pipeline-subtitle {
@@ -68,31 +69,30 @@
   font-style: italic;
 }
 
-.visualizations-grid {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  flex: 1;
-  min-height: 0;
+/* Scrollbar styling */
+.pipeline-container::-webkit-scrollbar {
+  width: 8px;
 }
 
-.visualizations-row {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
-  gap: var(--space-3);
-  min-height: 0;
+.pipeline-container::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: var(--radius-sm);
 }
 
-.visualizations-row > * {
-  min-height: 0;
+.pipeline-container::-webkit-scrollbar-thumb:hover {
+  background: var(--color-info);
 }
 
-.visualizations-row--full {
-  grid-template-columns: 1fr;
-}
-
+/* Responsive */
 @media (max-width: 1200px) {
-  .visualizations-row {
-    grid-template-columns: 1fr;
+  .pipeline-container {
+    padding: var(--space-2);
+  }
+}
+
+@media (max-width: 768px) {
+  .pipeline-container {
+    padding: var(--space-1);
+    gap: var(--space-2);
   }
 }

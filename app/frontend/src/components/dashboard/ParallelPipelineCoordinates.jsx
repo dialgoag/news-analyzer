@@ -40,6 +40,11 @@ const TOPIC_COLORS = ['#4caf50', '#2196f3', '#f97316', '#a78bfa', '#facc15', '#3
 const DEFAULT_TOPIC_META = { key: 'sin-tema', label: 'Sin tema' };
 const MAX_TOPIC_LEGEND_ITEMS = 8;
 
+// Line width configuration for better visibility
+const MIN_LINE_WIDTH = 2;        // Minimum line width (1 news)
+const MAX_LINE_WIDTH = 20;       // Maximum line width (many news)
+const NEWS_ITEM_WIDTH = 2;       // Width for individual news items post-bifurcation
+
 function normalizeTopicKey(label) {
   if (!label) return DEFAULT_TOPIC_META.key;
   const cleaned = label
@@ -243,6 +248,38 @@ function getStateIcon(state) {
   return '⏳';
 }
 
+// Calculate bifurcation offset for visual spreading
+function getBifurcationOffset(newsIndex, totalNews) {
+  if (totalNews === 1) return 0;
+  
+  const maxSpread = Math.min(60, totalNews * 4); // Max 60px spread
+  const step = maxSpread / (totalNews - 1);
+  const offset = (newsIndex - (totalNews - 1) / 2) * step;
+  
+  return offset;
+}
+
+// Get segment color based on position in pipeline
+function getSegmentColor(segment, line) {
+  // Error always wins
+  if (ERROR_STATES.has(segment.state)) return '#f44336'; // --color-error
+  
+  // Bifurcation point (to news) - use topic color
+  if (segment.toKey === 'news') {
+    return line.topicColor || '#4dd0e1'; // Topic color or cyan
+  }
+  
+  // Post-bifurcation (after news) - state-based
+  if (['insights', 'indexInsights'].includes(segment.toKey)) {
+    if (DONE_STATES.has(segment.state)) return '#4caf50'; // Green for done
+    if (PROGRESS_STATES.has(segment.state)) return '#ff9800'; // Orange for progress
+    return '#4dd0e1'; // Cyan for pending
+  }
+  
+  // Pre-bifurcation (document level) - blue
+  return '#2196f3'; // Blue for document flow
+}
+
 function buildTooltip(line) {
   const news = line.newsMeta || {};
   const groupingInfo = line.groupLabel && line.groupLabel !== line.docName
@@ -409,9 +446,14 @@ export default function ParallelPipelineCoordinates({ data, documents = [] }) {
 
       const groupCountEntry = groupingMeta.counts.get(groupKey);
       const targetNewsCount = doc.news_items_total || doc.news_count || items.length || 1;
-      const widthFromNews = 1.2 + Math.min(4.5, targetNewsCount * 0.35);
-      const widthFromGroup = 1.4 + ((groupCountEntry?.count || 1) / groupingMeta.maxCount) * 4.6;
-      const lineWidth = groupingMode === 'document' ? widthFromNews : widthFromGroup;
+      
+      // New calculation: 2px - 20px range (10x more visible)
+      const widthFromNews = MIN_LINE_WIDTH + Math.min(
+        MAX_LINE_WIDTH - MIN_LINE_WIDTH, 
+        targetNewsCount * 1.5
+      );
+      const widthFromGroup = MIN_LINE_WIDTH + ((groupCountEntry?.count || 1) / groupingMeta.maxCount) * (MAX_LINE_WIDTH - MIN_LINE_WIDTH);
+      const docWidth = groupingMode === 'document' ? widthFromNews : widthFromGroup;
 
       items.forEach((news, idx) => {
         const insightState = normalizeInsightStatus(news.insight_status);
@@ -443,7 +485,9 @@ export default function ParallelPipelineCoordinates({ data, documents = [] }) {
             insights: insightState,
             indexInsights: indexState
           },
-          lineWidth
+          docWidth,           // Ancho del documento (grueso)
+          newsIndex: idx,     // Índice de la news para bifurcación
+          newsCount: items.length  // Total de news para spread
         });
       });
     });
@@ -792,15 +836,36 @@ export default function ParallelPipelineCoordinates({ data, documents = [] }) {
       for (let i = 0; i < AXES.length - 1; i++) {
         const fromKey = AXES[i].key;
         const toKey = AXES[i + 1].key;
-        const fromY = accessors[fromKey](line);
-        const toY = accessors[toKey](line);
+        let fromY = accessors[fromKey](line);
+        let toY = accessors[toKey](line);
         if (fromY === undefined || toY === undefined) continue;
+        
+        // Apply bifurcation offset at news axis
+        if (toKey === 'news' || fromKey === 'news') {
+          const offset = getBifurcationOffset(line.newsIndex || 0, line.newsCount || 1);
+          if (toKey === 'news') {
+            toY = toY + offset;
+          }
+          if (fromKey === 'news') {
+            fromY = fromY + offset;
+          }
+        }
+        
+        // Apply offset for post-news axes too
+        if (['insights', 'indexInsights'].includes(fromKey) || ['insights', 'indexInsights'].includes(toKey)) {
+          const offset = getBifurcationOffset(line.newsIndex || 0, line.newsCount || 1);
+          fromY = fromY + offset;
+          toY = toY + offset;
+        }
+        
         segments.push({
           key: `${line.id}-${fromKey}-${toKey}`,
           fromX: xScale(fromKey),
           toX: xScale(toKey),
           fromY,
           toY,
+          fromKey,
+          toKey,
           state: getAxisState(line, toKey)
         });
       }
@@ -869,9 +934,20 @@ export default function ParallelPipelineCoordinates({ data, documents = [] }) {
         .attr('y1', (segment) => segment.fromY)
         .attr('x2', (segment) => segment.toX)
         .attr('y2', (segment) => segment.toY)
-        .attr('stroke', (segment) => getStateColor(segment.state))
-        .attr('stroke-width', () => {
-          const baseWidth = line.lineWidth || 1.6;
+        .attr('stroke', (segment) => getSegmentColor(segment, line))
+        .attr('stroke-width', (segment) => {
+          // Pre-bifurcation (document level): thick line
+          if (['upload', 'ocr', 'chunking', 'indexing'].includes(segment.toKey)) {
+            const baseWidth = line.docWidth || MIN_LINE_WIDTH;
+            return hoveredId === line.id ? baseWidth + 1.5 : baseWidth;
+          }
+          // Bifurcation point: transition from thick to thin
+          if (segment.toKey === 'news') {
+            const baseWidth = (line.docWidth + NEWS_ITEM_WIDTH) / 2; // Average
+            return hoveredId === line.id ? baseWidth + 1 : baseWidth;
+          }
+          // Post-bifurcation (news level): thin line
+          const baseWidth = NEWS_ITEM_WIDTH;
           return hoveredId === line.id ? baseWidth + 1 : baseWidth;
         })
         .attr('opacity', computeOpacity)
@@ -1102,6 +1178,33 @@ export default function ParallelPipelineCoordinates({ data, documents = [] }) {
             <span><i className="legend-swatch progress" /> En progreso</span>
             <span><i className="legend-swatch pending" /> Pendiente / en cola</span>
             <span><i className="legend-swatch error" /> Error detectado</span>
+          </div>
+          
+          <div className="parallel-bifurcation-legend">
+            <div className="bifurcation-legend-title">Flujo y Bifurcación:</div>
+            <div className="bifurcation-legend-items">
+              <div className="legend-visual-item">
+                <svg width="80" height="30" className="legend-svg">
+                  <line x1="5" y1="15" x2="75" y2="15" stroke="#2196f3" strokeWidth="8" strokeLinecap="round" />
+                </svg>
+                <span>Nivel Documento (ancho ∝ # news)</span>
+              </div>
+              <div className="legend-visual-item">
+                <svg width="80" height="40" className="legend-svg">
+                  <line x1="5" y1="20" x2="30" y2="20" stroke="#4dd0e1" strokeWidth="6" strokeLinecap="round" />
+                  <line x1="30" y1="20" x2="55" y2="10" stroke="#4dd0e1" strokeWidth="2" strokeLinecap="round" />
+                  <line x1="30" y1="20" x2="55" y2="20" stroke="#4dd0e1" strokeWidth="2" strokeLinecap="round" />
+                  <line x1="30" y1="20" x2="55" y2="30" stroke="#4dd0e1" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <span>Bifurcación en News Items (1 doc → N news)</span>
+              </div>
+              <div className="legend-visual-item">
+                <svg width="80" height="30" className="legend-svg">
+                  <line x1="5" y1="15" x2="75" y2="15" stroke="#4caf50" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <span>Nivel News Item (1 línea = 1 noticia)</span>
+              </div>
+            </div>
           </div>
           {lineData.topics.length > 0 && (
             <div className="parallel-topic-legend">

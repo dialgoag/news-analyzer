@@ -4,10 +4,35 @@
 > 
 > **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> **📋 ÚLTIMO**: Fix #119 — Docker backend CPU como usuario no-root ✅.
+> **📋 ÚLTIMO**: Fix #125 — Dashboard Compacto + Coordenadas Paralelas Mejoradas ✅.
 
 **Última actualización**: 2026-04-07  
-**Versión**: 3.0.20 (bloque docs/workers/news-items consolidado)
+**Versión**: 3.0.21 (dashboard compacto + coordenadas paralelas mejoradas)
+
+---
+
+## ✅ REQ-014: Dashboard Monitoring - COMPLETADO ✅
+
+### [x] Fix #125: Dashboard Compacto + Coordenadas Paralelas Mejoradas ✅ (2026-04-07)
+**Estado**: ESTABLE ✅  
+**Implementación**:
+- ✅ `KPIsInline`: Badges horizontales compactos (docs, news, insights, errores)
+- ✅ `PipelineStatusTable`: Tabla horizontal para stages del pipeline
+- ✅ `WorkersErrorsInline`: Mini widgets side-by-side para workers y errores
+- ✅ Coordenadas Paralelas: Ancho 2-20px (10x más visible), bifurcación visual con offset, colores diferenciados, leyenda visual SVG
+- ✅ Layout compacto: De ~2500px → ~1000px (60% reducción)
+- ✅ Responsive design para mobile/tablet/desktop
+
+**No cambiar**: Este rediseño es ESTABLE y representa mejora significativa en UX y densidad de información.
+
+**Archivos modificados**:
+- `app/frontend/src/components/dashboard/KPIsInline.jsx` + `.css` (NUEVO)
+- `app/frontend/src/components/dashboard/PipelineStatusTable.jsx` + `.css` (NUEVO)
+- `app/frontend/src/components/dashboard/WorkersErrorsInline.jsx` + `.css` (NUEVO)
+- `app/frontend/src/components/dashboard/ParallelPipelineCoordinates.jsx` + `.css` (MODIFICADO)
+- `app/frontend/src/components/PipelineDashboard.jsx` + `.css` (MODIFICADO)
+
+Ver: CONSOLIDATED_STATUS.md § Fix #125, SESSION_LOG.md § 2026-04-07
 
 ---
 
