@@ -3929,3 +3929,28 @@ curl -X POST /api/documents/{real_doc_id}/requeue
 - **Alternativas consideradas**: Mantener SQL en startup por “simplicidad” (rechazada por inconsistencia arquitectónica).
 - **Impacto en roadmap**: Cierra otro bloque crítico fuera del scheduler y reduce deuda técnica remanente en bootstrap.
 - **Riesgo**: Bajo; se preservó semántica exacta de limpieza y rollback por estado.
+
+
+### Cambio: Fix Docker - shared/ folder + PYTHONPATH para insights workers
+- **Decisión**: Agregar carpeta `shared/` al contenedor Docker y configurar PYTHONPATH=/app para habilitar imports absolutos.
+- **Contexto**: El scheduler estaba despachando workers de insights correctamente (evidencia en logs: "Enqueued 2 document(s)", "Dispatched insights worker"), pero los workers morían con `ImportError: No module named 'shared'` y `cannot import name 'get_insights_worker_service'`. El problema NO era el scheduler ni el encolado, sino que la imagen Docker no tenía los módulos necesarios.
+- **Alternativas consideradas**:
+  - Cambiar imports a relativos (rechazada: rompe estructura hexagonal y otros módulos)
+  - Symlinks o hacks de PYTHONPATH en runtime (rechazada: frágil y difícil de mantener)
+  - Incluir shared/ en Dockerfile (elegida: solución limpia y permanente)
+- **Impacto en roadmap**: 
+  - Desbloquea completamente el pipeline de insights (último stage bloqueado)
+  - Permite procesar las noticias encoladas que esperan insights
+  - Completa la funcionalidad end-to-end: OCR → Chunking → Indexing → Insights ✅
+- **Riesgo**: Muy bajo; solo agrega archivos faltantes al contenedor, no cambia lógica de negocio
+- **Archivos modificados**:
+  - `app/backend/Dockerfile.cpu`: +1 línea COPY shared/, +1 línea ENV PYTHONPATH
+  - `app/backend/docker/cuda/Dockerfile`: +1 línea COPY shared/, +1 línea ENV PYTHONPATH
+- **Próximo paso**: Rebuild backend y verificar que workers de insights completen correctamente
+
+
+### Cambio: Workers internos migran metadata/dedup a repositorios
+- **Decisión**: Completar limpieza de SQL residual en los 4 workers núcleo para cerrar deuda técnica de ejecución interna.
+- **Alternativas consideradas**: Mantener SQL en workers “por performance” (rechazada; repositorios ya usan pool y mantiene arquitectura).
+- **Impacto en roadmap**: `app.py` queda casi sin SQL directo fuera de jobs legacy puntuales.
+- **Riesgo**: Bajo-medio; se preservó semántica de estado y dedup, cambiando solo capa de acceso.

@@ -1303,3 +1303,18 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 - [x] `detect_crashed_workers` migrado a repositorios sync (sin SQL inline).
 - [x] Backend reconstruido y healthy tras el cambio.
 - [ ] Pendiente siguiente: SQL directo restante en workers internos específicos (`_insights_worker_task`, `_indexing_insights_worker_task`, etc.).
+
+
+### ✅ Actualización 2026-04-07 — Fix Docker shared/ + PYTHONPATH
+- [x] Agregado `COPY backend/shared/ shared/` en Dockerfile.cpu y docker/cuda/Dockerfile
+- [x] Agregado `ENV PYTHONPATH=/app:$PYTHONPATH` en ambos Dockerfiles
+- [x] Documentación actualizada: CONSOLIDATED_STATUS.md § Fix #132, SESSION_LOG.md
+- [ ] Pendiente: Rebuild backend y verificar que workers insights completen sin ImportError
+- [ ] Pendiente: Verificar logs `docker compose logs -f backend | grep -E "\[insights_"`
+- [ ] Pendiente: Confirmar `news_item_insights` status pasa de `pending` → `completed`
+
+
+### ✅ Actualización 2026-04-07 — Workers internos
+- [x] `_insights_worker_task`, `_ocr_worker_task`, `_chunking_worker_task`, `_indexing_worker_task` sin SQL inline.
+- [x] Metadata de documento (`processing_stage`, `indexed_at`, `num_chunks`, `doc_type`) vía repositorio.
+- [ ] Pendiente siguiente: limpiar SQL directo remanente en `run_news_item_insights_queue_job_parallel` y utilidades legacy.

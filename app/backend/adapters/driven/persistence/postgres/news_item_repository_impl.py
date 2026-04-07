@@ -746,6 +746,45 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
             return count
         finally:
             self.get_connection_pool().putconn(conn)
+
+    def get_text_hash_for_news_item_sync(self, news_item_id: str) -> Optional[str]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT text_hash FROM news_item_insights WHERE news_item_id = %s",
+                (news_item_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            row_dict = self.map_row_to_dict(cursor, row)
+            return row_dict.get("text_hash")
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def get_done_insight_by_text_hash_sync(self, text_hash: str) -> Optional[dict]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT news_item_id, document_id, filename, title, status, content, llm_source, text_hash
+                FROM news_item_insights
+                WHERE text_hash = %s
+                  AND status = 'insights_done'
+                  AND content IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (text_hash,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self.map_row_to_dict(cursor, row)
+        finally:
+            self.get_connection_pool().putconn(conn)
     
     # ========================================
     # PRIVATE: Mapping helpers

@@ -273,6 +273,14 @@ class NewsItemRepository(ABC):
         """SYNC: set insights_generating rows back to insights_pending."""
         pass
 
+    def get_text_hash_for_news_item_sync(self, news_item_id: str) -> Optional[str]:
+        """SYNC: get text_hash for a specific news_item_insights row."""
+        pass
+
+    def get_done_insight_by_text_hash_sync(self, text_hash: str) -> Optional[dict]:
+        """SYNC: get a done insight row by text_hash."""
+        pass
+
     @abstractmethod
     async def count_insights_by_status(self) -> dict:
         """Return counts of news_item_insights grouped by status."""

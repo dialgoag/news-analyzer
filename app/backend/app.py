@@ -2183,25 +2183,14 @@ async def _insights_worker_task(
         
         # DEDUP: Check if an insight with the same text_hash already exists (saves API costs)
         # This is different from LangMem cache: text_hash dedup reuses insights from OTHER news_items
-        try:
-            conn_dedup = document_status_store.get_connection()
-            cur_dedup = conn_dedup.cursor()
-            cur_dedup.execute(
-                "SELECT text_hash FROM news_item_insights WHERE news_item_id = %s",
-                (news_item_id,)
-            )
-            row_hash = cur_dedup.fetchone()
-            text_hash = row_hash['text_hash'] if row_hash and row_hash.get('text_hash') else None
-            conn_dedup.close()
-        except Exception:
-            text_hash = None
+        text_hash = news_item_repository.get_text_hash_for_news_item_sync(news_item_id)
         
         if text_hash:
-            existing = news_item_insights_store.get_done_by_text_hash(text_hash)
+            existing = news_item_repository.get_done_insight_by_text_hash_sync(text_hash)
             if existing and existing.get("content") and existing.get("news_item_id") != news_item_id:
-                news_item_insights_store.set_status(
+                news_item_repository.set_insight_status_sync(
                     news_item_id,
-                    news_item_insights_store.STATUS_DONE,
+                    InsightStatus.DONE,
                     content=existing["content"],
                     llm_source=existing.get("llm_source", "dedup")
                 )
@@ -2225,7 +2214,7 @@ async def _insights_worker_task(
                 return
         
         # Set to generating in insights store
-        news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_GENERATING)
+        news_item_repository.set_insight_status_sync(news_item_id, InsightStatus.GENERATING)
         
         # Fetch chunks from Qdrant
         chunks = qdrant_connector.get_chunks_by_news_item_ids([news_item_id], max_chunks=500)
@@ -2241,9 +2230,9 @@ async def _insights_worker_task(
                 error_message="No chunks"
             )
             
-            news_item_insights_store.set_status(
+            news_item_repository.set_insight_status_sync(
                 news_item_id, 
-                news_item_insights_store.STATUS_ERROR, 
+                InsightStatus.ERROR, 
                 error_message="No chunks"
             )
             worker_repository.update_worker_status_sync(
@@ -2297,9 +2286,9 @@ async def _insights_worker_task(
         
         # Save to database
         llm_source = f"{result.provider_used}/{result.model_used}"
-        news_item_insights_store.set_status(
+        news_item_repository.set_insight_status_sync(
             news_item_id,
-            news_item_insights_store.STATUS_DONE,
+            InsightStatus.DONE,
             content=result.content,
             llm_source=llm_source
         )
@@ -2336,9 +2325,9 @@ async def _insights_worker_task(
                 error_message=err_msg
             )
             
-            news_item_insights_store.set_status(
+            news_item_repository.set_insight_status_sync(
                 news_item_id,
-                news_item_insights_store.STATUS_ERROR,
+                InsightStatus.ERROR,
                 error_message=err_msg
             )
             worker_repository.update_worker_status_sync(
@@ -2563,23 +2552,16 @@ async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
             # Store OCR text in database (CRITICAL: chunking worker needs this)
             await document_repository.store_ocr_text(doc_id, text)
             
-            # Update document status to OCR done using repository
+            # Update document status and metadata using repository
             ocr_done_status = PipelineStatus.create(StageEnum.OCR, StateEnum.DONE)
-            await document_repository.update_status(doc_id, ocr_done_status)
-            
-            # Also update processing_stage and metadata (legacy fields still needed by other code)
-            conn = document_status_store.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE document_status
-                SET processing_stage = %s,
-                    indexed_at = %s,
-                    num_chunks = 0,
-                    doc_type = %s
-                WHERE document_id = %s
-            """, (Stage.OCR, datetime.utcnow().isoformat(), doc_type, document_id))
-            conn.commit()
-            conn.close()
+            await document_repository.update_status(
+                doc_id,
+                ocr_done_status,
+                processing_stage=Stage.OCR,
+                indexed_at=datetime.utcnow().isoformat(),
+                num_chunks=0,
+                doc_type=doc_type,
+            )
             
             # 3. RECORD STAGE END as done (NEW: stage timing)
             stage_timing_repository.record_stage_end_sync(
@@ -2691,21 +2673,14 @@ async def _chunking_worker_task(document_id: str, filename: str, worker_id: str)
         try:
             chunk_records = await asyncio.to_thread(_perform_chunking, ocr_text, document_id, filename, doc_type)
             
-            # Update document status using repository
+            # Update document status and metadata using repository
             chunking_done_status = PipelineStatus.create(StageEnum.CHUNKING, StateEnum.DONE)
-            await document_repository.update_status(doc_id, chunking_done_status)
-            
-            # Update metadata (legacy fields still needed by other code)
-            conn = document_status_store.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE document_status
-                SET processing_stage = %s,
-                    num_chunks = %s
-                WHERE document_id = %s
-            """, (Stage.CHUNKING, len(chunk_records), document_id))
-            conn.commit()
-            conn.close()
+            await document_repository.update_status(
+                doc_id,
+                chunking_done_status,
+                processing_stage=Stage.CHUNKING,
+                num_chunks=len(chunk_records),
+            )
             
             # 3. RECORD STAGE END as done (NEW: stage timing)
             stage_timing_repository.record_stage_end_sync(
@@ -2803,22 +2778,15 @@ async def _indexing_worker_task(document_id: str, filename: str, worker_id: str)
         logger.info(f"[{worker_id}] Indexing {len(chunk_records)} chunks into Qdrant...")
         await asyncio.to_thread(rag_pipeline.index_chunk_records, chunk_records)
         
-        # Update document status using repository
+        # Update document status and metadata using repository
         indexing_done_status = PipelineStatus.create(StageEnum.INDEXING, StateEnum.DONE)
-        await document_repository.update_status(doc_id, indexing_done_status)
-        
-        # Update metadata (legacy fields)
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE document_status
-            SET processing_stage = %s,
-                indexed_at = %s,
-                num_chunks = %s
-            WHERE document_id = %s
-        """, (Stage.INDEXING, datetime.utcnow().isoformat(), len(chunk_records), document_id))
-        conn.commit()
-        conn.close()
+        await document_repository.update_status(
+            doc_id,
+            indexing_done_status,
+            processing_stage=Stage.INDEXING,
+            indexed_at=datetime.utcnow().isoformat(),
+            num_chunks=len(chunk_records),
+        )
         
         # 3. RECORD STAGE END as done (NEW: stage timing)
         stage_timing_repository.record_stage_end_sync(

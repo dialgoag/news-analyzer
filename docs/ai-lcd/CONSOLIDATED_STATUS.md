@@ -4753,3 +4753,47 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 **Verificación**:
 - [x] `python -m py_compile` en app + repositorios modificados
 - [x] `make rebuild-backend` y `/health` = 200
+
+
+### 132. Fix Docker: shared/ folder + PYTHONPATH para insights workers ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/Dockerfile.cpu` (líneas 37-40, 57), `app/backend/docker/cuda/Dockerfile` (líneas 33-36, 48)
+**Problema**: Insights workers fallaban con `ImportError: No module named 'shared'` y `cannot import name 'get_insights_worker_service'`. El scheduler despachaba workers correctamente pero morían al intentar importar módulos.
+**Causa raíz**: 
+1. Carpeta `shared/` no se copiaba al contenedor Docker
+2. PYTHONPATH no incluía `/app` para imports absolutos
+
+**Solución**: 
+1. Agregado `COPY backend/shared/ shared/` en ambos Dockerfiles (después de core/ y adapters/)
+2. Agregado `ENV PYTHONPATH=/app:$PYTHONPATH` para habilitar imports absolutos desde `/app`
+
+**Impacto**: Workers de insights ahora pueden importar:
+- `from shared.exceptions import RateLimitError, TimeoutError, ValidationError`
+- `from core.application.services.insights_worker_service import get_insights_worker_service`
+- Toda la estructura hexagonal de `adapters/driven/llm/` funciona correctamente
+
+**⚠️ NO rompe**: 
+- OCR pipeline ✅ (no usa shared/)
+- Chunking pipeline ✅
+- Indexing pipeline ✅
+- Dashboard ✅
+- Scheduler dispatch ✅ (ya funcionaba)
+
+**Verificación pendiente**:
+- [ ] Rebuild backend: `cd app && docker compose build --no-cache backend`
+- [ ] Reiniciar: `docker compose up -d backend`
+- [ ] Verificar logs: `docker compose logs -f backend | grep -E "\[insights_"`
+- [ ] Confirmar: Workers completan insights sin ImportError
+- [ ] Verificar: `news_item_insights` status pasa de `pending` → `completed`
+
+
+### 132. Workers internos sin SQL directo en app.py ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/app.py`, `.../document_repository.py`, `.../news_item_repository.py`, `.../document_repository_impl.py`, `.../news_item_repository_impl.py`
+**Problema**: `_insights_worker_task`, `_ocr_worker_task`, `_chunking_worker_task` y `_indexing_worker_task` aún ejecutaban SQL directo para dedup/metadata de estado.
+**Solución**: Migrado a repositorios (lookup dedup por text_hash, updates de status/metadata/doc_type con `document_repository.update_status(...)`, helpers sync nuevos en `news_item_repository`).
+**Impacto**: Menor acoplamiento de workers a SQL y consistencia hexagonal en ejecución interna.
+**⚠️ NO rompe**: deduplicación por text_hash, actualización de `processing_stage/indexed_at/num_chunks/doc_type`, encolado posterior de insights.
+**Verificación**:
+- [x] `python -m py_compile` en app + repos modificados
+- [x] Sin `document_status_store.get_connection()` dentro de esos 4 workers

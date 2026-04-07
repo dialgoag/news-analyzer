@@ -127,6 +127,7 @@ class DocumentRepository(ABC):
         indexed_at: Optional[str] = None,
         error_message: Optional[str] = None,
         num_chunks: Optional[int] = None,
+        doc_type: Optional[str] = None,
         news_date: Optional[str] = None,
         processing_stage: Optional[str] = None,
         clear_indexed_at: bool = False,
@@ -141,6 +142,7 @@ class DocumentRepository(ABC):
             indexed_at: Optional ISO timestamp for indexing completion
             error_message: Error message if status is error
             num_chunks: Optional chunk count
+            doc_type: Optional document type update
             news_date: Optional news_date update
             processing_stage: Optional string stage marker
             clear_indexed_at: If True, sets indexed_at to NULL
@@ -159,6 +161,7 @@ class DocumentRepository(ABC):
         indexed_at: Optional[str] = None,
         error_message: Optional[str] = None,
         num_chunks: Optional[int] = None,
+        doc_type: Optional[str] = None,
         news_date: Optional[str] = None,
         processing_stage: Optional[str] = None,
         clear_indexed_at: bool = False,

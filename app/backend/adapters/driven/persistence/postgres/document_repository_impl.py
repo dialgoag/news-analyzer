@@ -281,6 +281,7 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
         indexed_at: Optional[str] = None,
         error_message: Optional[str] = None,
         num_chunks: Optional[int] = None,
+        doc_type: Optional[str] = None,
         news_date: Optional[str] = None,
         processing_stage: Optional[str] = None,
         clear_indexed_at: bool = False,
@@ -310,6 +311,10 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             if num_chunks is not None:
                 updates.append("num_chunks = %s")
                 params.append(num_chunks)
+
+            if doc_type is not None:
+                updates.append("doc_type = %s")
+                params.append(doc_type)
             
             if news_date is not None:
                 updates.append("news_date = %s")
@@ -553,6 +558,7 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
         indexed_at: Optional[str] = None,
         error_message: Optional[str] = None,
         num_chunks: Optional[int] = None,
+        doc_type: Optional[str] = None,
         news_date: Optional[str] = None,
         processing_stage: Optional[str] = None,
         clear_indexed_at: bool = False,
@@ -581,6 +587,10 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             if num_chunks is not None:
                 updates.append("num_chunks = %s")
                 params.append(num_chunks)
+
+            if doc_type is not None:
+                updates.append("doc_type = %s")
+                params.append(doc_type)
             
             if news_date is not None:
                 updates.append("news_date = %s")
