@@ -646,6 +646,54 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
         finally:
             self.get_connection_pool().putconn(conn)
 
+    def get_files_overview_sync(self) -> dict:
+        """Return aggregated counts used by dashboard summary."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            completed_placeholders = ",".join(["%s"] * len(self.REPORT_ELIGIBLE_STATUSES))
+            cursor.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS total_documents,
+                    COUNT(*) FILTER (WHERE status IN ({completed_placeholders})) AS completed_documents,
+                    COUNT(*) FILTER (WHERE status LIKE %s) AS processing_documents,
+                    COUNT(*) FILTER (WHERE status = 'error') AS error_documents,
+                    MIN(ingested_at) AS date_first,
+                    MAX(ingested_at) AS date_last,
+                    COALESCE(SUM(num_chunks), 0) AS chunks_total
+                FROM document_status
+                """,
+                (*self.REPORT_ELIGIBLE_STATUSES, "%_processing"),
+            )
+            overview = self.map_row_to_dict(cursor, cursor.fetchone())
+            if not overview:
+                overview = {}
+            # Default values if table is empty
+            overview.setdefault("total_documents", 0)
+            overview.setdefault("completed_documents", 0)
+            overview.setdefault("processing_documents", 0)
+            overview.setdefault("error_documents", 0)
+            overview.setdefault("date_first", None)
+            overview.setdefault("date_last", None)
+            overview.setdefault("chunks_total", 0)
+
+            cursor.execute(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM document_status
+                GROUP BY status
+                """
+            )
+            status_counts = {}
+            for row in cursor.fetchall():
+                row_dict = self.map_row_to_dict(cursor, row)
+                status_counts[row_dict["status"]] = row_dict["count"]
+            overview["status_counts"] = status_counts
+            return overview
+        finally:
+            self.get_connection_pool().putconn(conn)
+
     def list_ids_by_news_date_sync(self, report_date: str) -> List[str]:
         conn = self.get_connection_pool().getconn()
         try:

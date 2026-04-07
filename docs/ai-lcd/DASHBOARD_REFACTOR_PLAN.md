@@ -213,20 +213,39 @@ const useDashboardFilters = () => {
 | `GET /api/dashboard/parallel-data` | parallel coordinates (docs + news) | `document_repository.list_all_sync()` (ya hexagonal), `news_item_store`, `_fetch_parallel_news_items` (usa raw SQL) | `DocumentRepository` (paginación), `NewsItemRepository` (por doc_id), nuevo `DashboardQueryService` para componer payload |
 | `GET /api/admin/data-integrity` | archivos vs DB, insights vinculados, news totals | `document_status_store`, `news_item_insights_store`, `news_item_store`, filesystem uploads | `DocumentRepository` (counts, file_hash coverage), `NewsItemRepository`, `NewsItemInsightsRepository`, `StageTimingRepository` (chunks/metadata), `UploadsInventoryService` |
 
+#### 5.1.1 Contratos actuales y destino
+
+- **`/api/dashboard/summary`** → entrega un objeto con las secciones `files`, `news_items`, `ocr`, `chunking`, `indexing`, `insights` y `errors`. Cada sección tiene totales, pendientes, processing, errors, fechas `date_first/date_last` y métricas derivadas (`percentage_done`, `eta_seconds`). El objetivo es que **todas** se alimenten de `DashboardMetricsService`, quien a su vez usa repositorios especializados sin tocar SQL directo.
+- **`/api/dashboard/analysis`** → expone `errors.groups`, `pipeline.stages[]`, `workers` y `database` (queues + inconsistencias). Todos estos bloques dependen hoy de queries ad-hoc dentro del router; el destino es `DashboardReadRepository.build_analysis_snapshot()` complementado con `InboxFileService` para el conteo físico.
+- **`/api/dashboard/parallel-data`** → devuelve `documents[]` con `news_items[]` embebidos y un bloque `meta`. Debe salir exclusivamente de `DocumentRepository.list_all_sync()` + `DashboardReadRepository.fetch_parallel_news_items()` para garantizar paginado consistente.
+- **`/api/admin/data-integrity`** → payload con `files`, `insights`, `news_items`, `chunks`, `schema`, `recommendations` y `data_loss_percentage`. La versión final se arma dentro de `AdminDataIntegrityService` usando repos hexagonales + `UploadsInventoryService` para comparar BD vs disco.
+- **Actualización 2026-04-07**: los handlers legacy que seguían definidos en `app.py` se movieron a rutas `/**/legacy/*` o se retiraron, de modo que FastAPI solo expone los routers v2 (`/api/dashboard/*`, `/api/admin/*`, `/api/workers/*`). Si hace falta consultar el comportamiento antiguo, permanece como referencia interna pero ya no interfiere con los endpoints hexagonales.
+
 ### 5.2 Matriz Métrica → Fuente futura
 
 | Métrica (router summary/analysis/admin) | Hoy se obtiene de | Fuente propuesta | Notas |
 |-----------------------------------------|-------------------|------------------|-------|
 | `files.total`, `files.completed`, `files.processing`, `files.errors` | `document_status` con SQL directo | `DocumentRepository.stats_by_status()` devolviendo conteos por `PipelineStatus` | Requiere método sync + filtros por stage.
 | `files.inbox_count` / `inbox_documents` | `os.listdir(INBOX_DIR)` | `InboxFileService.get_pending_files()` (wrap sobre filesystem o tabla `inbox_files`) | Mantener dependencia a FS pero centralizada y mockeable.
+| `files.pending`, `files.percentage_done`, `files.date_first/date_last` | Calculado inline en `dashboard.py` a partir de la lista de documentos | `DashboardMetricsService._build_files_section()` respaldado por `DocumentRepository.timespan_bounds()` | Necesitamos exponer helper que retorne fechas min/max y porcentajes ya normalizados.
 | `news_items.total/done/pending/errors` | JOIN `news_items` + `news_item_insights` | `NewsItemRepository.aggregate_statuses()` y `NewsItemInsightsRepository.count_by_status()` | Debe exponer totales por `news_date` para cálculos derivados.
+| `news_items.date_first/date_last` | `MIN/MAX(created_at)` calculado en SQL dentro del router | `NewsItemRepository.time_bounds()` | Útil para tooltips y alerta de data fresca.
 | `ocr/chunking/indexing` queues | `processing_queue` consulta directa | `ProcessingQueueRepository.count_by_task_type(task_type)` | También devuelve `pending/processing/completed` y permite filtrar por prioridad.
 | `insights.eta_seconds` | Heurística local con `pending`/`parallel_workers` | `InsightsWorkerService.estimate_eta(pending_count)` | Usa config real (`INSIGHTS_PARALLEL_WORKERS`).
 | `errors` (agrupadas) | `document_status` + `news_item_insights_store` | `DocumentRepository.list_errors_grouped()` y `NewsItemInsightsRepository.list_errors_grouped()` | Deben normalizar `error_message` y stage.
+| `ocr.percentage_success` y `chunking/indexing.percentage_indexed` | Calculados a mano en router | `DashboardMetricsService` (derivados) + métodos `DocumentRepository.completed_ratio(stage)` | Evita divergencias con front.
+| `chunking.total_chunks`, `indexing.total_chunks`, `chunking.news_items_count` | Sumas directas sobre `document_status` y `news_items` | `DocumentRepository.sum_chunks()` + `NewsItemRepository.count_all()` | Puede cachearse en `DashboardReadRepository` si impacta performance.
 | `data_integrity.files.match_pct` | Diferencia `document_status` vs uploads dir | `UploadsInventoryService.compare_repo_vs_disk()` | Reporta `orphaned_disk` y `orphaned_db`.
 | `data_integrity.insights.link_percentage` | `news_item_insights` subqueries | `NewsItemInsightsRepository.linkage_summary()` (JOIN con DocumentRepository) | Debe exponer `linked`, `orphaned`, `total`.
 | `chunks.total` y `chunks.total_chunks` | `document_status.num_chunks`, `news_items` count directo | `DocumentRepository.sum_chunks()` y `NewsItemRepository.count_all()` | Considerar mover estos campos a vista materializada si son costosos.
 | `parallel-data.news_items_total` | `news_item_store.get_counts_by_document_ids` | `NewsItemRepository.count_by_document_ids(doc_ids)` | Consolidar en repos/servicio compartido.
+| `parallel-data.meta.total_documents/max_news_per_doc` | Calculado inline en router | `DashboardMetricsService.get_parallel_data()` | Necesita exponer DTO estable para front.
+| `analysis.pipeline.stages[].ready_for_next/pending_tasks` | Queries mezcladas (`document_status`, `processing_queue`) | `DashboardReadRepository.build_stage_analysis()` + `ProcessingQueueRepository` helper | Documentar cómo se calcula cada stage, incl. Upload.
+| `analysis.workers.active_list/stuck_list` y `workers.by_type` | Consultas directas sobre `worker_tasks` | `WorkerRepository.active_tasks()` + `DashboardReadRepository._build_workers_section()` | Requiere exponer tiempo de ejecución y detectar stuck >20 min.
+| `analysis.database.processing_queue.orphaned_tasks` | Subquery manual | `ProcessingQueueRepository.detect_orphaned_tasks()` | Útil para alertas de tareas sin worker.
+| `admin.overall_status`, `data_loss_percentage`, `schema.join_valid` | Calculado inline mezclando file system + BD | `AdminDataIntegrityService` + `UploadsInventoryService` | Mantener reglas de negocio (≥99% = healthy) en un solo lugar.
+| `admin.recommendations[]` | Strings hardcodeados en router | `AdminDataIntegrityService._build_recommendations()` | Añadir severidad/priority para UI.
+| `insights.docs_with_all_insights_done` / `docs_with_pending_insights` | No existía en doc original | `DashboardReadRepository._fetch_insights_stage()` | Necesario para el panel “Insights pipeline health”.
 
 ### 5.3 Recomendaciones
 
@@ -240,6 +259,24 @@ const useDashboardFilters = () => {
 4. **Checklist de validación** (para PEND-012): antes/después de migrar, capturar snapshot de `files`, `insights`, `data_integrity` y compararlo; documentar en `TESTING_DASHBOARD_INTERACTIVE.md`.
 
 Con esta matriz cerramos la parte documental de PEND-011 y podemos planificar la migración de código (PEND-010) sin sorpresas.
+
+### 5.4 Checklist de validación previo/post refactor (PEND-011 → PEND-012)
+
+1. **Snapshot inicial (antes de migrar)**
+   - Ejecutar `TOKEN=... ./scripts/run_api_smoke.sh` y guardar JSON crudo de `/api/dashboard/summary`, `/analysis`, `/parallel-data?limit=50&max_news_per_doc=10` y `/api/admin/data-integrity` en `docs/ai-lcd/artifacts/dashboard_<fecha>.json`.
+   - Registrar en `TESTING_DASHBOARD_INTERACTIVE.md § Smoke 2026-XX-XX` los valores clave (`files.total`, `insights.pending`, `workers.stuck`, `data_integrity.files.match`).
+2. **Migración de routers**
+   - Verificar que `DashboardMetricsService` y `AdminDataIntegrityService` sean las únicas dependencias en `dashboard.py`/`admin.py` (no más `document_status_store`).
+   - Habilitar logs de depuración (`LOG_LEVEL=DEBUG`) para capturar queries de los repos durante la primera corrida.
+3. **Snapshot posterior**
+   - Repetir el smoke suite tras el deploy. Comparar métricas con el snapshot inicial; tolerancia máxima ±1% en totales y ±5 documentos en contadores por stage.
+   - Documentar la comparación (tabla “antes vs después”) dentro de `TESTING_DASHBOARD_INTERACTIVE.md` y adjuntar referencias a los archivos JSON.
+4. **Validaciones manuales adicionales**
+   - Revisar el dashboard en la UI para confirmar que `files.inbox_count`, `Upload.total_documents` y `error_tasks` coinciden con el backend.
+   - Confirmar que el caché (`_cache_get/_cache_set`) se vacía correctamente tras el despliegue (puede hacerse llamando `POST /api/admin/reindex-all` o reiniciando el backend).
+   - Revisar logs para asegurar que `build_analysis_snapshot` no arroja `PoolError` ni warnings de cursor tipo tuple/dict.
+
+> El checklist completo queda ligado a `docs/ai-lcd/TESTING_DASHBOARD_INTERACTIVE.md`, que guardará las evidencias (capturas del script, tablas de comparación y notas de smoke tests).
 
 1. **Word Cloud Interactivo**:
    - Palabras clave extraídas de insights

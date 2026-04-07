@@ -7,6 +7,8 @@ Executes the raw SQL needed for dashboard analysis endpoints.
 from datetime import datetime
 from typing import Dict, List
 
+import psycopg2.extras
+
 from core.ports.repositories.dashboard_read_repository import DashboardReadRepository
 from pipeline_states import DocStatus, QueueStatus, Stage, TaskType, WorkerStatus
 
@@ -19,7 +21,7 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
     def build_analysis_snapshot(self, *, inbox_count: int) -> dict:
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
             error_groups, real_errors_count, shutdown_errors_count = self._collect_document_errors(cursor)
             insight_groups, insight_real_errors = self._collect_insight_errors(cursor)
@@ -59,49 +61,57 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
     def fetch_news_overview(self) -> Dict[str, object]:
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cursor.execute(
                 """
                 SELECT
                     COUNT(DISTINCT ni.news_item_id) as total_current,
-                    SUM(CASE WHEN nii.status = 'done' THEN 1 ELSE 0 END) as done,
-                    SUM(CASE WHEN nii.status IN ('pending', 'queued', 'generating') THEN 1 ELSE 0 END) as pending,
-                    SUM(CASE WHEN nii.status = 'error' THEN 1 ELSE 0 END) as errors,
+                    SUM(CASE WHEN nii.status = 'insights_done' THEN 1 ELSE 0 END) as done,
+                    SUM(CASE WHEN nii.status IN ('insights_pending', 'insights_queued', 'insights_generating') THEN 1 ELSE 0 END) as pending,
+                    SUM(CASE WHEN nii.status = 'insights_error' THEN 1 ELSE 0 END) as errors,
                     MIN(ni.created_at) as date_first,
                     MAX(ni.created_at) as date_last
                 FROM news_items ni
                 LEFT JOIN news_item_insights nii ON ni.news_item_id = nii.news_item_id
                 """
             )
-            row = cursor.fetchone() or {}
-            return dict(row)
+            row = cursor.fetchone()
+            if not row:
+                return {}
+            if isinstance(row, dict):
+                return row
+            return self.map_row_to_dict(cursor, row)
         finally:
             self.release_connection(conn)
 
     def fetch_insights_overview(self) -> Dict[str, object]:
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cursor.execute(
                 """
                 SELECT
                     COUNT(DISTINCT nii.news_item_id) as total_current,
-                    SUM(CASE WHEN nii.status = 'done' THEN 1 ELSE 0 END) as done,
-                    SUM(CASE WHEN nii.status IN ('pending', 'queued', 'generating') THEN 1 ELSE 0 END) as pending,
-                    SUM(CASE WHEN nii.status = 'error' THEN 1 ELSE 0 END) as errors
+                    SUM(CASE WHEN nii.status = 'insights_done' THEN 1 ELSE 0 END) as done,
+                    SUM(CASE WHEN nii.status IN ('insights_pending', 'insights_queued', 'insights_generating') THEN 1 ELSE 0 END) as pending,
+                    SUM(CASE WHEN nii.status = 'insights_error' THEN 1 ELSE 0 END) as errors
                 FROM news_item_insights nii
                 INNER JOIN news_items ni ON ni.news_item_id = nii.news_item_id
                 """
             )
-            row = cursor.fetchone() or {}
-            return dict(row)
+            row = cursor.fetchone()
+            if not row:
+                return {}
+            if isinstance(row, dict):
+                return row
+            return self.map_row_to_dict(cursor, row)
         finally:
             self.release_connection(conn)
 
     def count_news_items(self) -> int:
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cursor.execute("SELECT COUNT(*) as count FROM news_items")
             row = cursor.fetchone() or {}
             return int(row.get("count") or 0)
@@ -111,7 +121,7 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
     def fetch_queue_counts(self, task_type: str) -> Dict[str, int]:
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             return self._fetch_queue_counts(cursor, task_type)
         finally:
             self.release_connection(conn)
@@ -121,7 +131,7 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
             return {}
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             placeholders = ",".join(["%s"] * len(document_ids))
             cursor.execute(
                 f"""
@@ -145,7 +155,7 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
 
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             placeholders = ",".join(["%s"] * len(document_ids))
             cursor.execute(
                 f"""
@@ -701,10 +711,10 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
         cursor.execute(
             """
             SELECT
-                COUNT(*) FILTER (WHERE nii.status IN ('pending', 'queued')) as pending,
-                COUNT(*) FILTER (WHERE nii.status = 'generating') as processing,
-                COUNT(*) FILTER (WHERE nii.status = 'done') as completed,
-                COUNT(*) FILTER (WHERE nii.status = 'error') as errors
+                COUNT(*) FILTER (WHERE nii.status IN ('insights_pending', 'insights_queued')) as pending,
+                COUNT(*) FILTER (WHERE nii.status = 'insights_generating') as processing,
+                COUNT(*) FILTER (WHERE nii.status = 'insights_done') as completed,
+                COUNT(*) FILTER (WHERE nii.status = 'insights_error') as errors
             FROM news_item_insights nii
             INNER JOIN news_items ni ON ni.news_item_id = nii.news_item_id
             """
@@ -717,14 +727,14 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
                     WHERE NOT EXISTS (
                         SELECT 1 FROM news_item_insights n2
                         WHERE n2.document_id = nii.document_id
-                        AND n2.status NOT IN ('done', 'error')
+                        AND n2.status NOT IN ('insights_done', 'insights_error')
                     )
                 ) as docs_all_done,
                 COUNT(DISTINCT nii.document_id) FILTER (
                     WHERE EXISTS (
                         SELECT 1 FROM news_item_insights n2
                         WHERE n2.document_id = nii.document_id
-                        AND n2.status IN ('pending', 'queued', 'generating')
+                        AND n2.status IN ('insights_pending', 'insights_queued', 'insights_generating')
                     )
                 ) as docs_with_pending
             FROM news_item_insights nii
@@ -750,12 +760,12 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
         cursor.execute(
             """
             SELECT
-                COUNT(*) FILTER (WHERE nii.status = 'done' AND nii.indexed_in_qdrant_at IS NULL) as pending,
-                COUNT(*) FILTER (WHERE nii.status = 'indexing') as processing,
+                COUNT(*) FILTER (WHERE nii.status = 'insights_done' AND nii.indexed_in_qdrant_at IS NULL) as pending,
+                COUNT(*) FILTER (WHERE nii.status = 'insights_indexing') as processing,
                 COUNT(*) FILTER (WHERE nii.indexed_in_qdrant_at IS NOT NULL) as completed
             FROM news_item_insights nii
             INNER JOIN news_items ni ON ni.news_item_id = nii.news_item_id
-            WHERE nii.content IS NOT NULL AND nii.status IN ('done', 'indexing')
+            WHERE nii.content IS NOT NULL AND nii.status IN ('insights_done', 'insights_indexing')
             """
         )
         data = cursor.fetchone()

@@ -2,10 +2,39 @@
 
 > **Versión definitiva**: Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
-**Última actualización**: 2026-04-06  
+**Última actualización**: 2026-04-07  
 **Prioridad**: REQ-021 — Backend Refactor: Hexagonal + DDD + LangChain/LangGraph/LangMem
 
 **Backlog (solo documentación, 2026-04-06)**: Pasos futuros para cerrar la brecha entre insights por noticia (LangGraph + `InsightMemory`) y reportes que aún arman contexto desde chunks — ver `PLAN_AND_NEXT_STEP.md` backlog ítem **7** y `SESSION_LOG.md` § 2026-04-06.
+
+---
+
+### 120. Auditoría: pendiente de estandarización de estados Insights (PEND-018) ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: `docs/ai-lcd/PENDING_BACKLOG.md`, `docs/ai-lcd/SESSION_LOG.md`, `docs/ai-lcd/PLAN_AND_NEXT_STEP.md`
+**Problema**: Los estados de `news_item_insights` usan canon genérico (`pending/generating/done/error`) mientras `document_status` usa canon prefijado por etapa; esto genera ambigüedad en logs, cola y dashboard.
+**Solución**: Se registró formalmente PEND-018 con canon objetivo `insights_*`, estrategia de migración con app detenida y limpieza explícita de estados legacy tras validación.
+**Impacto**: El pendiente queda trazable y priorizado para ejecución controlada sin perder contexto técnico.
+**⚠️ NO rompe**: Pipeline OCR ✅, pipeline Insights actual ✅, dashboard actual ✅
+
+**Verificación**:
+- [x] PEND-018 agregado en backlog de alta prioridad
+- [x] Decisión técnica registrada en SESSION_LOG (sin capa de traducción permanente)
+- [x] Plan operativo actualizado con checklist de ejecución y validación
+
+---
+
+### 119. Docker Backend CPU ejecuta como usuario no-root ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: `app/backend/Dockerfile.cpu`
+**Problema**: El contenedor backend se ejecutaba como root, aumentando riesgo operativo y de permisos.
+**Solución**: Se agregaron `APP_UID/APP_GID` y se aplicó `chown` a `/app`; el contenedor ahora corre con `USER ${APP_UID}:${APP_GID}`.
+**Impacto**: Runtime más seguro y consistente con buenas prácticas de contenedores.
+**⚠️ NO rompe**: Build CPU ✅, entrypoint ✅, escritura en `/app/uploads|data|backups|inbox` ✅
+
+**Verificación**:
+- [x] `Dockerfile.cpu` actualizado con `USER` no-root
+- [x] Directorios runtime mantienen permisos de escritura para el UID/GID configurado
 
 ---
 

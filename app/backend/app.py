@@ -743,8 +743,26 @@ def master_pipeline_scheduler():
                         "DELETE FROM worker_tasks WHERE worker_id = %s",
                         (worker_id,),
                     )
-                    if (task_type or "").lower() == "insights" and doc_id and str(doc_id).startswith("insight_"):
-                        # Insights: doc_id="insight_{news_item_id}"; reset news_item_insights
+                    if (task_type or "").lower() == "insights" and doc_id and str(doc_id).startswith("insight_doc_"):
+                        # Insights lock per document_id: doc_id="insight_doc_{document_id}"
+                        crashed_document_id = doc_id[len("insight_doc_"):]
+                        cursor_cleanup.execute(
+                            "UPDATE processing_queue SET status = %s "
+                            "WHERE document_id = %s AND task_type = %s AND status = %s",
+                            (QueueStatus.PENDING, crashed_document_id, TaskType.INSIGHTS, QueueStatus.PROCESSING),
+                        )
+                        cursor_cleanup.execute(
+                            "UPDATE news_item_insights SET status = %s, error_message = NULL "
+                            "WHERE document_id = %s AND status = %s",
+                            (InsightStatus.PENDING, crashed_document_id, InsightStatus.GENERATING),
+                        )
+                        if cursor_cleanup.rowcount:
+                            logger.info(
+                                f"   ↻ Recovered insights for document {crashed_document_id[:30]}... "
+                                f"({cursor_cleanup.rowcount} item(s)) → pending"
+                            )
+                    elif (task_type or "").lower() == "insights" and doc_id and str(doc_id).startswith("insight_"):
+                        # Legacy insights lock: doc_id="insight_{news_item_id}"
                         news_item_id = doc_id[8:]  # strip "insight_"
                         cursor_cleanup.execute(
                             "UPDATE news_item_insights SET status = %s, error_message = NULL "
@@ -1053,10 +1071,10 @@ def master_pipeline_scheduler():
             TOTAL_WORKERS = int(os.getenv("PIPELINE_WORKERS_COUNT", "25"))
             # Límites por tipo: pueden usar hasta TOTAL_WORKERS si hay trabajo
             task_limits = {
-                TaskType.OCR: max(2, min(int(os.getenv("OCR_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
-                TaskType.CHUNKING: max(2, min(int(os.getenv("CHUNKING_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
-                TaskType.INDEXING: max(2, min(int(os.getenv("INDEXING_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
-                TaskType.INSIGHTS: max(2, min(int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
+                TaskType.OCR: max(1, min(int(os.getenv("OCR_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
+                TaskType.CHUNKING: max(1, min(int(os.getenv("CHUNKING_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
+                TaskType.INDEXING: max(1, min(int(os.getenv("INDEXING_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
+                TaskType.INSIGHTS: max(1, min(int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "1")), TOTAL_WORKERS)),
             }
             
             cursor.execute("""
@@ -1132,16 +1150,21 @@ def master_pipeline_scheduler():
                         # CRITICAL: Para insights, necesitamos obtener news_item_id ANTES de assign_worker
                         # porque insights usa "insight_{news_item_id}" como document_id único para el semáforo
                         assign_doc_id = doc_id  # Default: usar doc_id
+                        selected_insight_news_item_id = None
+                        selected_insight_title = ""
                         if task_type == TaskType.INSIGHTS:
                             cursor.execute("""
-                                SELECT news_item_id FROM news_item_insights
+                                SELECT news_item_id, title FROM news_item_insights
                                 WHERE document_id = %s AND status IN (%s, %s)
+                                ORDER BY item_index ASC, news_item_id ASC
                                 LIMIT 1
                             """, (doc_id, InsightStatus.PENDING, InsightStatus.QUEUED))
                             insights_row = cursor.fetchone()
                             if insights_row:
-                                news_item_id = insights_row['news_item_id']
-                                assign_doc_id = f"insight_{news_item_id}"  # Usar identificador único para insights
+                                selected_insight_news_item_id = insights_row['news_item_id']
+                                selected_insight_title = insights_row.get('title') or ""
+                                # Lock por documento: garantiza procesamiento serial de news por documento.
+                                assign_doc_id = f"insight_doc_{doc_id}"
                             else:
                                 cursor.execute("UPDATE processing_queue SET status = %s WHERE id = %s", (QueueStatus.COMPLETED, task_id))
                                 conn.commit()
@@ -1181,18 +1204,19 @@ def master_pipeline_scheduler():
                             worker_thread.start()
                             dispatched_count += 1
                         elif task_type == TaskType.INSIGHTS:
-                            cursor.execute("""
-                                SELECT news_item_id, title FROM news_item_insights
-                                WHERE document_id = %s AND status IN (%s, %s)
-                                LIMIT 1
-                            """, (doc_id, InsightStatus.PENDING, InsightStatus.QUEUED))
-                            insights_row = cursor.fetchone()
-                            if insights_row:
-                                news_item_id, title = insights_row
-                                
+                            if selected_insight_news_item_id:
                                 from threading import Thread
                                 worker_thread = Thread(
-                                    target=lambda: asyncio.run(_insights_worker_task(news_item_id, doc_id, filename, title or '', worker_id)),
+                                    target=lambda: asyncio.run(
+                                        _insights_worker_task(
+                                            selected_insight_news_item_id,
+                                            doc_id,
+                                            filename,
+                                            selected_insight_title,
+                                            worker_id,
+                                            assign_doc_id,
+                                        )
+                                    ),
                                     name=f"worker-{worker_id}",
                                     daemon=True
                                 )
@@ -1831,100 +1855,6 @@ ALLOWED_EXTENSIONS = {
     '.jpg', '.jpeg', '.png', '.gif', '.bmp'
 }
 
-@app.post("/api/documents/upload")
-async def upload_document(
-    file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = None,
-    current_user: CurrentUser = Depends(require_upload_permission)
-):
-    """
-    Upload a document (any format) and process it in the background
-    Supported formats: PDF, DOCX, PPTX, XLSX, ODT, RTF, HTML, XML, JSON, CSV, Images
-
-    Requires: SUPER_USER or ADMIN role
-    """
-
-    if not ocr_service or not embeddings_service or not rag_pipeline:
-        raise HTTPException(
-            status_code=503,
-            detail="Services not initialized. Check /health"
-        )
-
-    # Check file extension
-    from pathlib import Path
-    file_ext = Path(file.filename).suffix.lower()
-
-    if file_ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Format '{file_ext}' not supported. Supported: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
-        )
-
-    # Check file size before reading entire content
-    # First read content to check size
-    content = await file.read()
-    file_size_mb = len(content) / (1024 * 1024)
-
-    if file_size_mb > MAX_UPLOAD_SIZE_MB:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large: {file_size_mb:.1f}MB. Maximum allowed: {MAX_UPLOAD_SIZE_MB}MB"
-        )
-
-    try:
-        from file_ingestion_service import check_duplicate, compute_sha256
-
-        file_hash = compute_sha256(data=content)
-        existing = check_duplicate(file_hash)
-        if existing:
-            logger.info(f"📋 Duplicate detected: '{file.filename}' already exists as '{existing['filename']}'")
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "message": "Duplicate file detected, not reprocessed",
-                    "status": "duplicate",
-                    "existing_document_id": existing['document_id'],
-                    "existing_filename": existing['filename'],
-                    "file_hash": file_hash
-                }
-            )
-
-        document_id, file_hash = ingest_from_upload(content, file.filename, UPLOAD_DIR)
-        
-        # Resolve actual file path (handles .pdf extension, Fix #95)
-        file_path = resolve_file_path(document_id, UPLOAD_DIR)
-
-        logger.info(f"📄 File received: '{file.filename}' ({len(content)} bytes)")
-        logger.info(f"   Document ID: {document_id}")
-        logger.info(f"   File path: {file_path}")
-        logger.info(f"   File hash: {file_hash[:16]}...")
-
-        background_tasks.add_task(
-            _process_document_sync,
-            file_path,
-            document_id,
-            file.filename
-        )
-
-        return JSONResponse(
-            status_code=202,
-            content={
-                "message": "Document received, processing in progress",
-                "document_id": document_id,
-                "filename": file.filename,
-                "size_bytes": len(content),
-                "file_hash": file_hash
-            }
-        )
-
-    except ValueError as ve:
-        return JSONResponse(status_code=200, content={"message": str(ve), "status": "duplicate"})
-    except Exception as e:
-        logger.error(f"❌ Upload error: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 def _extract_ocr_only(file_path: str, document_id: str, filename: str) -> tuple[str, str, Optional[str]]:
     """Extract text via OCR. Returns (text, doc_type, content_hash)."""
     text = ""
@@ -2478,7 +2408,14 @@ def run_news_item_insights_queue_job():
         news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_ERROR, error_message=str(e))
 
 
-async def _insights_worker_task(news_item_id: str, document_id: str, filename: str, title: str, worker_id: str):
+async def _insights_worker_task(
+    news_item_id: str,
+    document_id: str,
+    filename: str,
+    title: str,
+    worker_id: str,
+    worker_task_doc_id: str | None = None,
+):
     """
     Background worker for insights generation with LangGraph + LangMem.
     
@@ -2499,6 +2436,7 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
     REQ-021 Phase 5F: Added stage timing tracking (records at document-level)
     """
     try:
+        task_doc_id = worker_task_doc_id or f"insight_{news_item_id}"
         logger.info(f"[{worker_id}] Assigned insights for: {title or 'untitled'}")
         
         # 1. RECORD STAGE START for this specific news_item (NEW: stage timing)
@@ -2511,7 +2449,7 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
         
         # 2. Mark as started
         worker_repository.update_worker_status_sync(
-            worker_id, f"insight_{news_item_id}", 'insights', 'started'
+            worker_id, task_doc_id, 'insights', 'started'
         )
         
         # DEDUP: Check if an insight with the same text_hash already exists (saves API costs)
@@ -2548,9 +2486,9 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
                 )
                 
                 worker_repository.update_worker_status_sync(
-                    worker_id, f"insight_{news_item_id}", 'insights', 'completed'
+                    worker_id, task_doc_id, 'insights', 'completed'
                 )
-                worker_repository.mark_task_completed_sync(f"insight_{news_item_id}", 'insights')
+                worker_repository.mark_task_completed_sync(task_doc_id, 'insights')
                 logger.info(
                     f"[{worker_id}] ♻️ Reused insight via text_hash dedup for {news_item_id} "
                     f"(saved API call)"
@@ -2580,10 +2518,10 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
                 error_message="No chunks"
             )
             worker_repository.update_worker_status_sync(
-                worker_id, f"insight_{news_item_id}", 'insights', 'error',
+                worker_id, task_doc_id, 'insights', 'error',
                 error_message="No chunks"
             )
-            worker_repository.mark_task_completed_sync(f"insight_{news_item_id}", 'insights')
+            worker_repository.mark_task_completed_sync(task_doc_id, 'insights')
             return
         
         # Build context
@@ -2646,9 +2584,9 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
         )
         
         worker_repository.update_worker_status_sync(
-            worker_id, f"insight_{news_item_id}", 'insights', 'completed'
+            worker_id, task_doc_id, 'insights', 'completed'
         )
-        worker_repository.mark_task_completed_sync(f"insight_{news_item_id}", 'insights')
+        worker_repository.mark_task_completed_sync(task_doc_id, 'insights')
         
         logger.info(
             f"[{worker_id}] ✅ Insights generated for {news_item_id}: "
@@ -2675,10 +2613,10 @@ async def _insights_worker_task(news_item_id: str, document_id: str, filename: s
                 error_message=err_msg
             )
             worker_repository.update_worker_status_sync(
-                worker_id, f"insight_{news_item_id}", 'insights', 'error',
+                worker_id, task_doc_id, 'insights', 'error',
                 error_message=err_msg
             )
-            worker_repository.mark_task_completed_sync(f"insight_{news_item_id}", 'insights')
+            worker_repository.mark_task_completed_sync(task_doc_id, 'insights')
         except Exception as e2:
             logger.error(f"[{worker_id}] Failed to mark error: {e2}")
 
@@ -2702,8 +2640,8 @@ def run_news_item_insights_queue_job_parallel():
         return
 
     try:
-        parallel_workers = max(2, min(
-            int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "2")),
+        parallel_workers = max(1, min(
+            int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "1")),
             10
         ))
         
@@ -3478,342 +3416,6 @@ async def get_news_item_insights(
     }
 
 
-@app.post("/api/documents/{document_id}/requeue")
-async def requeue_document(
-    document_id: str,
-    current_user: CurrentUser = Depends(get_current_user)
-):
-    """
-    Requeue a document for reprocessing (OCR + Chunking + Indexing).
-    
-    IMPORTANT: This will NOT delete news_items or insights. Instead:
-    - Existing news items are preserved (matched by text_hash)
-    - New news items detected will be added
-    - Insights are only generated for new items that don't have insights yet
-    
-    This will:
-    1. Delete chunks from Qdrant (will be re-indexed)
-    2. Keep news_items and news_item_insights (preserve historical data)
-    3. Mark document status as 'processing' with stage 'ocr'
-    4. Add document to processing queue
-    5. During reprocessing:
-       - OCR text is extracted again
-       - News segmentation detects items
-       - For each detected item:
-         * Check if text_hash matches existing item → skip if exists
-         * Add new items that don't exist yet
-       - Insights are generated only for new items without insights
-    
-    Requires: Authentication
-    """
-    try:
-        # Get document info
-        doc = document_repository.get_by_id_sync(document_id)
-        if not doc:
-            raise HTTPException(status_code=404, detail="Document not found")
-        
-        filename = doc['filename']
-        source = doc.get('source', 'upload')
-        news_date = doc.get('news_date')
-        
-        logger.info(f"🔄 Requeuing document for reprocessing: {filename} ({document_id})")
-        logger.info(f"   ⚠️  Preserving existing news_items and insights (will match by text_hash)")
-        
-        # Get existing news items for logging
-        existing_items = news_item_store.list_by_document_id(document_id)
-        logger.info(f"   📰 Existing news items: {len(existing_items)} (will be preserved)")
-        
-        # Get existing insights for logging
-        existing_insights = news_item_insights_store.get_progress_by_document_ids([document_id])
-        insight_stats = existing_insights.get(document_id, {})
-        logger.info(f"   💡 Existing insights: {insight_stats.get('done', 0)} done, {insight_stats.get('pending', 0)} pending")
-        
-        # 1. Delete ONLY chunks from Qdrant (vectors will be re-indexed)
-        if qdrant_connector:
-            try:
-                qdrant_connector.delete_document(document_id)
-                logger.info(f"   ✓ Deleted chunks from Qdrant (will re-index)")
-            except Exception as e:
-                logger.warning(f"   ⚠️  Could not delete from Qdrant: {e}")
-        
-        # 2. DO NOT delete news_items or insights - they will be preserved!
-        # The reprocessing logic will compare by text_hash and skip duplicates
-        logger.info(f"   ✓ Preserving news_items and insights (no deletion)")
-        
-        # 3. If ocr_text exists and doc failed at indexing → retry indexing only
-        has_ocr = doc.get('ocr_text') and len(str(doc.get('ocr_text') or '').strip()) > 0
-        if has_ocr:
-            document_repository.update_status_sync(
-                document_id,
-                PipelineStatus.create(StageEnum.CHUNKING, StateEnum.DONE),
-                processing_stage=Stage.CHUNKING,
-                clear_indexed_at=True,
-                clear_error_message=True,
-            )
-            stage_timing_repository.record_stage_start_sync(
-                document_id=document_id,
-                stage='indexing',
-                metadata={'source': 'requeue', 'mode': 'indexing_only'}
-            )
-            await worker_repository.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
-            logger.info(f"   ✓ Retry indexing only (ocr_text exists)")
-        else:
-            document_repository.update_status_sync(
-                document_id,
-                PipelineStatus.create(StageEnum.OCR, StateEnum.PROCESSING),
-                processing_stage=Stage.OCR,
-                num_chunks=0,
-                clear_indexed_at=True,
-                clear_error_message=True,
-            )
-            stage_timing_repository.record_stage_start_sync(
-                document_id=document_id,
-                stage='ocr',
-                metadata={'source': 'requeue'}
-            )
-            await document_repository.store_ocr_text(DocumentId(document_id), None)
-            await document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
-            await worker_repository.enqueue_task(document_id, filename, TaskType.OCR, priority=10)
-            logger.info(f"   ✓ Reset to OCR and marked for reprocessing")
-        logger.info(f"   ✓ Added to processing queue")
-        
-        logger.info(f"✅ Document requeued successfully: {filename}")
-        if has_ocr:
-            logger.info(f"   Retry indexing only (OCR+chunking already done)")
-        else:
-            logger.info(f"   Full reprocessing: OCR → chunking → indexing")
-        
-        return {
-            "message": f"Document {filename} requeued" + (" (indexing only)" if has_ocr else " for full reprocessing") + f" (preserving {len(existing_items)} news items)",
-            "document_id": document_id,
-            "status": DocStatus.CHUNKING_DONE if has_ocr else DocStatus.OCR_PROCESSING,
-            "stage": "indexing" if has_ocr else "ocr",
-            "preserved_items": len(existing_items),
-            "preserved_insights": insight_stats.get('done', 0)
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Requeue error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/workers/retry-errors")
-async def retry_error_workers(
-    request: Request,
-    current_user: CurrentUser = Depends(get_current_user)
-):
-    """
-    Retry processing for documents and insights that had errors.
-    Body: { "document_ids": ["id1", "insight_123", ...] } or {} for retry all.
-    IDs con prefijo "insight_" son news_item_insights; el resto son document_status.
-    """
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
-    document_ids = body.get("document_ids") if isinstance(body, dict) else None
-    try:
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        
-        # Separar IDs en documentos vs insights
-        doc_ids = []
-        insight_ids = []
-        if document_ids and len(document_ids) > 0:
-            for did in document_ids:
-                if isinstance(did, str) and did.startswith("insight_"):
-                    insight_ids.append(did[8:])  # strip "insight_"
-                else:
-                    doc_ids.append(did)
-        
-        error_docs = []
-        error_insights = []
-        retry_all = not document_ids or len(document_ids) == 0
-        
-        # Documentos: document_status
-        if doc_ids:
-            placeholders = ','.join(['%s'] * len(doc_ids))
-            cursor.execute(f"""
-                SELECT document_id, filename FROM document_status
-                WHERE status = %s AND document_id IN ({placeholders})
-            """, (DocStatus.ERROR, *doc_ids))
-            error_docs = cursor.fetchall()
-        elif retry_all:
-            cursor.execute("""
-                SELECT document_id, filename FROM document_status
-                WHERE status = %s
-                ORDER BY document_id
-            """, (DocStatus.ERROR,))
-            error_docs = cursor.fetchall()
-        
-        # Insights: news_item_insights
-        if insight_ids:
-            placeholders = ','.join(['%s'] * len(insight_ids))
-            cursor.execute(f"""
-                SELECT news_item_id, document_id, filename, title FROM news_item_insights
-                WHERE status = %s AND news_item_id IN ({placeholders})
-            """, (news_item_insights_store.STATUS_ERROR, *insight_ids))
-            error_insights = cursor.fetchall()
-        elif retry_all:
-            cursor.execute("""
-                SELECT news_item_id, document_id, filename, title FROM news_item_insights
-                WHERE status = %s
-                ORDER BY news_item_id
-            """, (news_item_insights_store.STATUS_ERROR,))
-            error_insights = cursor.fetchall()
-        
-        conn.close()
-        
-        if not error_docs and not error_insights:
-            return {
-                "message": "No documents or insights with errors found",
-                "retried_count": 0,
-                "retried_documents": []
-            }
-        
-        retried_count = 0
-        retried_documents = []
-        errors = []
-        
-        # Reintentar insights (reset a pending)
-        for row in error_insights:
-            news_item_id = row.get('news_item_id')
-            filename = row.get('filename') or row.get('title') or news_item_id
-            try:
-                news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_PENDING, error_message=None)
-                retried_count += 1
-                retried_documents.append({"document_id": f"insight_{news_item_id}", "filename": filename})
-                logger.info(f"✅ Retried insight: {news_item_id} ({filename})")
-            except Exception as e:
-                err_msg = f"Error retrying insight {news_item_id}: {str(e)}"
-                errors.append(err_msg)
-                logger.error(err_msg, exc_info=True)
-        
-        # Reintentar documentos
-        for row in error_docs:
-            document_id = row.get('document_id')
-            filename = row.get('filename') or document_id
-            
-            try:
-                doc = document_repository.get_by_id_sync(document_id)
-                if not doc:
-                    errors.append(f"Document {document_id} not found")
-                    continue
-                
-                # Decidir qué etapa reintentar según processing_stage y ocr_text
-                has_ocr = doc.get('ocr_text') and len(str(doc.get('ocr_text') or '').strip()) > 0
-                stage = (doc.get('processing_stage') or '').lower()
-                
-                if not has_ocr or stage in ('ocr', 'upload', ''):
-                    # OCR falló o no hay texto → retry OCR completo
-                    document_repository.update_status_sync(
-                        document_id,
-                        PipelineStatus.create(StageEnum.OCR, StateEnum.PROCESSING),
-                        processing_stage=Stage.OCR,
-                        num_chunks=0,
-                        clear_indexed_at=True,
-                        clear_error_message=True,
-                    )
-                    stage_timing_repository.record_stage_start_sync(
-                        document_id=document_id,
-                        stage='ocr',
-                        metadata={'source': 'retry-errors'}
-                    )
-                    await document_repository.store_ocr_text(DocumentId(document_id), None)
-                    await document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
-                    await worker_repository.enqueue_task(document_id, filename, TaskType.OCR, priority=10)
-                    logger.info(f"   → Retry OCR (no ocr_text or stage={stage})")
-                elif stage == 'chunking':
-                    # Chunking falló (ej. Server disconnected) → retry chunking
-                    document_repository.update_status_sync(
-                        document_id,
-                        PipelineStatus.create(StageEnum.CHUNKING, StateEnum.PROCESSING),
-                        processing_stage=Stage.CHUNKING,
-                        clear_indexed_at=True,
-                        clear_error_message=True,
-                    )
-                    stage_timing_repository.record_stage_start_sync(
-                        document_id=document_id,
-                        stage='chunking',
-                        metadata={'source': 'retry-errors'}
-                    )
-                    await worker_repository.enqueue_task(document_id, filename, TaskType.CHUNKING, priority=10)
-                    logger.info(f"   → Retry chunking (stage=chunking)")
-                else:
-                    # Indexing falló o stage=indexing → retry indexing
-                    document_repository.update_status_sync(
-                        document_id,
-                        PipelineStatus.create(StageEnum.CHUNKING, StateEnum.DONE),
-                        processing_stage=Stage.CHUNKING,
-                        clear_indexed_at=True,
-                        clear_error_message=True,
-                    )
-                    stage_timing_repository.record_stage_start_sync(
-                        document_id=document_id,
-                        stage='indexing',
-                        metadata={'source': 'retry-errors', 'mode': 'indexing_only'}
-                    )
-                    await worker_repository.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
-                    logger.info(f"   → Retry indexing only (ocr+chunking done)")
-                
-                retried_count += 1
-                retried_documents.append({
-                    "document_id": document_id,
-                    "filename": filename
-                })
-                
-                logger.info(f"✅ Retried document with error: {filename} ({document_id})")
-                
-            except Exception as e:
-                error_msg = f"Error retrying {filename}: {str(e)}"
-                errors.append(error_msg)
-                logger.error(error_msg, exc_info=True)
-        
-        logger.info(f"🔄 Retry errors completed: {retried_count} documents retried, {len(errors)} errors")
-        
-        return {
-            "message": f"Retried {retried_count} document(s) with errors",
-            "retried_count": retried_count,
-            "retried_documents": retried_documents,
-            "errors": errors if errors else None
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Retry errors error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/api/documents/{document_id}")
-async def delete_document(
-    document_id: str,
-    current_user: CurrentUser = Depends(require_delete_permission)
-):
-    """
-    Delete document from index
-
-    Requires: SUPER_USER or ADMIN role
-    """
-    if not qdrant_connector:
-        raise HTTPException(status_code=503, detail="Qdrant not connected")
-
-    try:
-        logger.info(f"🗑️  Deleting document: {document_id}")
-        qdrant_connector.delete_document(document_id)
-        stage_timing_repository.delete_for_document_sync(document_id)
-        document_repository.delete_sync(document_id)
-        document_insights_store.delete(document_id)
-        news_item_insights_store.delete_by_document_id(document_id)
-        news_item_store.delete_by_document_id(document_id)
-        logger.info(f"✅ Document deleted: {document_id}")
-        return {"message": f"Document {document_id} deleted"}
-    except Exception as e:
-        logger.error(f"Deletion error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 # ============================================================================
 # RAG QUERY
 # ============================================================================
@@ -3977,258 +3579,46 @@ def _run_reindex_all():
     logger.info(f"✅ Reindex queued: {len(docs)} documents. Workers will process them.")
 
 
-@app.post("/api/admin/reindex-all")
-async def reindex_all(
-    background_tasks: BackgroundTasks,
-    current_user: CurrentUser = Depends(require_admin),
-):
-    """
-    Reindex all documents (re-embed with current model/prefix).
-    Use after changing EMBEDDING_MODEL or instruction prefix.
-    Requires: Admin
-    """
-    if not qdrant_connector:
-        raise HTTPException(status_code=503, detail="Qdrant not initialized")
-    logger.info("🔄 Starting reindexing of all documents...")
-    background_tasks.add_task(_run_reindex_all)
-    return {"message": "Reindexing in progress. Check logs for progress."}
-
-
-@app.delete("/api/admin/memory/{user_id}")
-async def clear_user_memory(user_id: str):
-    """Clear conversational memory for a specific user"""
-    if user_id in user_conversations:
-        num_exchanges = len(user_conversations[user_id])
-        del user_conversations[user_id]
-        logger.info(f"🧹 Memory cleared for user '{user_id}' ({num_exchanges} exchanges removed)")
-        return {
-            "message": f"Memory cleared for user '{user_id}'",
-            "exchanges_removed": num_exchanges
-        }
-    else:
-        return {
-            "message": f"No memory found for user '{user_id}'",
-            "exchanges_removed": 0
-        }
-
-
-@app.delete("/api/admin/memory")
-async def clear_all_memory():
-    """Clear ALL conversational memory for all users"""
-    total_users = len(user_conversations)
-    total_exchanges = sum(len(conv) for conv in user_conversations.values())
-    user_conversations.clear()
-    logger.info(f"🧹 Global memory cleared: {total_users} users, {total_exchanges} total exchanges")
-    return {
-        "message": "Global memory cleared",
-        "users_removed": total_users,
-        "exchanges_removed": total_exchanges
+def _execute_manual_backup(provider: Optional[str], remote_path: Optional[str]):
+    """Execute manual backup in background for admin router helpers."""
+    start_time = datetime.now()
+    entry = {
+        "type": "manual",
+        "started_at": start_time.isoformat(),
+        "provider": provider,
     }
-
-
-@app.get("/api/admin/memory")
-async def get_memory_stats():
-    """Conversational memory statistics"""
-    stats = {
-        "total_users": len(user_conversations),
-        "users": {}
-    }
-    for user_id, history in user_conversations.items():
-        stats["users"][user_id] = {
-            "exchanges": len(history),
-            "last_questions": [msg["user"] for msg in history[-3:]]
-        }
-    return stats
-
-
-@app.get("/api/admin/stats")
-async def get_stats():
-    """System statistics"""
-    if not qdrant_connector:
-        raise HTTPException(status_code=503, detail="Qdrant not connected")
-
     try:
-        return qdrant_connector.get_stats()
+        result = backup_service.create_backup()
+        entry["backup_name"] = result["backup_name"]
+        entry["size_bytes"] = result["size_bytes"]
+
+        if provider:
+            upload_result = backup_service.upload_to_cloud(
+                result["archive_path"], provider, remote_path or ""
+            )
+            entry["cloud_upload"] = upload_result
+
+        entry["status"] = "success"
+        entry["duration_seconds"] = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Manual backup completed: {result['backup_name']}")
     except Exception as e:
-        logger.error(f"Statistics error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        entry["status"] = "error"
+        entry["error"] = str(e)
+        entry["duration_seconds"] = (datetime.now() - start_time).total_seconds()
+        logger.error(f"Manual backup failed: {e}")
+    finally:
+        backup_service.log_backup(entry)
 
 
-@app.get("/api/admin/logging")
-async def get_logging_config(current_user: CurrentUser = Depends(get_current_user)):
-    """Get current logging configuration"""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    return {
-        "current_level": get_effective_log_level(),
-        "default_level": LOG_LEVEL,
-        "has_override": _log_level_override is not None,
-        "available_levels": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-    }
-
-
-@app.put("/api/admin/logging")
-async def update_logging_config(
-    level: str,
-    current_user: CurrentUser = Depends(get_current_user)
-):
-    """Change log level at runtime without restarting"""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
+def _execute_restore(archive_path: str, restore_db: bool, restore_uploads: bool, restore_qdrant: bool):
+    """Execute restore in background for admin router helpers."""
     try:
-        set_log_level(level)
-        return {
-            "success": True,
-            "new_level": level.upper(),
-            "message": f"Log level changed to {level.upper()} (no restart required)"
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.get("/api/admin/insights-pipeline")
-async def get_insights_pipeline_settings(current_user: CurrentUser = Depends(get_current_user)):
-    """Runtime insights controls: pause steps, provider order vs .env chain."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    import insights_pipeline_control as _ipc
-    return _ipc.get_snapshot()
-
-
-@app.put("/api/admin/insights-pipeline")
-async def put_insights_pipeline_settings(
-    body: InsightsPipelineUpdate,
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    import insights_pipeline_control as _ipc
-    try:
-        patch = body.model_dump(exclude_unset=True)
-        ollama_kw = {}
-        if "ollama_model" in patch:
-            ollama_kw["ollama_model"] = patch["ollama_model"]
-        snap = _ipc.update_settings(
-            pause_generation=body.pause_generation,
-            pause_indexing_insights=body.pause_indexing_insights,
-            pause_steps=body.pause_steps,
-            pause_all=body.pause_all,
-            resume_all=body.resume_all,
-            provider_mode=body.provider_mode,
-            provider_order=body.provider_order,
-            **ollama_kw,
+        result = backup_service.restore_from_backup(
+            archive_path, restore_db, restore_uploads, restore_qdrant
         )
-        return {"success": True, **snap}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.get("/api/admin/data-integrity")
-async def get_data_integrity(current_user: CurrentUser = Depends(get_current_user)):
-    """Data integrity metrics: files vs DB, insights linkage, schema validation."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    try:
-        conn = document_status_store.get_connection()
-        cursor = conn.cursor()
-        
-        # 1. FILES vs DB
-        uploads_dir = UPLOAD_DIR
-        disk_files = set()
-        if os.path.isdir(uploads_dir):
-            disk_files = {f for f in os.listdir(uploads_dir) if f.endswith('.pdf')}
-        
-        cursor.execute("SELECT COUNT(*) as total, COUNT(file_hash) as with_hash FROM document_status")
-        result = cursor.fetchone()
-        total_db, with_hash = result['total'], result['with_hash']
-        
-        cursor.execute("SELECT document_id FROM document_status")
-        db_doc_ids = {row['document_id'] for row in cursor.fetchall()}
-        
-        orphaned_disk = disk_files - db_doc_ids
-        orphaned_db = db_doc_ids - disk_files
-        match_pct = round(len(disk_files & db_doc_ids) / (len(disk_files) or 1) * 100, 1)
-        
-        if total_db > 0:
-            match_pct = round(len(disk_files & db_doc_ids) / max(len(disk_files), total_db) * 100, 1)
-        
-        files = {
-            "total_disk": len(disk_files),
-            "total_db": total_db,
-            "match": match_pct,
-            "orphaned_count": len(orphaned_db),
-        }
-        
-        # 2. INSIGHTS
-        cursor.execute("""
-            SELECT COUNT(*) FROM news_item_insights nii
-            WHERE EXISTS (SELECT 1 FROM document_status ds WHERE ds.document_id = nii.document_id)
-        """)
-        result = cursor.fetchone()
-        linked_insights = result[list(result.keys())[0]] if result else None
-        
-        cursor.execute("SELECT COUNT(*) FROM news_item_insights")
-        result = cursor.fetchone()
-        total_insights = result[list(result.keys())[0]] if result else None
-        
-        cursor.execute("""
-            SELECT COUNT(*) FROM news_item_insights nii
-            WHERE NOT EXISTS (SELECT 1 FROM document_status ds WHERE ds.document_id = nii.document_id)
-        """)
-        result = cursor.fetchone()
-        orphaned_insights = result[list(result.keys())[0]] if result else None
-        
-        insights = {
-            "total": total_insights,
-            "linked": linked_insights,
-            "link_percentage": round((linked_insights / (total_insights or 1)) * 100, 1),
-            "orphaned_count": orphaned_insights,
-        }
-        
-        # 3. NEWS ITEMS & CHUNKS
-        cursor.execute("SELECT COUNT(*) FROM news_items")
-        result = cursor.fetchone()
-        news_total = result[list(result.keys())[0]] if result else None
-        
-        cursor.execute("SELECT COALESCE(SUM(num_chunks), 0) FROM document_status")
-        result = cursor.fetchone()
-        chunks_total = result[list(result.keys())[0]] if result else 0
-        
-        data_loss_percentage = 0.0
-        if total_db > 0 and len(orphaned_db) > 0:
-            data_loss_percentage = round(len(orphaned_db) / total_db * 100, 1)
-        
-        # 4. SCHEMA
-        schema = {"join_valid": True, "fk_active": False}
-        
-        # 5. OVERALL STATUS
-        recommendations = []
-        if match_pct < 100:
-            recommendations.append({"priority": "high", "message": f"{len(orphaned_db)} registros en BD sin archivo físico"})
-        if orphaned_insights > 0:
-            recommendations.append({"priority": "medium", "message": f"{orphaned_insights} insights con documento inexistente"})
-        
-        overall = "healthy" if match_pct >= 99 and orphaned_insights == 0 else "warning" if match_pct >= 95 else "error"
-        
-        conn.close()
-        
-        return {
-            "overall_status": overall,
-            "timestamp": datetime.now().isoformat(),
-            "files": files,
-            "insights": insights,
-            "news_items": {"total": news_total},
-            "chunks": {"total": int(chunks_total)},
-            "data_loss_percentage": data_loss_percentage,
-            "schema": schema,
-            "recommendations": recommendations,
-        }
+        logger.info(f"Restore completed: {result}")
     except Exception as e:
-        logger.error(f"Data integrity error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Restore failed: {e}")
 
 
 # ============================================================================
@@ -4434,229 +3824,10 @@ async def mark_all_notifications_read(
 
 
 # ============================================================================
-# BACKUP & RESTORE ENDPOINTS
-# ============================================================================
-
-@app.get("/api/admin/backup/status")
-async def get_backup_status(current_user: CurrentUser = Depends(require_admin)):
-    """Get backup system status"""
-    return backup_service.get_status()
-
-
-@app.get("/api/admin/backup/providers")
-async def list_backup_providers(current_user: CurrentUser = Depends(require_admin)):
-    """List configured cloud providers and supported types"""
-    return {
-        "providers": backup_service.list_providers(),
-        "supported_types": backup_service.get_supported_providers()
-    }
-
-
-@app.post("/api/admin/backup/providers")
-async def add_backup_provider(
-    provider: BackupProviderCreate,
-    current_user: CurrentUser = Depends(require_admin)
-):
-    """
-    Add a new cloud provider for backup.
-
-    Example configurations:
-    - Mega: {"name": "mega", "type": "mega", "config": {"user": "email", "pass": "password"}}
-    - S3: {"name": "aws", "type": "s3", "config": {"provider": "AWS", "access_key_id": "...", "secret_access_key": "...", "region": "eu-west-1"}}
-    - Google Drive: {"name": "gdrive", "type": "drive", "config": {"token": "{...}"}}
-    - WebDAV/Nextcloud: {"name": "nextcloud", "type": "webdav", "config": {"url": "https://...", "user": "...", "pass": "..."}}
-    """
-    return backup_service.add_provider(
-        name=provider.name,
-        provider_type=provider.type,
-        config=provider.config
-    )
-
-
-@app.delete("/api/admin/backup/providers/{name}")
-async def remove_backup_provider(
-    name: str,
-    current_user: CurrentUser = Depends(require_admin)
-):
-    """Remove a configured cloud provider"""
-    backup_service.remove_provider(name)
-    return {"message": f"Provider '{name}' removed"}
-
-
-@app.post("/api/admin/backup/providers/{name}/test")
-async def test_backup_provider(
-    name: str,
-    current_user: CurrentUser = Depends(require_admin)
-):
-    """Test connection to a cloud provider"""
-    return backup_service.test_provider(name)
-
-
-@app.post("/api/admin/backup/run")
-async def run_backup(
-    request: BackupRunRequest,
-    background_tasks: BackgroundTasks,
-    current_user: CurrentUser = Depends(require_admin)
-):
-    """
-    Trigger a manual backup.
-
-    If 'provider' is specified, the backup will be uploaded to that cloud provider.
-    Otherwise, it will be stored locally only.
-    """
-    background_tasks.add_task(
-        _execute_manual_backup, request.provider, request.remote_path
-    )
-    return {"message": "Backup started", "status": "running"}
-
-
-def _execute_manual_backup(provider: Optional[str], remote_path: str):
-    """Execute manual backup in background"""
-    start_time = datetime.now()
-    entry = {
-        "type": "manual",
-        "started_at": start_time.isoformat(),
-        "provider": provider
-    }
-
-    try:
-        result = backup_service.create_backup()
-        entry["backup_name"] = result["backup_name"]
-        entry["size_bytes"] = result["size_bytes"]
-
-        if provider:
-            upload_result = backup_service.upload_to_cloud(
-                result["archive_path"], provider, remote_path
-            )
-            entry["cloud_upload"] = upload_result
-
-        entry["status"] = "success"
-        entry["duration_seconds"] = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Manual backup completed: {result['backup_name']}")
-
-    except Exception as e:
-        entry["status"] = "error"
-        entry["error"] = str(e)
-        entry["duration_seconds"] = (datetime.now() - start_time).total_seconds()
-        logger.error(f"Manual backup failed: {e}")
-
-    finally:
-        backup_service.log_backup(entry)
-
-
-@app.get("/api/admin/backup/schedule")
-async def get_backup_schedule(current_user: CurrentUser = Depends(require_admin)):
-    """Get current backup schedule"""
-    return backup_scheduler.get_schedule()
-
-
-@app.post("/api/admin/backup/schedule")
-async def set_backup_schedule(
-    request: BackupScheduleRequest,
-    current_user: CurrentUser = Depends(require_admin)
-):
-    """
-    Set or update the backup schedule.
-
-    Cron expression examples:
-    - "0 2 * * *"     → Daily at 2:00 AM
-    - "0 3 * * 0"     → Weekly on Sunday at 3:00 AM
-    - "0 1 1 * *"     → Monthly on the 1st at 1:00 AM
-    - "0 */6 * * *"   → Every 6 hours
-    """
-    return backup_scheduler.set_schedule(
-        cron_expression=request.cron,
-        provider=request.provider,
-        remote_path=request.remote_path,
-        retention=request.retention,
-        enabled=request.enabled
-    )
-
-
-@app.get("/api/admin/backup/history")
-async def get_backup_history(current_user: CurrentUser = Depends(require_admin)):
-    """Get backup execution history"""
-    return {"history": backup_service.get_history()}
-
-
-@app.get("/api/admin/backup/local")
-async def list_local_backups(current_user: CurrentUser = Depends(require_admin)):
-    """List local backup files"""
-    return {"backups": backup_service.list_local_backups()}
-
-
-@app.delete("/api/admin/backup/local/{filename}")
-async def delete_local_backup(
-    filename: str,
-    current_user: CurrentUser = Depends(require_admin)
-):
-    """Delete a local backup file"""
-    if backup_service.delete_local_backup(filename):
-        return {"message": f"Backup '{filename}' deleted"}
-    raise HTTPException(status_code=404, detail="Backup not found")
-
-
-@app.get("/api/admin/backup/cloud/{provider}")
-async def list_cloud_backups(
-    provider: str,
-    current_user: CurrentUser = Depends(require_admin)
-):
-    """List backups stored on a cloud provider"""
-    return {"backups": backup_service.list_cloud_backups(provider)}
-
-
-@app.post("/api/admin/backup/cloud/{provider}/download")
-async def download_cloud_backup(
-    provider: str,
-    filename: str,
-    current_user: CurrentUser = Depends(require_admin)
-):
-    """Download a backup from cloud to local storage"""
-    local_path = backup_service.download_from_cloud(provider, filename)
-    return {"message": f"Downloaded to {local_path}", "local_path": local_path}
-
-
-@app.post("/api/admin/backup/restore")
-async def restore_backup(
-    request: BackupRestoreRequest,
-    background_tasks: BackgroundTasks,
-    current_user: CurrentUser = Depends(require_admin)
-):
-    """
-    Restore from a local backup archive.
-
-    WARNING: This will overwrite current data. Use with caution.
-    """
-    archive_path = os.path.join(BACKUP_DIR, request.filename)
-    if not os.path.exists(archive_path):
-        raise HTTPException(status_code=404, detail="Backup file not found")
-
-    background_tasks.add_task(
-        _execute_restore,
-        archive_path,
-        request.restore_db,
-        request.restore_uploads,
-        request.restore_qdrant
-    )
-    return {"message": "Restore started", "status": "running"}
-
-
-def _execute_restore(archive_path: str, restore_db: bool, restore_uploads: bool, restore_qdrant: bool):
-    """Execute restore in background"""
-    try:
-        result = backup_service.restore_from_backup(
-            archive_path, restore_db, restore_uploads, restore_qdrant
-        )
-        logger.info(f"Restore completed: {result}")
-    except Exception as e:
-        logger.error(f"Restore failed: {e}")
-
-
-# ============================================================================
 # DASHBOARD SUMMARY - Métricas consolidadas
 # ============================================================================
 
-@app.get("/api/dashboard/summary")
+@app.get("/api/legacy/dashboard/summary")
 async def get_dashboard_summary(
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -4956,7 +4127,7 @@ def _fetch_parallel_news_items(doc_ids: List[str], max_news_per_doc: int) -> Dic
     return result
 
 
-@app.get("/api/dashboard/parallel-data", response_model=ParallelFlowResponse)
+@app.get("/api/legacy/dashboard/parallel-data", response_model=ParallelFlowResponse)
 async def get_parallel_coordinates_data(
     limit: int = 80,
     max_news_per_doc: int = 20,
@@ -5010,7 +4181,7 @@ async def get_parallel_coordinates_data(
 # WORKERS STATUS - Monitor de trabajadores activos
 # ============================================================================
 
-@app.get("/api/workers/status")
+@app.get("/api/legacy/workers/status")
 async def get_workers_status(
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -5352,7 +4523,7 @@ async def get_workers_status(
         raise HTTPException(status_code=500, detail="Error fetching workers status")
 
 
-@app.get("/api/dashboard/analysis")
+@app.get("/api/legacy/dashboard/analysis")
 async def get_dashboard_analysis(
     current_user: CurrentUser = Depends(get_current_user),
 ):

@@ -277,6 +277,17 @@ class DocumentRepository(ABC):
         """
         pass
 
+    @abstractmethod
+    def get_files_overview_sync(self) -> dict:
+        """
+        SYNC version - Aggregated counts required by the dashboard files section.
+
+        Returns:
+            Dict with total/completed/processing/error counts, ingestion date bounds,
+            sum of `num_chunks`, and a status→count mapping.
+        """
+        pass
+
     def delete_sync(self, document_id: str) -> None:
         """SYNC version - Delete a document by ID."""
         pass

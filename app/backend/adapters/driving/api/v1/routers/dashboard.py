@@ -9,7 +9,8 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 
 import app as app_module
-from adapters.driving.api.v1.dependencies import DashboardMetricsServiceDep
+from adapters.driving.api.v1.dependencies import get_dashboard_metrics_service
+from core.application.services.dashboard_metrics_service import DashboardMetricsService
 from adapters.driving.api.v1.schemas.dashboard_schemas import (
     ParallelDocumentFlow,
     ParallelFlowResponse,
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 @router.get("/summary")
 async def get_dashboard_summary(
     current_user: CurrentUser = Depends(get_current_user),
-    metrics_service: DashboardMetricsServiceDep = Depends(),
+    metrics_service: DashboardMetricsService = Depends(get_dashboard_metrics_service),
 ):
     """Get consolidated dashboard metrics (files, news items, OCR, chunking, insights, errors)."""
     cached = app_module._cache_get("dashboard_summary")
@@ -44,7 +45,7 @@ async def get_parallel_coordinates_data(
     limit: int = 80,
     max_news_per_doc: int = 20,
     current_user: CurrentUser = Depends(get_current_user),
-    metrics_service: DashboardMetricsServiceDep = Depends(),
+    metrics_service: DashboardMetricsService = Depends(get_dashboard_metrics_service),
 ):
     """Return document + news_item slices for the Parallel Coordinates visualization."""
     limit = max(10, min(limit, 250))
@@ -76,7 +77,7 @@ async def get_parallel_coordinates_data(
 @router.get("/analysis")
 async def get_dashboard_analysis(
     current_user: CurrentUser = Depends(get_current_user),
-    metrics_service: DashboardMetricsServiceDep = Depends(),
+    metrics_service: DashboardMetricsService = Depends(get_dashboard_metrics_service),
 ):
     """
     Comprehensive dashboard analysis endpoint.

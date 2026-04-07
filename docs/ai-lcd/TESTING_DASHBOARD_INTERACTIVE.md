@@ -48,6 +48,19 @@ Notas:
 - El token usado se generó con `/api/auth/login` (`user_id=1, username=admin, role=admin`). Los endpoints devolvieron 200 salvo `/api/documents`.
 - Para cerrar PEND‑012 necesitamos repetir el script después de reiniciar el backend (ver siguiente sección) y pegar las respuestas finales completas.
 
+## 🔁 Checklist PEND-011 (Snapshots previos/post)
+
+1. **Capturar snapshot inicial**
+   - Ejecutar `TOKEN=... ./scripts/run_api_smoke.sh --output docs/ai-lcd/artifacts/dashboard_<fecha>_before.json`.
+   - Extraer también `/api/dashboard/parallel-data?limit=50&max_news_per_doc=10` y guardarlo como `_parallel_before.json` para validar `news_items_total` y `meta`.
+   - Registrar en esta sección los valores clave (`files.total`, `insights.pending`, `workers.stuck`, `data_integrity.files.match`).
+2. **Registrar migración**
+   - Tras mover los routers hacia `DashboardMetricsService`/`AdminDataIntegrityService`, repetir los mismos comandos y guardar `_after.json`.
+   - Documentar diferencias y anotar si superan la tolerancia (±1 % en totales, ±5 documentos por stage, tolerancia 0 para `insights.link_percentage`).
+3. **Publicar comparativa**
+   - Añadir tabla “Antes vs Después” en este archivo y enlazar las rutas de los JSON generados.
+   - Adjuntar hash (ej. `shasum dashboard_<fecha>_before.json`) para trazabilidad.
+
 ---
 
 ## 📋 Checklist de Testing

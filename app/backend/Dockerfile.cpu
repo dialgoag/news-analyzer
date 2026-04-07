@@ -5,6 +5,10 @@ FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
+# Ejecutar runtime como usuario no-root (UID/GID configurables)
+ARG APP_UID=10001
+ARG APP_GID=10001
+
 # Dependencias Python
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -40,7 +44,8 @@ COPY backend/migrations/ ./migrations/
 COPY backend/entrypoint.sh .
 RUN chmod +x /app/entrypoint.sh
 
-RUN mkdir -p /app/uploads /app/data /app/backups /app/inbox
+RUN mkdir -p /app/uploads /app/data /app/backups /app/inbox \
+    && chown -R ${APP_UID}:${APP_GID} /app
 
 EXPOSE 8000
 
@@ -48,8 +53,13 @@ EXPOSE 8000
 ENV CUDA_VISIBLE_DEVICES=""
 ENV OLLAMA_HOST=ollama
 ENV OLLAMA_PORT=11434
+ENV HF_HOME=/app/.cache/huggingface
+ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
+ENV SENTENCE_TRANSFORMERS_HOME=/app/.cache/huggingface
 
 HEALTHCHECK --interval=30s --timeout=120s --start-period=90s --retries=5 \
     CMD curl -f http://localhost:8000/health || exit 1
+
+USER ${APP_UID}:${APP_GID}
 
 ENTRYPOINT ["/app/entrypoint.sh"]

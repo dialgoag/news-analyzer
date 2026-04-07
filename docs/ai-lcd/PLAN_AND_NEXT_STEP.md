@@ -4,14 +4,23 @@
 > 
 > **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> **📋 ÚLTIMO**: Fix #112 — Sistema Unificado de Timestamps ✅ (Migration 018). REQ-021 Fase 5 COMPLETA.
+> **📋 ÚLTIMO**: Fix #119 — Docker backend CPU como usuario no-root ✅.
 
-**Última actualización**: 2026-04-06  
-**Versión**: 3.0.17 (Hexagonal Architecture + backlog memoria post-insights)
+**Última actualización**: 2026-04-07  
+**Versión**: 3.0.18 (Hexagonal Architecture + estandarización estados insights)
 
 ---
 
 ## 🎯 REQ-021: Backend Refactor - FASE 5 COMPLETA ✅
+
+### [x] Fix #119: Docker backend CPU como no-root ✅ (2026-04-07)
+**Estado**: ESTABLE ✅  
+**Implementación**:
+- ✅ `Dockerfile.cpu` usa `APP_UID/APP_GID` configurables
+- ✅ Runtime pasa a `USER ${APP_UID}:${APP_GID}`
+- ✅ Permisos de `/app` ajustados para uploads/data/backups/inbox
+
+**No cambiar**: mantener ejecución no-root como baseline de seguridad para imagen CPU.
 
 ### [x] Fix #112: Sistema Unificado de Timestamps ✅ (2026-04-01)
 **Estado**: ESTABLE ✅  
@@ -99,6 +108,7 @@ Ver: CONSOLIDATED_STATUS.md § Fix #111, SESSION_LOG.md § 2026-04-01
 
 ## 🚨 Incidentes runtime activos (2026-04-06)
 
+- **PEND-018** (canon de estados insights con prefijo) — Pendiente: unificar `news_item_insights.status` con semántica de pipeline (`insights_*`), ejecutar migración con app detenida, validar scheduler/workers/dashboard y eliminar legacy.
 - **PEND-016** (ingesta fuera de inbox + retries legacy) — En progreso: limpieza puntual del caso `test_upload` + cuarentena física en `uploads/PEND-016`; symlink/registro específico `91fafac5...` corregido; script de sanity check agregado para detección temprana (`check_upload_symlink_db_consistency.py`); pendiente estandarización estructural de upload/retry.
 - **PEND-013** (`PoolError unkeyed connection`) — En progreso: hardening aplicado en `BasePostgresRepository` y redeploy ejecutado; validar estabilidad en carga.
 - **PEND-014** (`pipeline_runtime_kv` tuple/dict mismatch) — En progreso: `pipeline_runtime_store` tolera filas tuple/dict; startup sin error tras rebuild.
@@ -149,6 +159,15 @@ Ver fuente única de detalles en `PENDING_BACKLOG.md` (§ Prioridad Alta, PEND-0
    - [ ] **Verificación**: Tests de integración ligera y comparativa de coste/tokens en reportes piloto.
 
 > Cada paso desencadena el siguiente; no avanzar con #2 hasta cerrar #1, etc. Este orden alimenta el roadmap de Fase 6 y asegura que la documentación refleje fielmente el estado real de la app. El ítem **7** puede avanzar en paralelo a migraciones admin/dashboard si hay capacidad; conviene cerrar **#3–5** antes de invertir fuerte en nuevos esquemas de reporte.
+
+8. **Estandarizar estados de `news_item_insights` al canon prefijado (`insights_*`)** — *pendiente, alta prioridad*  
+   **Contexto**: Hoy coexisten dos lenguajes de estado (document-level prefijado y news-level genérico), lo que aumenta ambigüedad en troubleshooting y visualización.  
+   **Ejecución acordada**:
+   - [ ] Parar app, migrar datos y código en una sola ventana de mantenimiento.
+   - [ ] Cambiar escrituras de scheduler/worker/repositorios a estados canónicos `insights_*`.
+   - [ ] Actualizar lecturas de dashboard/queries para el nuevo canon.
+   - [ ] Verificar descenso de pendientes + aparición de `started/completed` en `worker_tasks`.
+   - [ ] Limpiar estados legacy y consultas antiguas después de validar estabilidad.
 
 ## 🔥 PRIORIDADES ACTUALES (2026-03-16)
 

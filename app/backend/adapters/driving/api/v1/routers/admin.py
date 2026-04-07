@@ -8,7 +8,7 @@ import os
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 import app as app_module
-from adapters.driving.api.v1.dependencies import AdminDataIntegrityServiceDep
+from adapters.driving.api.v1.dependencies import get_admin_data_integrity_service
 from adapters.driving.api.v1.schemas.admin_schemas import InsightsPipelineUpdate
 from backup_models import (
     BackupProviderCreate,
@@ -17,6 +17,7 @@ from backup_models import (
     BackupScheduleRequest,
 )
 from backup_service import backup_service
+from core.application.services.admin_data_integrity_service import AdminDataIntegrityService
 from middleware import CurrentUser, require_admin
 
 router = APIRouter()
@@ -198,7 +199,7 @@ async def put_insights_pipeline_settings(
 @router.get("/data-integrity")
 async def get_data_integrity(
     current_user: CurrentUser = Depends(require_admin),
-    integrity_service: AdminDataIntegrityServiceDep = Depends(),
+    integrity_service: AdminDataIntegrityService = Depends(get_admin_data_integrity_service),
 ):
     """Data integrity metrics: files vs DB, insights linkage, schema validation."""
     try:

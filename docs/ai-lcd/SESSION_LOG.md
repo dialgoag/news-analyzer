@@ -2,8 +2,24 @@
 
 > Decisiones, cambios importantes, y contexto entre sesiones
 
-**Última actualización**: 2026-04-06  
-**Sesión**: 51 (documentación backlog memoria post-insights)
+**Última actualización**: 2026-04-07  
+**Sesión**: 52 (canon de estados Insights y plan de migración)
+
+---
+
+## 2026-04-07 — Docker backend CPU como no-root
+
+### Cambio: Hardening de runtime en contenedor backend (Fix #119)
+- **Decisión**: Ejecutar el backend con UID/GID no-root en `Dockerfile.cpu` para reducir superficie de riesgo en runtime.
+- **Alternativas consideradas**: Mantener root y solo ignorar warning de pip (descartado por seguridad operativa).
+- **Impacto en roadmap**: Mejora baseline de despliegue local/CPU sin alterar arquitectura hexagonal ni flujo de pipeline.
+- **Riesgo**: Bajo; se conserva acceso de escritura a `/app/uploads`, `/app/data`, `/app/backups`, `/app/inbox` vía `chown` por UID/GID.
+
+### Cambio: Definición de canon prefijado para estados de insights (PEND-018)
+- **Decisión**: Estandarizar `news_item_insights.status` al mismo lenguaje de pipeline (prefijo por etapa), en lugar de mantener estados genéricos.
+- **Alternativas consideradas**: Mantener traducción old↔new en repositorios (descartada por complejidad y deuda técnica).
+- **Impacto en roadmap**: Mejora trazabilidad en logs/dashboard y simplifica diagnóstico de scheduler/worker de insights.
+- **Riesgo**: Medio; requiere migración de datos + ajuste de consultas, idealmente con app detenida para evitar estados mixtos.
 
 ---
 

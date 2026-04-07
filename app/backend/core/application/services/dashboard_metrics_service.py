@@ -49,11 +49,16 @@ class DashboardMetricsService:
             inbox_dir: Optional override for the inbox directory. Defaults to
                        env INBOX_DIR or /app/inbox.
         """
-        documents = self._documents.list_all_sync(limit=None)
+        overview = self._documents.get_files_overview_sync()
         inbox_count = self._count_inbox_files(inbox_dir or os.getenv("INBOX_DIR", "/app/inbox"))
 
-        files_section, total_docs, completed_files, processing_files, error_files = \
-            self._build_files_section(documents, inbox_count)
+        (
+            files_section,
+            total_docs,
+            completed_files,
+            processing_files,
+            error_files,
+        ) = self._build_files_section(overview, inbox_count)
 
         news_section = self._build_news_section(
             completed_files=completed_files,
@@ -62,8 +67,8 @@ class DashboardMetricsService:
         insights_section = self._build_insights_section(expected_total_news=news_section["total"])
 
         chunking_section, indexing_section = self._build_chunking_and_indexing_sections(
-            documents=documents,
             total_docs=total_docs,
+            chunks_total=int(overview.get("chunks_total") or 0),
         )
 
         summary = {
@@ -133,24 +138,22 @@ class DashboardMetricsService:
 
     def _build_files_section(
         self,
-        documents: List[dict],
+        overview: dict,
         inbox_count: int,
     ) -> Tuple[dict, int, int, int, int]:
-        total_docs = len(documents)
-        completed_files = sum(1 for doc in documents if doc.get("status") in self.COMPLETED_STATUSES)
-        processing_files = sum(
-            1 for doc in documents if isinstance(doc.get("status"), str) and doc["status"].endswith("_processing")
-        )
-        error_files = sum(1 for doc in documents if doc.get("status") == DocStatus.ERROR)
+        total_docs = int(overview.get("total_documents") or 0)
+        completed_files = int(overview.get("completed_documents") or 0)
+        processing_files = int(overview.get("processing_documents") or 0)
+        error_files = int(overview.get("error_documents") or 0)
 
-        # Ingested_at can be datetime or string (depending on psycopg2 settings)
-        ingested_dates = [
-            self._coerce_datetime(doc.get("ingested_at"))
-            for doc in documents
-            if doc.get("ingested_at")
-        ]
-        date_first = min(ingested_dates).isoformat() if ingested_dates else None
-        date_last = max(ingested_dates).isoformat() if ingested_dates else None
+        date_first_raw = overview.get("date_first")
+        date_last_raw = overview.get("date_last")
+        date_first = (
+            self._coerce_datetime(date_first_raw).isoformat() if date_first_raw else None
+        )
+        date_last = (
+            self._coerce_datetime(date_last_raw).isoformat() if date_last_raw else None
+        )
 
         total_files = max(inbox_count, total_docs)
         pending_files = max(0, total_files - completed_files - error_files)
@@ -212,13 +215,12 @@ class DashboardMetricsService:
     def _build_chunking_and_indexing_sections(
         self,
         *,
-        documents: List[dict],
         total_docs: int,
+        chunks_total: int,
     ) -> Tuple[dict, dict]:
         chunk_counts = self._dashboard_reads.fetch_queue_counts(TaskType.CHUNKING)
         indexing_counts = self._dashboard_reads.fetch_queue_counts(TaskType.INDEXING)
 
-        chunks_total = sum(int(doc.get("num_chunks") or 0) for doc in documents)
         news_items_total = self._dashboard_reads.count_news_items()
 
         chunk_completed = chunk_counts["completed"]

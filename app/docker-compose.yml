@@ -140,11 +140,13 @@ services:
       UPLOAD_DIR: /app/uploads
       BACKUP_DIR: /app/backups
       MIGRATIONS_DIR: /app/migrations
+      HF_HOME: /app/.cache/huggingface
+      TRANSFORMERS_CACHE: /app/.cache/huggingface
     volumes:
       - ./local-data/uploads:/app/uploads
       - ./local-data/backups:/app/backups
       - ./local-data/inbox:/app/inbox
-      - ./local-data/huggingface:/root/.cache/huggingface
+      - ./local-data/huggingface:/app/.cache/huggingface
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     networks:
