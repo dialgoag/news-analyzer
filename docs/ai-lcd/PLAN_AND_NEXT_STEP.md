@@ -1297,3 +1297,9 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 - [x] PASO 1-5 migrados a repositorios sync (sin SQL inline en `master_pipeline_scheduler`).
 - [x] PASO 0 y PASO 6 ya migrados previamente, consolidando todo el scheduler por puertos.
 - [ ] Pendiente siguiente: atacar SQL directo restante en handlers internos fuera del scheduler (`_shutdown_workers`, workers específicos).
+
+
+### ✅ Actualización 2026-04-07 — Startup recovery
+- [x] `detect_crashed_workers` migrado a repositorios sync (sin SQL inline).
+- [x] Backend reconstruido y healthy tras el cambio.
+- [ ] Pendiente siguiente: SQL directo restante en workers internos específicos (`_insights_worker_task`, `_indexing_insights_worker_task`, etc.).

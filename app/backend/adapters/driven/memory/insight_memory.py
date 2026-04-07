@@ -41,6 +41,7 @@ class CachedInsight:
     analysis_tokens: int
     total_tokens: int
     cached_at: datetime
+    hit_count: int = 0
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -222,7 +223,8 @@ class InsightMemory:
             extraction_tokens=extraction_tokens,
             analysis_tokens=analysis_tokens,
             total_tokens=extraction_tokens + analysis_tokens,
-            cached_at=datetime.now()
+            cached_at=datetime.now(),
+            hit_count=0
         )
         
         # Store in backend
@@ -414,6 +416,7 @@ class InsightMemory:
             row = cursor.fetchone()
             
             if row:
+                current_hit_count = int(row.get('hit_count', 0)) + 1
                 # Update last_accessed_at and hit_count
                 cursor.execute("""
                     UPDATE insight_cache
@@ -434,13 +437,14 @@ class InsightMemory:
                     extraction_tokens=row['extraction_tokens'],
                     analysis_tokens=row['analysis_tokens'],
                     total_tokens=row['total_tokens'],
-                    cached_at=row['cached_at']
+                    cached_at=row['cached_at'],
+                    hit_count=current_hit_count
                 )
                 
                 cursor.close()
                 conn.close()
                 
-                logger.debug(f"📥 Retrieved from PostgreSQL: {text_hash[:8]}... (hit_count={row['hit_count']+1})")
+                logger.debug(f"📥 Retrieved from PostgreSQL: {text_hash[:8]}... (hit_count={current_hit_count})")
                 return cached
             
             cursor.close()
@@ -508,7 +512,7 @@ class InsightMemory:
                     total_tokens = EXCLUDED.total_tokens,
                     cached_at = EXCLUDED.cached_at,
                     last_accessed_at = EXCLUDED.last_accessed_at,
-                    hit_count = 0
+                    hit_count = EXCLUDED.hit_count
             """, (
                 cached.text_hash,
                 cached.extracted_data,
@@ -521,7 +525,7 @@ class InsightMemory:
                 cached.total_tokens,
                 cached.cached_at,
                 cached.cached_at,  # last_accessed_at same as cached_at initially
-                0  # hit_count starts at 0
+                cached.hit_count
             ))
             
             conn.commit()

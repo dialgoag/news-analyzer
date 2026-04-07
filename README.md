@@ -68,6 +68,7 @@ Luego consulta `docs/ai-lcd/` para el detalle completo:
 - **[Architecture](docs/ai-lcd/02-construction/ARCHITECTURE_DETAILED.md)**
 - **[OpenAI Integration](docs/ai-lcd/02-construction/OPENAI_INTEGRATION.md)**
 - **[Deployment Guide](docs/ai-lcd/03-operations/DEPLOYMENT_GUIDE.md)**
+- **[Reprocessing](docs/ai-lcd/03-operations/REPROCESSING.md)** -- Cómo reprocesar documentos preservando insights
 - **[Docker (CPU/GPU)](app/docs/DOCKER.md)** -- Compose unificado, build, plataformas
 - **[Environment Config](docs/ai-lcd/03-operations/ENVIRONMENT_CONFIGURATION.md)**
 - **[Troubleshooting](docs/ai-lcd/03-operations/TROUBLESHOOTING_GUIDE.md)**

@@ -1,0 +1,175 @@
+/**
+ * Design Tokens - NewsAnalyzer Dashboard
+ * 
+ * Based on Visual Analytics Guidelines + UI/UX Pro Max
+ * Design System: Data-Dense Dashboard
+ * 
+ * Last updated: 2026-04-07
+ */
+
+/* Google Fonts - Fira Code + Fira Sans */
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
+:root {
+  /* ===== TYPOGRAPHY ===== */
+  --font-heading: 'Fira Code', monospace;
+  --font-body: 'Fira Sans', sans-serif;
+  
+  /* Font sizes */
+  --text-xl: 1.875rem;  /* 30px - Main titles */
+  --text-lg: 1.125rem;  /* 18px - Section titles */
+  --text-md: 0.875rem;  /* 14px - Table headers */
+  --text-sm: 0.875rem;  /* 14px - Body text */
+  --text-xs: 0.75rem;   /* 12px - Small text/help */
+  
+  /* Font weights */
+  --weight-light: 300;
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  
+  /* ===== SPACING (4px grid system) ===== */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  
+  /* ===== COLORS - Data States ===== */
+  /* From Visual Analytics Guidelines */
+  --color-active: #4caf50;
+  --color-active-bg: rgba(76, 175, 80, 0.1);
+  
+  --color-pending: #ff9800;
+  --color-pending-bg: rgba(255, 152, 0, 0.1);
+  
+  --color-completed: #2196f3;
+  --color-completed-bg: rgba(33, 150, 243, 0.1);
+  
+  --color-error: #f44336;
+  --color-error-bg: rgba(244, 67, 54, 0.1);
+  
+  --color-warning: #ff5722;
+  --color-warning-bg: rgba(255, 87, 34, 0.1);
+  
+  --color-info: #4dd0e1;
+  --color-info-bg: rgba(77, 208, 225, 0.1);
+  
+  /* ===== COLORS - Interface Elements ===== */
+  /* From Visual Analytics Guidelines */
+  --bg-base: #0f172a;
+  --bg-panel: #1e1e2e;
+  --bg-elevated: #2d2d44;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.08);
+  
+  --border-color: #334155;
+  --border-light: rgba(255, 255, 255, 0.05);
+  --border-strong: rgba(77, 208, 225, 0.3);
+  
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-disabled: #64748b;
+  
+  /* ===== COLORS - Accent (from UI/UX Pro Max) ===== */
+  --color-accent: #d97706;
+  --color-accent-hover: #f59e0b;
+  
+  /* ===== SHADOWS ===== */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.5);
+  
+  /* Glow effects */
+  --glow-active: 0 0 10px rgba(76, 175, 80, 0.5);
+  --glow-info: 0 0 10px rgba(77, 208, 225, 0.3);
+  --glow-error: 0 0 10px rgba(244, 67, 54, 0.4);
+  
+  /* ===== TRANSITIONS ===== */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+  
+  /* ===== BORDERS ===== */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+  
+  /* ===== Z-INDEX ===== */
+  --z-base: 1;
+  --z-dropdown: 10;
+  --z-sticky: 20;
+  --z-modal: 30;
+  --z-tooltip: 40;
+}
+
+/* ===== ACCESSIBILITY ===== */
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Focus states (WCAG 2.4.7) */
+:focus-visible {
+  outline: 2px solid var(--color-info);
+  outline-offset: 2px;
+}
+
+/* ===== UTILITY CLASSES ===== */
+
+/* Typography utilities */
+.font-heading {
+  font-family: var(--font-heading);
+}
+
+.font-body {
+  font-family: var(--font-body);
+}
+
+/* Color utilities */
+.text-primary { color: var(--text-primary); }
+.text-secondary { color: var(--text-secondary); }
+.text-disabled { color: var(--text-disabled); }
+
+.text-active { color: var(--color-active); }
+.text-pending { color: var(--color-pending); }
+.text-completed { color: var(--color-completed); }
+.text-error { color: var(--color-error); }
+.text-info { color: var(--color-info); }
+
+/* Background utilities */
+.bg-panel { background: var(--bg-panel); }
+.bg-elevated { background: var(--bg-elevated); }
+
+/* Hover effect utilities */
+.hover-lift {
+  transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Interactive states */
+.cursor-pointer {
+  cursor: pointer;
+}
+
+.cursor-not-allowed {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

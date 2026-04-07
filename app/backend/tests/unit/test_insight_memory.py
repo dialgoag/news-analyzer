@@ -87,6 +87,7 @@ class TestCachedInsight:
         assert cached.text_hash == "abc123"
         assert cached.total_tokens == 150
         assert isinstance(cached.cached_at, datetime)
+        assert cached.hit_count == 0
     
     def test_cached_insight_to_dict(self):
         """Test serialization to dict."""
@@ -109,6 +110,7 @@ class TestCachedInsight:
         assert data['text_hash'] == "abc123"
         assert data['total_tokens'] == 150
         assert isinstance(data['cached_at'], str)  # Should be ISO string
+        assert data.get('hit_count', 0) == 0
     
     def test_cached_insight_from_dict(self):
         """Test deserialization from dict."""
@@ -122,7 +124,8 @@ class TestCachedInsight:
             'extraction_tokens': 100,
             'analysis_tokens': 50,
             'total_tokens': 150,
-            'cached_at': '2026-03-31T10:00:00'
+            'cached_at': '2026-03-31T10:00:00',
+            'hit_count': 3
         }
         
         cached = CachedInsight.from_dict(data)
@@ -130,6 +133,7 @@ class TestCachedInsight:
         assert cached.text_hash == 'abc123'
         assert cached.total_tokens == 150
         assert isinstance(cached.cached_at, datetime)
+        assert cached.hit_count == 3
 
 
 # ============================================================================

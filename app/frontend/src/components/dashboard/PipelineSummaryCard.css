@@ -1,64 +1,103 @@
+/**
+ * Pipeline Summary Card - Refactorizado con Design System
+ * Usa KPICard components + Progress Bar profesional
+ */
+
 .pipeline-summary-card {
-  background: rgba(15, 23, 42, 0.85);
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 10px;
-  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-4);
 }
 
-.pipeline-summary-card__row {
+/* KPI Grid */
+.kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
 }
 
-.pipeline-summary-card__metric {
-  background: rgba(30, 41, 59, 0.8);
-  border-radius: 8px;
-  padding: 8px 10px;
-  border: 1px solid rgba(148, 163, 184, 0.1);
+@media (max-width: 768px) {
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
-.pipeline-summary-card__metric span {
-  display: block;
-  font-size: 0.75rem;
-  color: #94a3b8;
-  letter-spacing: 0.02em;
+/* Progress Section */
+.progress-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
-.pipeline-summary-card__metric strong {
-  display: block;
-  font-size: 1.45rem;
-  color: #f8fafc;
-  margin-top: 2px;
-}
-
-.pipeline-summary-card__metric small {
-  font-size: 0.7rem;
-  color: #38bdf8;
-}
-
-.pipeline-summary-card__bar {
-  position: relative;
-  width: 100%;
-  height: 8px;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.2);
+/* Stacked Progress Bar */
+.progress-bar-stack {
+  display: flex;
+  height: 24px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
   overflow: hidden;
+  border: 1px solid var(--border-color);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
-.pipeline-summary-card__fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  background: linear-gradient(90deg, #0ea5e9, #22d3ee);
+.progress-segment {
+  height: 100%;
+  transition: width var(--transition-slow);
+  position: relative;
 }
 
-.pipeline-summary-card__hint {
-  margin: 0;
-  font-size: 0.75rem;
-  color: #94a3b8;
+.progress-segment--completed {
+  background: linear-gradient(90deg, var(--color-completed), #42a5f5);
+}
+
+.progress-segment--processing {
+  background: linear-gradient(90deg, var(--color-active), #66bb6a);
+}
+
+.progress-segment--pending {
+  background: linear-gradient(90deg, var(--color-pending), #ffa726);
+}
+
+/* Legend */
+.progress-legend {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.dot--completed {
+  background: var(--color-completed);
+}
+
+.dot--processing {
+  background: var(--color-active);
+}
+
+.dot--pending {
+  background: var(--color-pending);
+}
+
+@media (max-width: 480px) {
+  .progress-legend {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
 }

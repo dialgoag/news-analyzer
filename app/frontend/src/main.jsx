@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import axios from 'axios'
 import App from './App'
+import './styles/design-tokens.css'
 import './index.css'
 
 // 401 → dispatch event so useAuth can logout (token expired/invalid after backend restart)

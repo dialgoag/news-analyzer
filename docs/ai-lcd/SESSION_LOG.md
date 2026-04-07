@@ -3899,3 +3899,33 @@ curl -X POST /api/documents/{real_doc_id}/requeue
 - **Alternativas consideradas**: Dejar PASO 1-5 para iteración posterior (rechazada por mantener doble patrón en el mismo flujo).
 - **Impacto en roadmap**: `app.py` queda más cerca de bootstrap puro; siguiente foco son handlers internos fuera de scheduler.
 - **Riesgo**: Medio (cambio amplio en orquestación); mitigado con compile + auditoría y sin alterar contratos de workers.
+
+
+### Cambio: Dashboard Visual Improvements - Design System Profesional
+- **Decisión**: Implementar design system completo basado en Visual Analytics Guidelines + UI/UX Pro Max para mejorar experiencia de monitoreo.
+- **Alternativas consideradas**: 
+  - Mejoras incrementales (rechazada: no resuelve problema de consistencia)
+  - Librería UI externa como Material-UI (rechazada: overhead innecesario para dashboard interno)
+- **Impacto en roadmap**: 
+  - REQ-014 (Mejoras UX Dashboard) **COMPLETADO** ✅
+  - PEND-022 (Dashboard Visual Improvements) **COMPLETADO** ✅
+  - Próximo: PEND-023 (News Analytics Dashboards - Facts + Insights)
+- **Riesgo**: Bajo; solo afecta capa de presentación, lógica de negocio intacta
+- **Componentes creados/actualizados**:
+  - `design-tokens.css` (variables CSS consistentes)
+  - `KPICard.jsx` (componente reutilizable para métricas)
+  - `ExportMenu.jsx` (exportar CSV/JSON/PNG)
+  - `PipelineSummaryCard.jsx` (refactorizado con KPICards + progress bar stacked)
+  - `CollapsibleSection.jsx` (Heroicons + priority variants + accessibility)
+  - `WorkerLoadCard.jsx` (Heroicons + smooth transitions)
+  - `PipelineDashboard.jsx` (integración de iconos Heroicons)
+- **Dependencias añadidas**:
+  - `@heroicons/react` (iconos SVG profesionales)
+  - `html2canvas` (export PNG)
+
+
+### Cambio: Startup recovery migra a repositorios
+- **Decisión**: Extender el patrón hexagonal también al recovery de arranque para eliminar SQL residual de `app.py`.
+- **Alternativas consideradas**: Mantener SQL en startup por “simplicidad” (rechazada por inconsistencia arquitectónica).
+- **Impacto en roadmap**: Cierra otro bloque crítico fuera del scheduler y reduce deuda técnica remanente en bootstrap.
+- **Riesgo**: Bajo; se preservó semántica exacta de limpieza y rollback por estado.

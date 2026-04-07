@@ -1,12 +1,11 @@
 import React from 'react';
+import { 
+  DocumentTextIcon, 
+  SparklesIcon, 
+  ClockIcon 
+} from '@heroicons/react/24/outline';
+import { KPICard } from './KPICard';
 import './PipelineSummaryCard.css';
-
-function formatPercent(value) {
-  if (Number.isNaN(value) || value === null || value === undefined) {
-    return '0%';
-  }
-  return `${Math.round(value)}%`;
-}
 
 export default function PipelineSummaryCard({ files, newsItems, insights }) {
   const totalDocs = files?.total || 0;
@@ -14,35 +13,74 @@ export default function PipelineSummaryCard({ files, newsItems, insights }) {
   const insightsDone = insights?.done || 0;
   const insightsTotal = insights?.total || 0;
   const newsPending = newsItems?.pending || 0;
+  const percentageDone = files?.percentage_done || 0;
 
   return (
     <div className="pipeline-summary-card">
-      <div className="pipeline-summary-card__row">
-        <div className="pipeline-summary-card__metric">
-          <span>Docs procesados</span>
-          <strong>{completedDocs}/{totalDocs}</strong>
-          <small>{formatPercent(files?.percentage_done)}</small>
-        </div>
-        <div className="pipeline-summary-card__metric">
-          <span>Insights listos</span>
-          <strong>{insightsDone}/{insightsTotal || '∞'}</strong>
-          <small>{formatPercent(insights?.percentage_done)}</small>
-        </div>
-        <div className="pipeline-summary-card__metric">
-          <span>News pendientes</span>
-          <strong>{newsPending}</strong>
-          <small>cola activa</small>
-        </div>
-      </div>
-      <div className="pipeline-summary-card__bar">
-        <div
-          className="pipeline-summary-card__fill"
-          style={{ width: `${Math.min(100, files?.percentage_done || 0)}%` }}
+      {/* KPI Cards Grid */}
+      <div className="kpi-grid">
+        <KPICard
+          icon={DocumentTextIcon}
+          label="Docs Procesados"
+          value={completedDocs}
+          total={totalDocs}
+          percentage={percentageDone}
+          status="completed"
+        />
+        
+        <KPICard
+          icon={SparklesIcon}
+          label="Insights Listos"
+          value={insightsDone}
+          total={insightsTotal || '∞'}
+          percentage={insights?.percentage_done}
+          status="active"
+        />
+        
+        <KPICard
+          icon={ClockIcon}
+          label="News Pendientes"
+          value={newsPending}
+          status="pending"
         />
       </div>
-      <p className="pipeline-summary-card__hint">
-        La barra muestra el avance global de documentos completados.
-      </p>
+      
+      {/* Progress Bar Stacked */}
+      <div className="progress-section">
+        <div className="progress-bar-stack">
+          <div
+            className="progress-segment progress-segment--completed"
+            style={{ width: `${Math.min(100, percentageDone || 0)}%` }}
+            title={`Completado: ${percentageDone.toFixed(1)}%`}
+          />
+          <div
+            className="progress-segment progress-segment--processing"
+            style={{ width: `${Math.min(100, (files?.processing_percentage || 0))}%` }}
+            title={`Procesando: ${(files?.processing_percentage || 0).toFixed(1)}%`}
+          />
+          <div
+            className="progress-segment progress-segment--pending"
+            style={{ width: `${Math.max(0, 100 - percentageDone - (files?.processing_percentage || 0))}%` }}
+            title={`Pendiente: ${(100 - percentageDone - (files?.processing_percentage || 0)).toFixed(1)}%`}
+          />
+        </div>
+        
+        {/* Legend */}
+        <div className="progress-legend">
+          <span className="legend-item">
+            <span className="dot dot--completed" />
+            Completado ({Math.round(percentageDone)}%)
+          </span>
+          <span className="legend-item">
+            <span className="dot dot--processing" />
+            Procesando ({Math.round(files?.processing_percentage || 0)}%)
+          </span>
+          <span className="legend-item">
+            <span className="dot dot--pending" />
+            Pendiente ({Math.round(100 - percentageDone - (files?.processing_percentage || 0))}%)
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

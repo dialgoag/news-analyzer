@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import axios from 'axios';
+import { ArrowPathIcon } from '@heroicons/react/24/outline';
 import { API_TIMEOUT_MS } from '../../config/apiConfig';
 import './WorkerLoadCard.css';
 
@@ -10,10 +11,11 @@ const STATUS_LABELS = {
   error: 'Errores'
 };
 
+// Using design tokens colors
 const STATUS_COLORS = {
-  active: '#22c55e',
-  idle: '#fbbf24',
-  error: '#ef4444'
+  active: '#4caf50',   // --color-active
+  idle: '#ff9800',     // --color-pending
+  error: '#f44336'     // --color-error
 };
 
 function normalizeWorkerList(payload) {
@@ -207,27 +209,36 @@ export default function WorkerLoadCard({ API_URL, token, refreshTrigger }) {
     <div className="worker-load-card">
       <div className="worker-load-card__header">
         <div>
-          <h4>👷 Carga de Workers</h4>
+          <h4>Carga de Workers</h4>
           <p>Distribución activa por tipo y estado</p>
         </div>
         <div className="worker-load-card__actions">
           <span className="timestamp">Actualizado: {lastUpdatedLabel}</span>
-          <button type="button" onClick={handleManualRefresh} disabled={refreshing}>
-            {refreshing ? '⏳' : 'Actualizar'}
+          <button 
+            type="button" 
+            onClick={handleManualRefresh} 
+            disabled={refreshing}
+            className="refresh-button"
+            aria-label="Actualizar datos"
+          >
+            <ArrowPathIcon className={`refresh-icon ${refreshing ? 'spinning' : ''}`} />
+            {refreshing ? 'Actualizando...' : 'Actualizar'}
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="worker-load-card__error">⚠️ {error}</div>
+        <div className="worker-load-card__error" role="alert">
+          ⚠️ {error}
+        </div>
       )}
 
       <div className="worker-load-card__chart">
-        <svg ref={chartRef} />
-        <div className="worker-load-card__legend">
+        <svg ref={chartRef} aria-label="Gráfico de carga de workers por tipo" role="img" />
+        <div className="worker-load-card__legend" role="list">
           {Object.entries(STATUS_LABELS).map(([key, label]) => (
-            <span key={key}>
-              <i style={{ backgroundColor: STATUS_COLORS[key] }} />
+            <span key={key} role="listitem">
+              <i style={{ backgroundColor: STATUS_COLORS[key] }} aria-hidden="true" />
               {label}
             </span>
           ))}

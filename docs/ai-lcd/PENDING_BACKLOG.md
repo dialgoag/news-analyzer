@@ -5,6 +5,111 @@
 
 ---
 
+## 🎨 NUEVO: Mejoras de Dashboards (2026-04-07)
+
+### PEND-022: Mejoras Pipeline Dashboard - Aplicar Design System Profesional ✨
+**Prioridad**: COMPLETADO ✅  
+**Fecha completado**: 2026-04-07  
+**Estimación**: 6-8 horas (actual: ~5 horas)  
+**Tipo**: UX/UI Improvement
+
+**Descripción completada**:
+✅ CSS variables consistentes (paleta de VISUAL_ANALYTICS_GUIDELINES.md)
+✅ Tipografía profesional (Fira Code + Fira Sans)
+✅ Iconos SVG (Heroicons, no emojis)
+✅ Jerarquía visual clara (KPIs destacados)
+✅ Accesibilidad WCAG AA
+✅ Export functions (CSV/JSON/PNG)
+✅ Componente KPICard reutilizable
+✅ Progress bar stacked con legend
+
+**Documentación**: 
+- `docs/ai-lcd/DASHBOARD_VISUAL_IMPROVEMENTS_PLAN.md`
+- `docs/ai-lcd/PEND-022_IMPLEMENTATION_PLAN.md`
+
+**Archivos implementados**:
+- ✅ `app/frontend/src/styles/design-tokens.css` (nuevo)
+- ✅ `app/frontend/src/components/dashboard/KPICard.jsx` (nuevo)
+- ✅ `app/frontend/src/components/dashboard/ExportMenu.jsx` (nuevo)
+- ✅ `app/frontend/src/components/PipelineSummaryCard.jsx` (refactorizado)
+- ✅ `app/frontend/src/components/dashboard/CollapsibleSection.jsx` (mejorado)
+- ✅ `app/frontend/src/components/dashboard/WorkerLoadCard.jsx` (optimizado)
+- ✅ `app/frontend/src/components/PipelineDashboard.jsx` (iconos Heroicons)
+
+**Dependencias añadidas**:
+- ✅ `@heroicons/react` (2.1.x)
+- ✅ `html2canvas` (1.4.x)
+
+**Verificación completada**:
+- [x] Contraste mínimo 4.5:1 (WCAG AA)
+- [x] Design tokens aplicados consistentemente
+- [x] Heroicons SVG instalados y funcionando
+- [x] KPICard funcional con hover states
+- [x] Export menu operativo (CSV/JSON/PNG)
+- [x] Frontend build exitoso (301.61 kB gzip: 99.44 kB)
+- [x] Responsive mobile/tablet/desktop
+- [x] Keyboard navigation funcional
+
+**Estado**: ESTABLE ✅ - No modificar sin razón crítica
+
+---
+
+### PEND-023: News Analytics Dashboards - Facts + Insights 📰
+**Prioridad**: MEDIA  
+**Estimación**: 12-16 horas  
+**Tipo**: New Feature (Dashboard separado)
+
+**Descripción**:
+Crear dos dashboards nuevos para análisis de contenido de noticias (separados del monitoreo de pipeline):
+
+**1. Dashboard Facts** (Documentos indexados):
+- KPI Cards: Docs indexados, News extraídas, Chunks, Tiempo avg
+- Timeline de ingestión (D3 Area Chart + Brush)
+- Treemap por fuente (El Pais, ABC, etc.)
+- Tabla de documentos con filtros y sorting
+- Performance Heatmap (opcional)
+
+**2. Dashboard Insights** (Análisis IA):
+- KPI Cards: Insights totales, Done, Pending, Cost estimado
+- Insights Timeline (Multi-line chart)
+- Word Cloud de keywords (requiere procesamiento backend)
+- Tabla de insights con expandable rows
+- Quality Metrics Gauges (opcional)
+
+**Arquitectura**:
+```
+App.jsx
+├── 📊 Pipeline (actual - monitoreo)
+├── 📰 News Analytics (NUEVO)
+│   ├── Facts (documentos indexados)
+│   └── Insights (análisis IA)
+├── 🔍 Query
+└── 📁 Documents
+```
+
+**Documentación**: `docs/ai-lcd/NEWS_ANALYTICS_DASHBOARDS_PROPOSAL.md`
+
+**Backend necesario**:
+- Nuevos endpoints `/api/analytics/facts/*` y `/api/analytics/insights/*`
+- Procesamiento de keywords para Word Cloud
+- Queries optimizadas con filtros y paginación
+
+**Archivos a crear**:
+- `app/frontend/src/components/news-analytics/` (carpeta nueva)
+- `app/backend/adapters/driving/api/v1/routers/news_analytics.py`
+
+**Verificación**:
+- [ ] Separación clara Facts vs Insights
+- [ ] Brushing & linking entre visualizaciones
+- [ ] Design system consistente con Pipeline Dashboard
+- [ ] Responsive en mobile/tablet/desktop
+- [ ] Performance <2s render inicial
+
+**Esfuerzo**: Alto  
+**Fecha propuesta**: 2026-04-07
+
+---
+
 ## 📍 Fuentes de pendientes (consolidado)
 
 | Fuente | Contenido | Ubicación |

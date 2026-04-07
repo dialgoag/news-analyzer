@@ -4709,12 +4709,14 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 - PipelineAnalysisPanel ✅
 
 **Verificación**:
-- [ ] Design tokens aplicados
-- [ ] Heroicons instalados
-- [ ] KPICard funcional
-- [ ] Export menu operativo
-- [ ] Contraste 4.5:1 mínimo
-- [ ] Responsive mobile/tablet/desktop
+- [x] Design tokens aplicados
+- [x] Heroicons instalados
+- [x] KPICard funcional
+- [x] Export menu operativo
+- [x] Contraste 4.5:1 mínimo
+- [x] Responsive mobile/tablet/desktop
+- [x] Build exitoso (301.61 kB gzip: 99.44 kB)
+- [x] Frontend corriendo en puerto 3000
 
 
 ### 129. Scheduler recovery/dispatch: SQL inline -> repositories ✅
@@ -4739,3 +4741,15 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 **Verificación**:
 - [x] `python -m py_compile` en archivos modificados
 - [x] Sin `cursor.execute` dentro de PASO 0-6 del scheduler
+
+
+### 131. Startup recovery sin SQL directo en app.py ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/app.py` (`detect_crashed_workers`), `worker_repository` y `news_item_repository`
+**Problema**: `detect_crashed_workers` aún manipulaba `worker_tasks`, `processing_queue`, `document_status` y `news_item_insights` con SQL inline en `app.py`.
+**Solución**: Reemplazado por métodos sync de repositorio (`delete_all_worker_tasks_sync`, `reset_all_processing_tasks_sync`, rollback por `document_repository`, `reset_generating_insights_sync`).
+**Impacto**: Recovery de arranque sigue igual pero ahora encapsulado por puertos hexagonales.
+**⚠️ NO rompe**: limpieza de workers huérfanos, reset de cola processing->pending, rollback de docs *_processing, reset de insights generating->pending.
+**Verificación**:
+- [x] `python -m py_compile` en app + repositorios modificados
+- [x] `make rebuild-backend` y `/health` = 200

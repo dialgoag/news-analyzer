@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Literal, Optional, TypedDict
+from typing import Literal, Optional, TypedDict, List
 
 from langgraph.graph import StateGraph, END
 
@@ -22,6 +22,12 @@ from adapters.driven.llm.chains.analysis_chain import AnalysisChain
 from adapters.driven.llm.providers.openai_provider import OpenAIProvider
 from adapters.driven.llm.providers.ollama_provider import OllamaProvider
 from shared.exceptions import RateLimitError, TimeoutError, ValidationError
+from config import get_llm_provider_order, settings as app_settings
+
+try:
+    import insights_pipeline_control as _ipc
+except Exception:  # pragma: no cover - fallback cuando no existe módulo
+    _ipc = None
 
 logger = logging.getLogger(__name__)
 
@@ -521,15 +527,59 @@ async def run_insights_workflow(
 # Utilities
 # ============================================================================
 
-def _get_providers() -> list:
+def _get_providers() -> List:
     """
-    Get list of LLM providers in fallback order.
+    Get list of LLM providers in fallback order honoring runtime configuration.
     
-    Returns configured providers from config or defaults.
+    Preference order:
+      1. Admin overrides from insights_pipeline_control (manual mode)
+      2. Static LLM_PROVIDER + LLM_FALLBACK_PROVIDERS from config
+    Providers without credenciales/config se omiten.
     """
-    # TODO: Load from config.py
-    # For now, hardcode common providers
-    return [
-        OpenAIProvider(),
-        OllamaProvider()
-    ]
+    runtime_order: Optional[List[str]] = None
+    runtime_ollama_model: Optional[str] = None
+    if _ipc:
+        try:
+            runtime_order = _ipc.provider_order_for_rag()
+        except Exception as exc:  # pragma: no cover - log y continuar
+            logger.warning("insights_pipeline_control.provider_order_for_rag failed: %s", exc)
+        try:
+            runtime_ollama_model = _ipc.ollama_model_for_insights()
+        except Exception as exc:  # pragma: no cover
+            logger.warning("insights_pipeline_control.ollama_model_for_insights failed: %s", exc)
+    order = runtime_order or get_llm_provider_order()
+    
+    normalized: List[str] = []
+    for provider_name in order:
+        name = (provider_name or "").strip().lower()
+        if name in ("local", "ollama"):
+            name = "ollama"
+        if name and name not in normalized:
+            normalized.append(name)
+    
+    providers: List = []
+    for provider_name in normalized:
+        if provider_name == "openai":
+            if app_settings.OPENAI_API_KEY:
+                try:
+                    providers.append(OpenAIProvider())
+                except ValueError as exc:
+                    logger.warning("Skipping OpenAI provider: %s", exc)
+            else:
+                logger.info("Skipping OpenAI provider because OPENAI_API_KEY is not set")
+        elif provider_name == "ollama":
+            model_override = runtime_ollama_model or app_settings.OLLAMA_LLM_MODEL or app_settings.LLM_MODEL
+            try:
+                providers.append(OllamaProvider(model=model_override) if model_override else OllamaProvider())
+            except Exception as exc:
+                logger.warning("Skipping Ollama provider: %s", exc)
+        elif provider_name == "perplexity":
+            logger.warning("Perplexity provider not implemented yet in LangGraph workflow - skipping")
+        else:
+            logger.warning("Unknown LLM provider '%s' - skipping", provider_name)
+    
+    if not providers:
+        logger.warning("No configured LLM providers available for insights workflow - defaulting to Ollama")
+        providers.append(OllamaProvider())
+    
+    return providers

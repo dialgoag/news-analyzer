@@ -1,5 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
+import { 
+  ExclamationTriangleIcon,
+  ArrowPathIcon,
+  ClockIcon,
+  CircleStackIcon,
+  MapIcon,
+  ChartBarIcon
+} from '@heroicons/react/24/outline';
 import { DashboardProvider } from './hooks/useDashboardFilters.jsx';
 import { API_TIMEOUT_MS } from '../config/apiConfig';
 import ParallelPipelineCoordinates from './dashboard/ParallelPipelineCoordinates';
@@ -143,11 +151,21 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
         )}
 
         <div className="pipeline-dashboard-aux">
-          <CollapsibleSection title="Errores" icon="⚠️" defaultCollapsed={false}>
+          <CollapsibleSection 
+            title="Errores" 
+            icon={ExclamationTriangleIcon} 
+            priority="high"
+            defaultCollapsed={false}
+          >
             <ErrorAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
           </CollapsibleSection>
 
-          <CollapsibleSection title="Análisis de Pipeline" icon="🔄" defaultCollapsed={false}>
+          <CollapsibleSection 
+            title="Análisis de Pipeline" 
+            icon={ArrowPathIcon}
+            priority="normal"
+            defaultCollapsed={false}
+          >
             <PipelineAnalysisPanel
               API_URL={API_URL}
               token={token}
@@ -156,30 +174,55 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
             />
           </CollapsibleSection>
 
-          <CollapsibleSection title="Workers Stuck" icon="⏱️" defaultCollapsed>
+          <CollapsibleSection 
+            title="Workers Stuck" 
+            icon={ClockIcon}
+            priority="normal"
+            defaultCollapsed
+          >
             <StuckWorkersPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
           </CollapsibleSection>
 
-          <CollapsibleSection title="Estado de Base de Datos" icon="💾" defaultCollapsed>
+          <CollapsibleSection 
+            title="Estado de Base de Datos" 
+            icon={CircleStackIcon}
+            priority="low"
+            defaultCollapsed
+          >
             <DatabaseStatusPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} embedded />
           </CollapsibleSection>
         </div>
 
         <div className="visualizations-grid">
           <div className="visualizations-row">
-            <CollapsibleSection title="Resumen Pipeline" icon="🧭" defaultCollapsed={false}>
+            <CollapsibleSection 
+              title="Resumen Pipeline" 
+              icon={MapIcon}
+              priority="high"
+              defaultCollapsed={false}
+            >
               <PipelineSummaryCard
                 files={files}
                 newsItems={newsItems}
                 insights={insightsData}
               />
             </CollapsibleSection>
-            <CollapsibleSection title="Carga de Workers" icon="👷" defaultCollapsed={false}>
+            <CollapsibleSection 
+              title="Carga de Workers" 
+              icon={ChartBarIcon}
+              priority="high"
+              defaultCollapsed={false}
+            >
               <WorkerLoadCard API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
             </CollapsibleSection>
           </div>
           <div className="visualizations-row visualizations-row--full">
-            <CollapsibleSection title="Coordenadas Paralelas" icon="🛰️" defaultCollapsed={false}>
+            <CollapsibleSection 
+              title="Coordenadas Paralelas" 
+              icon={MapIcon}
+              priority="normal"
+              defaultCollapsed={false}
+            >
               <ParallelPipelineCoordinates data={parallelData} documents={documents} />
             </CollapsibleSection>
           </div>
