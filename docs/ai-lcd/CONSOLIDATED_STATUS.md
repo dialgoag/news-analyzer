@@ -4827,6 +4827,17 @@ master_pipeline_scheduler() (cada 10s) — ÚNICO ORQUESTADOR
 - [x] `python -m py_compile` en `app.py` y repositorios modificados
 - [x] Sin referencias activas a `news_item_store`/`news_item_insights_store` fuera de imports eliminados
 
+### 135. Eliminados jobs legacy de insights no usados ✅
+**Fecha**: 2026-04-07
+**Ubicación**: `app/backend/app.py`
+**Problema**: Quedaban funciones legacy (`run_insights_queue_job`, `run_news_item_insights_queue_job`) sin uso activo y con dependencia a stores legacy (`document_insights_store`, `ProcessingQueueStore`).
+**Solución**: Eliminadas ambas funciones y removidos imports/instancias legacy asociados.
+**Impacto**: Menor superficie legacy en bootstrap; scheduler paralelo queda como único flujo vigente de insights.
+**⚠️ NO rompe**: `run_news_item_insights_queue_job_parallel`, dispatch por `worker_repository`, workers internos de insights.
+**Verificación**:
+- [x] `python -m py_compile app/backend/app.py`
+- [x] Sin referencias a `document_insights_store` ni `ProcessingQueueStore` en `app.py`
+
 
 ### 133. Optimización Docker: requirements.txt en imagen base ✅
 **Fecha**: 2026-04-07

@@ -3968,6 +3968,12 @@ curl -X POST /api/documents/{real_doc_id}/requeue
 - **Impacto en roadmap**: `app.py` queda más cerca de bootstrap puro; acceso a news items/insights consolidado en puertos.
 - **Riesgo**: Bajo-medio; mitigado replicando semántica de dedup, enqueue y marcado de indexación con nuevos métodos sync en repositorio.
 
+### Cambio: Eliminación de jobs legacy de insights
+- **Decisión**: Borrar jobs antiguos no usados para evitar mantenimiento de paths muertos y dependencias legacy.
+- **Alternativas consideradas**: Mantenerlos deshabilitados como fallback (rechazada por riesgo de reactivación accidental).
+- **Impacto en roadmap**: Reduce deuda residual en `app.py` y deja claro que el camino activo es el scheduler paralelo.
+- **Riesgo**: Bajo; no había referencias activas a esos jobs y se mantuvo intacto el flujo paralelo vigente.
+
 
 ### Cambio: Optimización Docker - requirements.txt en imagen base
 - **Decisión**: Mover instalación de dependencias Python de imagen app a imagen base para maximizar velocidad de rebuilds durante desarrollo.

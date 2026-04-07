@@ -1335,6 +1335,12 @@ OCR ✅ → Chunking ✅ → Indexing ✅ (rag_pipeline.index_chunk_records()) �
 - [x] Añadidos métodos sync de soporte en repositorio (`upsert_items_sync`, `enqueue_insight_sync`, `set_insight_indexed_in_qdrant_sync`).
 - [ ] Pendiente siguiente: inventariar legacy restante no crítico (`db`/stores de reportes-notificaciones) para moverlo a servicios/routers dedicados.
 
+### ✅ Actualización 2026-04-07 — Eliminación jobs legacy insights
+- [x] Eliminados `run_insights_queue_job` y `run_news_item_insights_queue_job` (no usados).
+- [x] Removidos `document_insights_store` y `ProcessingQueueStore` de `app.py`.
+- [x] Se mantiene único flujo activo: `run_news_item_insights_queue_job_parallel`.
+- [ ] Pendiente siguiente: migrar stores legacy de reportes/notificaciones a servicios/repositories para cierre final de bootstrap.
+
 
 ### ✅ Actualización 2026-04-07 — Optimización Docker layers
 - [x] Movido requirements.txt de imagen app → imagen base (CPU y CUDA)

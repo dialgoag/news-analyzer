@@ -38,8 +38,6 @@ from database import (
     daily_report_store,
     weekly_report_store,
     notification_store,
-    document_insights_store,
-    ProcessingQueueStore,
     UserRole,
 )
 from auth_models import (
@@ -321,9 +319,6 @@ def set_log_level(level: str):
             logger_obj.setLevel(numeric_level)
     
     logger.info(f"✅ Log level changed to {level} for all loggers")
-
-# Initialize processing queue store for event-driven task management
-processing_queue_store = ProcessingQueueStore()
 
 # Initialize Repositories (Hexagonal Architecture - REQ-021 Fase 5)
 # These will gradually replace direct database.py access
@@ -2023,113 +2018,6 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
             logger.info(f"   GPU memory after cleanup: {allocated:.2f}GB")
 
         logger.info("✅ Memory cleanup completed")
-
-
-def run_insights_queue_job():
-    """Process one document from the insights queue (LLM report per file). Retry with backoff on 429."""
-    if not INSIGHTS_QUEUE_ENABLED or not rag_pipeline or not qdrant_connector:
-        return
-    import insights_pipeline_control as _ipc
-    if _ipc.is_generation_paused():
-        return
-    pending = document_insights_store.get_next_pending(limit=1)
-    if not pending:
-        return
-    row = pending[0]
-    document_id = row["document_id"]
-    filename = row["filename"]
-    document_insights_store.set_status(document_id, document_insights_store.STATUS_GENERATING)
-    try:
-        chunks = qdrant_connector.get_chunks_by_document_ids([document_id], max_chunks=500)
-        if not chunks:
-            document_insights_store.set_status(document_id, document_insights_store.STATUS_ERROR, error_message="No chunks")
-            return
-        by_doc = {}
-        for c in chunks:
-            fid = c.get("document_id", "")
-            if fid not in by_doc:
-                by_doc[fid] = []
-            by_doc[fid].append(c.get("text", ""))
-        context = "\n\n".join(by_doc.get(document_id, []))
-        if len(context) > 80000:
-            context = context[:80000] + "\n\n[... truncado ...]"
-        for attempt in range(INSIGHTS_MAX_RETRIES):
-            try:
-                content, _ = generate_insights_for_queue(context, filename)
-                document_insights_store.set_status(document_id, document_insights_store.STATUS_DONE, content=content)
-                logger.info(f"Insights generated for {filename}")
-                return
-            except requests.exceptions.HTTPError as e:
-                if e.response is not None and e.response.status_code == 429:
-                    wait = INSIGHTS_THROTTLE_SECONDS * (2 ** attempt)
-                    logger.warning(f"Insights 429 for {filename}, waiting {wait}s (attempt {attempt + 1}/{INSIGHTS_MAX_RETRIES})")
-                    time.sleep(wait)
-                else:
-                    raise
-        document_insights_store.set_status(document_id, document_insights_store.STATUS_ERROR, error_message="Max retries (429)")
-    except Exception as e:
-        logger.error(f"Insights generation failed for {filename}: {e}", exc_info=True)
-        document_insights_store.set_status(document_id, document_insights_store.STATUS_ERROR, error_message=str(e))
-
-
-def run_news_item_insights_queue_job():
-    """Process one news item from the insights queue (LLM report per noticia). Retry with backoff on 429."""
-    if not INSIGHTS_QUEUE_ENABLED or not rag_pipeline or not qdrant_connector:
-        return
-    import insights_pipeline_control as _ipc
-    if _ipc.is_generation_paused():
-        return
-    row = news_item_repository.get_next_pending_insight_sync()
-    if not row:
-        return
-    news_item_id = row["news_item_id"]
-    document_id = row["document_id"]
-    filename = row["filename"]
-    title = row.get("title") or ""
-    
-    # DEDUP: Check text_hash before calling GPT
-    text_hash = row.get("text_hash")
-    if text_hash:
-        existing = news_item_repository.get_done_insight_by_text_hash_sync(text_hash)
-        if existing and existing.get("content") and existing.get("news_item_id") != news_item_id:
-            news_item_repository.set_insight_status_sync(
-                news_item_id, InsightStatus.DONE,
-                content=existing["content"], llm_source=existing.get("llm_source")
-            )
-            logger.info(f"♻️ Reused insight via text_hash for {news_item_id} ({title}) (saved GPT call)")
-            return
-    
-    news_item_repository.set_insight_status_sync(news_item_id, InsightStatus.GENERATING)
-    try:
-        chunks = qdrant_connector.get_chunks_by_news_item_ids([news_item_id], max_chunks=500)
-        if not chunks:
-            news_item_repository.set_insight_status_sync(news_item_id, InsightStatus.ERROR, error_message="No chunks")
-            return
-        texts = [c.get("text", "") for c in chunks if c.get("text")]
-        context = "\n\n".join(texts)
-        if len(context) > 80000:
-            context = context[:80000] + "\n\n[... truncado ...]"
-        label = f"{filename} — {title}".strip(" —")
-        for attempt in range(INSIGHTS_MAX_RETRIES):
-            try:
-                content, llm_source = generate_insights_for_queue(context, label)
-                news_item_repository.set_insight_status_sync(news_item_id, InsightStatus.DONE, content=content, llm_source=llm_source)
-                logger.info(f"News item insights generated for {news_item_id} ({title}) via {llm_source}")
-                return
-            except requests.exceptions.HTTPError as e:
-                if e.response is not None and e.response.status_code == 429:
-                    wait = INSIGHTS_THROTTLE_SECONDS * (2 ** attempt)
-                    logger.warning(
-                        f"News item insights 429 for {news_item_id}, waiting {wait}s "
-                        f"(attempt {attempt + 1}/{INSIGHTS_MAX_RETRIES})"
-                    )
-                    time.sleep(wait)
-                else:
-                    raise
-        news_item_repository.set_insight_status_sync(news_item_id, InsightStatus.ERROR, error_message="Max retries (429)")
-    except Exception as e:
-        logger.error(f"News item insights generation failed for {news_item_id}: {e}", exc_info=True)
-        news_item_repository.set_insight_status_sync(news_item_id, InsightStatus.ERROR, error_message=str(e))
 
 
 async def _insights_worker_task(
