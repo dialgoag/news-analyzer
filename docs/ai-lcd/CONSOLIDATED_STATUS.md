@@ -105,6 +105,26 @@
 
 ---
 
+### 137. Dashboard: Auto-Refresh Global con Selector de Intervalo ✅
+**Fecha**: 2026-04-07  
+**Ubicación**: `app/frontend/src/components/PipelineDashboard.jsx`, `.css`
+
+**Problema**: Auto-refresh fijo cada 20s sin control del usuario, botones individuales de refresh fragmentados
+
+**Solución**: 
+- Selector de intervalo global: Pausado, 5s, 10s, 20s, 1min, 5min
+- Botón "Refrescar ahora" para refresh manual inmediato
+- Persistencia en localStorage para recordar preferencia
+- Eliminar botón individual de Workers (refresh ahora es global)
+
+**Impacto**: Usuario controla frecuencia de actualización, mejor UX para monitoreo
+
+**⚠️ NO rompe**: fetchPipelineData sigue igual, solo control de intervalo
+
+**Verificación**: [x] Dropdown funcional, [x] Intervalos correctos, [x] localStorage
+
+---
+
 ### 132. Dashboard Final: Eliminar panel Workers Stuck ✅
 **Fecha**: 2026-04-07  
 **Ubicación**: `app/frontend/src/components/PipelineDashboard.jsx`

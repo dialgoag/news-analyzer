@@ -19,6 +19,24 @@ import KPIsInline from './dashboard/KPIsInline';
 import PipelineStatusTable from './dashboard/PipelineStatusTable';
 import './PipelineDashboard.css';
 
+const REFRESH_INTERVALS = [
+  { value: 0, label: 'Pausado' },
+  { value: 5000, label: '5s' },
+  { value: 10000, label: '10s' },
+  { value: 20000, label: '20s' },
+  { value: 60000, label: '1min' },
+  { value: 300000, label: '5min' }
+];
+
+const getStoredRefreshInterval = () => {
+  try {
+    const stored = localStorage.getItem('dashboardRefreshInterval');
+    return stored ? parseInt(stored, 10) : 20000;
+  } catch {
+    return 20000;
+  }
+};
+
 export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = false }) {
   const [data, setData] = useState(null);
   const [documents, setDocuments] = useState([]); // NEW: Lista de documentos individuales
@@ -30,6 +48,7 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
   const [analysisData, setAnalysisData] = useState(null);
   const [workerStats, setWorkerStats] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(getStoredRefreshInterval);
 
   const fetchPipelineData = useCallback(async () => {
     if (!token) return;
@@ -105,11 +124,24 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
     fetchPipelineData();
   }, [fetchPipelineData]);
 
+  const handleRefreshIntervalChange = useCallback((e) => {
+    const newInterval = parseInt(e.target.value, 10);
+    setRefreshInterval(newInterval);
+    try {
+      localStorage.setItem('dashboardRefreshInterval', newInterval.toString());
+    } catch (err) {
+      console.warn('Could not save refresh interval to localStorage:', err);
+    }
+  }, []);
+
   useEffect(() => {
     fetchPipelineData();
-    const interval = setInterval(fetchPipelineData, 20000);
-    return () => clearInterval(interval);
-  }, [fetchPipelineData, refreshTrigger]);
+    
+    if (refreshInterval > 0) {
+      const interval = setInterval(fetchPipelineData, refreshInterval);
+      return () => clearInterval(interval);
+    }
+  }, [fetchPipelineData, refreshTrigger, refreshInterval]);
 
   if (loading && !data) {
     return <div className="pipeline-container"><p>Loading pipeline data...</p></div>;
@@ -180,6 +212,35 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
   return (
     <DashboardProvider>
       <div className="pipeline-container pipeline-container--compact">
+        {/* Auto-refresh control bar */}
+        <div className="dashboard-header">
+          <h2 className="dashboard-title">Dashboard Pipeline</h2>
+          <div className="refresh-controls">
+            <ClockIcon className="refresh-icon" />
+            <select 
+              value={refreshInterval}
+              onChange={handleRefreshIntervalChange}
+              className="refresh-interval-select"
+              aria-label="Intervalo de auto-refresh"
+            >
+              {REFRESH_INTERVALS.map(interval => (
+                <option key={interval.value} value={interval.value}>
+                  {interval.label}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="refresh-now-button"
+              aria-label="Refrescar ahora"
+            >
+              <ArrowPathIcon className={`refresh-icon ${refreshing ? 'spinning' : ''}`} />
+              Refrescar
+            </button>
+          </div>
+        </div>
+        
         {error && (
           <div
             className="error-banner pipeline-dashboard-error-banner"
@@ -193,7 +254,7 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
               flexShrink: 0
             }}
           >
-            ⚠️ {error} — mostrando últimos datos (refresh 20s)
+            ⚠️ {error} — mostrando últimos datos
           </div>
         )}
         
@@ -267,15 +328,6 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
                   }
                 </span>
               </div>
-              <button
-                className={`refresh-button-inline ${refreshing ? 'refreshing' : ''}`}
-                onClick={handleRefresh}
-                disabled={refreshing}
-                aria-label="Refresh workers"
-              >
-                <ArrowPathIcon className="refresh-icon" />
-                {refreshing ? 'Actualizando...' : 'Refrescar'}
-              </button>
             </div>
           </CollapsibleSection>
           
