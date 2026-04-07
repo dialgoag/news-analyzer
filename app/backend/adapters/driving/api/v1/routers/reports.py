@@ -12,8 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 
 import app as app_module
-from database import daily_report_store, weekly_report_store
 from middleware import CurrentUser, get_current_user, require_admin
+from adapters.driving.api.v1.dependencies import ReportRepositoryDep
 
 from adapters.driving.api.v1.schemas.report_schemas import (
     DailyReportDetailResponse,
@@ -29,11 +29,12 @@ router = APIRouter()
 
 @router.get("/daily", response_model=DailyReportsListResponse)
 async def list_daily_reports(
+    report_repository: ReportRepositoryDep,
     limit: int = 100,
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """List daily reports (report_date, created_at, updated_at). All authenticated users."""
-    reports = daily_report_store.get_all(limit=limit)
+    reports = report_repository.list_daily_sync(limit=limit)
     result = []
     for r in reports:
         report_date = r["report_date"]
@@ -60,10 +61,11 @@ async def list_daily_reports(
 @router.get("/daily/{report_date}", response_model=DailyReportDetailResponse)
 async def get_daily_report(
     report_date: str,
+    report_repository: ReportRepositoryDep,
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """Get full content of a daily report by date (YYYY-MM-DD)."""
-    report = daily_report_store.get_by_date(report_date)
+    report = report_repository.get_daily_by_date_sync(report_date)
     if not report:
         raise HTTPException(status_code=404, detail=f"No report for date {report_date}")
     return {
@@ -77,10 +79,11 @@ async def get_daily_report(
 @router.get("/daily/{report_date}/download", response_class=PlainTextResponse)
 async def download_daily_report(
     report_date: str,
+    report_repository: ReportRepositoryDep,
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """Download daily report as plain text/markdown."""
-    report = daily_report_store.get_by_date(report_date)
+    report = report_repository.get_daily_by_date_sync(report_date)
     if not report:
         raise HTTPException(status_code=404, detail=f"No report for date {report_date}")
     return PlainTextResponse(
@@ -109,11 +112,12 @@ async def trigger_daily_report_generation(
 
 @router.get("/weekly", response_model=WeeklyReportsListResponse)
 async def list_weekly_reports(
+    report_repository: ReportRepositoryDep,
     limit: int = 52,
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """List weekly reports (week_start = Monday YYYY-MM-DD, created_at, updated_at). All authenticated users."""
-    reports = weekly_report_store.get_all(limit=limit)
+    reports = report_repository.list_weekly_sync(limit=limit)
     result = []
     for r in reports:
         week_start = r["week_start"]
@@ -140,10 +144,11 @@ async def list_weekly_reports(
 @router.get("/weekly/{week_start}", response_model=WeeklyReportDetailResponse)
 async def get_weekly_report(
     week_start: str,
+    report_repository: ReportRepositoryDep,
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """Get full content of a weekly report by week_start (Monday YYYY-MM-DD)."""
-    report = weekly_report_store.get_by_week_start(week_start)
+    report = report_repository.get_weekly_by_start_sync(week_start)
     if not report:
         raise HTTPException(status_code=404, detail=f"No report for week {week_start}")
     return {
@@ -157,10 +162,11 @@ async def get_weekly_report(
 @router.get("/weekly/{week_start}/download", response_class=PlainTextResponse)
 async def download_weekly_report(
     week_start: str,
+    report_repository: ReportRepositoryDep,
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """Download weekly report as markdown."""
-    report = weekly_report_store.get_by_week_start(week_start)
+    report = report_repository.get_weekly_by_start_sync(week_start)
     if not report:
         raise HTTPException(status_code=404, detail=f"No report for week {week_start}")
     return PlainTextResponse(

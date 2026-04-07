@@ -14,6 +14,9 @@ from adapters.driven.persistence.postgres import (
     PostgresDashboardReadRepository,
     PostgresDocumentRepository,
     PostgresNewsItemRepository,
+    PostgresNotificationRepository,
+    PostgresReportRepository,
+    PostgresUserRepository,
     PostgresWorkerRepository,
 )
 from adapters.driven.persistence.postgres.stage_timing_repository_impl import (
@@ -26,6 +29,9 @@ from core.ports.repositories.news_item_repository import NewsItemRepository
 from core.ports.repositories.worker_repository import WorkerRepository
 from core.ports.repositories.stage_timing_repository import StageTimingRepository
 from core.ports.repositories.dashboard_read_repository import DashboardReadRepository
+from core.ports.repositories.notification_repository import NotificationRepository
+from core.ports.repositories.report_repository import ReportRepository
+from core.ports.repositories.user_repository import UserRepository
 
 # Auth imports
 from middleware import get_current_user, require_admin, CurrentUser
@@ -79,6 +85,21 @@ def get_dashboard_read_repository() -> DashboardReadRepository:
     return PostgresDashboardReadRepository()
 
 
+@lru_cache()
+def get_report_repository() -> ReportRepository:
+    return PostgresReportRepository()
+
+
+@lru_cache()
+def get_notification_repository() -> NotificationRepository:
+    return PostgresNotificationRepository()
+
+
+@lru_cache()
+def get_user_repository() -> UserRepository:
+    return PostgresUserRepository()
+
+
 # Type aliases for dependency injection
 DocumentRepositoryDep = Annotated[DocumentRepository, Depends(get_document_repository)]
 NewsItemRepositoryDep = Annotated[NewsItemRepository, Depends(get_news_item_repository)]
@@ -89,6 +110,11 @@ AdminDataIntegrityServiceDep = Annotated[
     AdminDataIntegrityService, Depends(get_admin_data_integrity_service)
 ]
 DashboardReadRepositoryDep = Annotated[DashboardReadRepository, Depends(get_dashboard_read_repository)]
+ReportRepositoryDep = Annotated[ReportRepository, Depends(get_report_repository)]
+NotificationRepositoryDep = Annotated[
+    NotificationRepository, Depends(get_notification_repository)
+]
+UserRepositoryDep = Annotated[UserRepository, Depends(get_user_repository)]
 
 # Auth dependencies (re-export for convenience)
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
