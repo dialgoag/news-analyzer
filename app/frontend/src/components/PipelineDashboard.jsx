@@ -6,7 +6,8 @@ import {
   ClockIcon,
   CircleStackIcon,
   MapIcon,
-  ChartBarIcon
+  ChartBarIcon,
+  UsersIcon
 } from '@heroicons/react/24/outline';
 import { DashboardProvider } from './hooks/useDashboardFilters.jsx';
 import { API_TIMEOUT_MS } from '../config/apiConfig';
@@ -20,7 +21,6 @@ import WorkerLoadCard from './dashboard/WorkerLoadCard';
 import PipelineSummaryCard from './dashboard/PipelineSummaryCard';
 import KPIsInline from './dashboard/KPIsInline';
 import PipelineStatusTable from './dashboard/PipelineStatusTable';
-import WorkersErrorsInline from './dashboard/WorkersErrorsInline';
 import './PipelineDashboard.css';
 
 export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = false }) {
@@ -33,6 +33,7 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
   // New states for compact components
   const [analysisData, setAnalysisData] = useState(null);
   const [workerStats, setWorkerStats] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const fetchPipelineData = useCallback(async () => {
     if (!token) return;
@@ -97,8 +98,14 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
       setError(err.message || 'Error de conexión');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [API_URL, token]);
+
+  const handleRefresh = useCallback(() => {
+    setRefreshing(true);
+    fetchPipelineData();
+  }, [fetchPipelineData]);
 
   useEffect(() => {
     fetchPipelineData();
@@ -206,12 +213,46 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
           />
         )}
         
-        {/* NEW: Workers + Errors Inline */}
-        <WorkersErrorsInline 
-          workerStats={workerStats}
-          errorGroups={errorGroups}
-          onRefresh={fetchPipelineData}
-        />
+        {/* NEW: Workers Status */}
+        <div className="workers-inline-container">
+          <div className="mini-widget workers-widget">
+            <div className="mini-widget-header">
+              <UsersIcon className="widget-icon" aria-hidden="true" />
+              <h4>Workers</h4>
+              <button
+                className={`refresh-button ${refreshing ? 'refreshing' : ''}`}
+                onClick={handleRefresh}
+                disabled={refreshing}
+                aria-label="Refresh workers"
+              >
+                <ArrowPathIcon className="refresh-icon" />
+              </button>
+            </div>
+            <div className="mini-widget-content">
+              <div className="worker-summary">
+                <div className="worker-badge worker-badge--active">
+                  <span className="badge-dot"></span>
+                  {workerStats?.active || 0} activos
+                </div>
+                <div className="worker-badge worker-badge--idle">
+                  <span className="badge-dot"></span>
+                  {workerStats?.idle || 0} idle
+                </div>
+              </div>
+              <div className="utilization-bar">
+                <div className="utilization-bar-track">
+                  <div 
+                    className="utilization-bar-fill"
+                    style={{ width: `${workerStats ? Math.round((workerStats.active / (workerStats.active + workerStats.idle)) * 100) : 0}%` }}
+                  />
+                </div>
+                <span className="utilization-label">
+                  {workerStats ? Math.round((workerStats.active / (workerStats.active + workerStats.idle)) * 100) : 0}% utilización
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
         
         {/* Full Error Panel (always visible but collapsible) */}
         <CollapsibleSection 
