@@ -198,38 +198,45 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
           </div>
         )}
         
-        {/* NEW: Compact KPIs at top */}
-        <KPIsInline stats={kpiStats} />
+        {/* KPIs Section - Collapsible */}
+        <CollapsibleSection 
+          title="Resumen Pipeline" 
+          icon={ChartBarIcon}
+          priority="high"
+          defaultCollapsed={false}
+        >
+          <KPIsInline stats={kpiStats} />
+        </CollapsibleSection>
         
-        {/* NEW: Compact Pipeline Table */}
+        {/* Pipeline Status Table - Collapsible */}
         {analysisData?.pipeline?.stages && (
-          <PipelineStatusTable 
-            stages={analysisData.pipeline.stages}
-            isAdmin={isAdmin}
-            onPauseToggle={(stageKey, paused) => {
-              console.log('Pause toggle:', stageKey, paused);
-              // TODO: Implement pause toggle API call
-            }}
-          />
+          <CollapsibleSection 
+            title="Estado del Pipeline" 
+            icon={ArrowPathIcon}
+            priority="high"
+            defaultCollapsed={false}
+          >
+            <PipelineStatusTable 
+              stages={analysisData.pipeline.stages}
+              isAdmin={isAdmin}
+              onPauseToggle={(stageKey, paused) => {
+                console.log('Pause toggle:', stageKey, paused);
+                // TODO: Implement pause toggle API call
+              }}
+            />
+          </CollapsibleSection>
         )}
         
-        {/* NEW: Workers + Errors side-by-side */}
+        {/* Workers + Errors side-by-side - Both Collapsible */}
         <div className="workers-errors-row">
-          {/* Workers Widget */}
-          <div className="mini-widget workers-widget">
-            <div className="mini-widget-header">
-              <UsersIcon className="widget-icon" aria-hidden="true" />
-              <h4>Workers</h4>
-              <button
-                className={`refresh-button ${refreshing ? 'refreshing' : ''}`}
-                onClick={handleRefresh}
-                disabled={refreshing}
-                aria-label="Refresh workers"
-              >
-                <ArrowPathIcon className="refresh-icon" />
-              </button>
-            </div>
-            <div className="mini-widget-content">
+          {/* Workers Section - Collapsible */}
+          <CollapsibleSection 
+            title="Workers" 
+            icon={UsersIcon}
+            priority="high"
+            defaultCollapsed={false}
+          >
+            <div className="workers-widget-content">
               <div className="worker-summary">
                 <div className="worker-badge worker-badge--active">
                   <span className="badge-dot"></span>
@@ -251,24 +258,38 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
                   {workerStats ? Math.round((workerStats.active / (workerStats.active + workerStats.idle)) * 100) : 0}% utilización
                 </span>
               </div>
+              <button
+                className={`refresh-button-inline ${refreshing ? 'refreshing' : ''}`}
+                onClick={handleRefresh}
+                disabled={refreshing}
+                aria-label="Refresh workers"
+              >
+                <ArrowPathIcon className="refresh-icon" />
+                {refreshing ? 'Actualizando...' : 'Refrescar'}
+              </button>
             </div>
-          </div>
+          </CollapsibleSection>
           
-          {/* Error Panel (compact version in same row) */}
-          <div className="error-panel-compact">
-            <CollapsibleSection 
-              title="Análisis de Errores" 
-              icon={ExclamationTriangleIcon} 
-              priority="high"
-              defaultCollapsed={false}
-            >
-              <ErrorAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
-            </CollapsibleSection>
-          </div>
+          {/* Error Panel - Already Collapsible */}
+          <CollapsibleSection 
+            title="Análisis de Errores" 
+            icon={ExclamationTriangleIcon} 
+            priority="high"
+            defaultCollapsed={false}
+          >
+            <ErrorAnalysisPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} />
+          </CollapsibleSection>
         </div>
         
-        {/* Coordenadas Paralelas (improved) */}
-        <ParallelPipelineCoordinates data={parallelData} documents={documents} />
+        {/* Coordenadas Paralelas - Collapsible */}
+        <CollapsibleSection 
+          title="Flujo Pipeline: Documento → Noticias → Insights" 
+          icon={MapIcon}
+          priority="normal"
+          defaultCollapsed={false}
+        >
+          <ParallelPipelineCoordinates data={parallelData} documents={documents} />
+        </CollapsibleSection>
         
         {/* OLD panels as collapsible fallback */}
         <div className="pipeline-dashboard-aux pipeline-dashboard-aux--collapsed">
