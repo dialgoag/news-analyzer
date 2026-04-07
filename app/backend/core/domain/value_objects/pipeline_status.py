@@ -314,19 +314,25 @@ class PipelineStatus:
             return True
         if self._raw_status:
             # Insights and workers have their own terminal states
-            return self._raw_status in ("done", "completed", "error")
+            return self._raw_status in (
+                "done",
+                "completed",
+                "error",
+                "insights_done",
+                "insights_error",
+            )
         return False
     
     def is_error(self) -> bool:
         """Check if status represents an error."""
         full = self.full_status()
-        return full == "error"
+        return full in ("error", "insights_error")
     
     def is_processing(self) -> bool:
         """Check if status represents active processing."""
         if self.state == StateEnum.PROCESSING:
             return True
-        if self._raw_status in ("generating", "started", "assigned"):
+        if self._raw_status in ("generating", "insights_generating", "started", "assigned"):
             return True
         return False
     

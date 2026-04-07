@@ -7,7 +7,7 @@
 > **📋 ÚLTIMO**: Fix #119 — Docker backend CPU como usuario no-root ✅.
 
 **Última actualización**: 2026-04-07  
-**Versión**: 3.0.19 (routers v2 sin stores legacy directos)
+**Versión**: 3.0.20 (bloque docs/workers/news-items consolidado)
 
 ---
 
@@ -142,6 +142,7 @@ Ver fuente única de detalles en `PENDING_BACKLOG.md` (§ Prioridad Alta, PEND-0
      `reports.py` → `ReportRepository`,
      `notifications.py` → `NotificationRepository`,
      `auth.py` → `UserRepository`.
+   - [x] `app.py` despublicó rutas duplicadas `/api/auth/*`, `/api/reports/*`, `/api/notifications/*`; esos paths quedan solo en routers v2.
 
 4. **Eliminar cascadas en stage timing / fuentes derivadas** ✅ (2026-04-06)  
    - `StageTimingRepository.delete_for_document_sync` + borrado coordinado en insights/news items al eliminar documentos.  

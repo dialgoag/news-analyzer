@@ -16,17 +16,13 @@ import traceback
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, Query
 from fastapi.responses import FileResponse, JSONResponse
 
-from database import (
-    document_insights_store,
-    news_item_insights_store,
-    news_item_store,
-)
 from file_ingestion_service import resolve_file_path, check_duplicate, compute_sha256, ingest_from_upload
 from middleware import CurrentUser, get_current_user, require_admin, require_upload_permission, require_delete_permission
 from pipeline_states import DocStatus, Stage
+from adapters.driving.api.v1.utils.ingestion_policy import evaluate_document, legacy_block_detail
 
 from adapters.driving.api.v1.schemas.document_schemas import (
     DocumentMetadata,
@@ -107,9 +103,8 @@ async def list_documents(
                 insights_progress=None,
             )
         doc_ids = list(by_id.keys())
-        item_counts = news_item_store.get_counts_by_document_ids(doc_ids) if doc_ids else {}
-        item_progress = news_item_insights_store.get_progress_by_document_ids(doc_ids) if doc_ids else {}
-        legacy_map = document_insights_store.get_status_by_document_ids(doc_ids) if doc_ids else {}
+        item_counts = app_module.news_item_repository.get_counts_by_document_ids_sync(doc_ids) if doc_ids else {}
+        item_progress = app_module.news_item_repository.get_progress_by_document_ids_sync(doc_ids) if doc_ids else {}
 
         total_units = 0
         done_units = 0
@@ -142,12 +137,8 @@ async def list_documents(
                     total_units += total_items
                     done_units += min(done, total_items)
             else:
-                info = legacy_map.get(doc_id, {})
-                meta.insights_status = info.get("status")
-                meta.insights_progress = info.get("progress", "0/1")
-                if meta.status == DocStatus.INDEXING_DONE:
-                    total_units += 1
-                    done_units += 1 if meta.insights_status == document_insights_store.STATUS_DONE else 0
+                meta.insights_status = None
+                meta.insights_progress = "0/0"
         docs = list(by_id.values())
         docs.sort(key=lambda x: x.upload_date or "", reverse=True)
         total_indexed = total_units
@@ -181,9 +172,9 @@ async def get_documents_status():
 
         doc_ids = [r["document_id"] for r in rows]
 
-        item_counts = news_item_store.get_counts_by_document_ids(doc_ids) if doc_ids else {}
+        item_counts = app_module.news_item_repository.get_counts_by_document_ids_sync(doc_ids) if doc_ids else {}
 
-        item_progress = news_item_insights_store.get_progress_by_document_ids(doc_ids) if doc_ids else {}
+        item_progress = app_module.news_item_repository.get_progress_by_document_ids_sync(doc_ids) if doc_ids else {}
 
         result = []
         for r in rows:
@@ -226,10 +217,17 @@ async def get_document_insights(
     _current_user: CurrentUser = Depends(get_current_user),
 ):
     """Legacy: insights por documento (reporte por archivo). Para PDFs multi-noticia usar /news-items."""
-    row = document_insights_store.get_by_document_id(document_id)
-    if not row or row.get("status") != document_insights_store.STATUS_DONE:
+    import app as app_module
+
+    row = app_module.news_item_repository.get_document_insight_summary_sync(document_id)
+    if not row:
         raise HTTPException(status_code=404, detail="Insights not available for this document")
-    return {"document_id": document_id, "filename": row.get("filename", ""), "content": row.get("content") or ""}
+    doc = app_module.document_repository.get_by_id_sync(document_id)
+    return {
+        "document_id": document_id,
+        "filename": (doc or {}).get("filename", ""),
+        "content": row.get("content") or "",
+    }
 
 
 @router.get("/{document_id}/segmentation-diagnostic")
@@ -247,6 +245,14 @@ async def get_segmentation_diagnostic(
         doc = app_module.document_repository.get_by_id_sync(document_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
+        legacy_decision = evaluate_document(doc)
+        if legacy_decision.is_legacy and not force_legacy:
+            msg = legacy_block_detail(legacy_decision)
+            logger.warning(f"⛔ Requeue bloqueado para {document_id}: {msg}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"{msg} Verifica el archivo y vuelve a llamar con force_legacy=true si procede.",
+            )
 
         ocr_text = doc.get("ocr_text")
         if not ocr_text:
@@ -254,7 +260,7 @@ async def get_segmentation_diagnostic(
 
         items = app_module.segment_news_items_from_text(ocr_text)
 
-        stored_items = news_item_store.list_by_document_id(document_id)
+        stored_items = app_module.news_item_repository.list_by_document_id_sync(document_id)
 
         lines = ocr_text.split("\n")
         total_lines = len(lines)
@@ -327,8 +333,9 @@ async def list_news_items_for_document(
     _current_user: CurrentUser = Depends(get_current_user),
 ):
     """List news items detected for a document, with insights status per item."""
-    items = news_item_store.list_by_document_id(document_id)
-    insights = news_item_insights_store.list_by_document_id(document_id)
+    import app as app_module
+    items = app_module.news_item_repository.list_by_document_id_sync(document_id)
+    insights = app_module.news_item_repository.list_insights_by_document_id_sync(document_id)
     insights_by_id = {r["news_item_id"]: r for r in insights}
     out = []
     for it in items:
@@ -491,7 +498,11 @@ async def upload_document(
 @router.post("/{document_id}/requeue")
 async def requeue_document(
     document_id: str,
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user),
+    force_legacy: bool = Query(
+        False,
+        description="Permite reintentar documentos legacy (source upload o antigüedad >= cutoff) después de validarlos manualmente.",
+    ),
 ):
     """
     Requeue a document for reprocessing (OCR + Chunking + Indexing).
@@ -530,11 +541,11 @@ async def requeue_document(
         logger.info(f"   ⚠️  Preserving existing news_items and insights (will match by text_hash)")
         
         # Get existing news items for logging
-        existing_items = news_item_store.list_by_document_id(document_id)
+        existing_items = app_module.news_item_repository.list_by_document_id_sync(document_id)
         logger.info(f"   📰 Existing news items: {len(existing_items)} (will be preserved)")
         
         # Get existing insights for logging
-        existing_insights = news_item_insights_store.get_progress_by_document_ids([document_id])
+        existing_insights = app_module.news_item_repository.get_progress_by_document_ids_sync([document_id])
         insight_stats = existing_insights.get(document_id, {})
         logger.info(f"   💡 Existing insights: {insight_stats.get('done', 0)} done, {insight_stats.get('pending', 0)} pending")
         
@@ -562,7 +573,7 @@ async def requeue_document(
             app_module.stage_timing_repository.record_stage_start_sync(
                 document_id=document_id,
                 stage='indexing',
-                metadata={'source': 'requeue', 'mode': 'indexing_only'}
+                metadata={'source': 'requeue', 'mode': 'indexing_only', 'force_legacy': force_legacy}
             )
             await app_module.worker_repository.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
             logger.info(f"   ✓ Retry indexing only (ocr_text exists)")
@@ -578,7 +589,7 @@ async def requeue_document(
             app_module.stage_timing_repository.record_stage_start_sync(
                 document_id=document_id,
                 stage='ocr',
-                metadata={'source': 'requeue'}
+                metadata={'source': 'requeue', 'force_legacy': force_legacy}
             )
             await app_module.document_repository.store_ocr_text(DocumentId(document_id), None)
             await app_module.document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
@@ -628,9 +639,8 @@ async def delete_document(
         app_module.qdrant_connector.delete_document(document_id)
         app_module.stage_timing_repository.delete_for_document_sync(document_id)
         app_module.document_repository.delete_sync(document_id)
-        document_insights_store.delete(document_id)
-        news_item_insights_store.delete_by_document_id(document_id)
-        news_item_store.delete_by_document_id(document_id)
+        app_module.news_item_repository.delete_insights_by_document_id_sync(document_id)
+        app_module.news_item_repository.delete_by_document_id_sync(document_id)
         logger.info(f"✅ Document deleted: {document_id}")
         return {"message": f"Document {document_id} deleted"}
     except Exception as e:

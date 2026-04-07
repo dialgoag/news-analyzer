@@ -182,7 +182,7 @@ class TestNewsItem:
         assert item.item_index == 0
         assert item.title == "Test Article"
         assert item.content == "Article content here"
-        assert item.insight_status.full_status() == "pending"
+        assert item.insight_status.full_status() == "insights_pending"
         assert item.text_hash is not None
     
     def test_text_hash_computed_from_content(self):
@@ -204,7 +204,7 @@ class TestNewsItem:
         item = NewsItem.create(doc_id, 0)
         item.queue_for_insights()
         
-        assert item.insight_status.full_status() == "queued"
+        assert item.insight_status.full_status() == "insights_queued"
     
     def test_start_generating_insights(self):
         """Test starting insights generation."""
@@ -213,7 +213,7 @@ class TestNewsItem:
         item.queue_for_insights()
         item.start_generating_insights()
         
-        assert item.insight_status.full_status() == "generating"
+        assert item.insight_status.full_status() == "insights_generating"
     
     def test_mark_insights_done(self):
         """Test marking insights as completed."""
@@ -236,7 +236,7 @@ class TestNewsItem:
         item = NewsItem.create(doc_id, 0)
         item.mark_insights_error("Generation failed")
         
-        assert item.insight_status.full_status() == "error"
+        assert item.insight_status.full_status() == "insights_error"
         assert item.error_message == "Generation failed"
         assert item.can_retry_insights()
     
@@ -251,7 +251,7 @@ class TestNewsItem:
         assert not item.is_indexed()
         
         item.start_indexing()
-        assert item.insight_status.full_status() == "indexing"
+        assert item.insight_status.full_status() == "insights_indexing"
         
         # Mark insights done AFTER indexing
         item.mark_insights_done("Generated insights", "openai")

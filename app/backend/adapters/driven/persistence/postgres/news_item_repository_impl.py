@@ -345,6 +345,292 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
             return total, linked
         finally:
             self.get_connection_pool().putconn(conn)
+
+    def get_counts_by_document_ids_sync(self, document_ids: Sequence[str]) -> dict:
+        if not document_ids:
+            return {}
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT document_id, COUNT(*) AS cnt
+                FROM news_items
+                WHERE document_id = ANY(%s)
+                GROUP BY document_id
+                """,
+                (list(document_ids),),
+            )
+            rows = cursor.fetchall()
+            return {
+                row["document_id"] if isinstance(row, dict) else row[0]:
+                int((row["cnt"] if isinstance(row, dict) else row[1]) or 0)
+                for row in rows
+            }
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def get_progress_by_document_ids_sync(self, document_ids: Sequence[str]) -> dict:
+        if not document_ids:
+            return {}
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    document_id,
+                    COUNT(*) FILTER (WHERE status = 'insights_pending') AS pending,
+                    COUNT(*) FILTER (WHERE status = 'insights_queued') AS queued,
+                    COUNT(*) FILTER (WHERE status = 'insights_generating') AS generating,
+                    COUNT(*) FILTER (WHERE status = 'insights_indexing') AS indexing,
+                    COUNT(*) FILTER (WHERE status = 'insights_done') AS done,
+                    COUNT(*) FILTER (WHERE status = 'insights_error') AS error,
+                    COUNT(*) AS total
+                FROM news_item_insights
+                WHERE document_id = ANY(%s)
+                GROUP BY document_id
+                """,
+                (list(document_ids),),
+            )
+            rows = cursor.fetchall()
+            result = {}
+            for row in (self.map_row_to_dict(cursor, r) if isinstance(r, tuple) else r for r in rows):
+                result[row["document_id"]] = {
+                    "pending": int(row.get("pending") or 0),
+                    "queued": int(row.get("queued") or 0),
+                    "generating": int(row.get("generating") or 0),
+                    "indexing": int(row.get("indexing") or 0),
+                    "done": int(row.get("done") or 0),
+                    "error": int(row.get("error") or 0),
+                    "total": int(row.get("total") or 0),
+                }
+            return result
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def list_by_document_id_sync(self, document_id: str) -> List[dict]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT news_item_id, document_id, filename, item_index, title, status, text_hash, created_at, updated_at
+                FROM news_items
+                WHERE document_id = %s
+                ORDER BY item_index ASC
+                """,
+                (document_id,),
+            )
+            rows = cursor.fetchall()
+            return [self.map_row_to_dict(cursor, r) if isinstance(r, tuple) else dict(r) for r in rows]
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def list_insights_by_document_id_sync(self, document_id: str) -> List[dict]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT news_item_id, document_id, filename, item_index, title, status, content, error_message,
+                       text_hash, llm_source, indexed_in_qdrant_at, created_at, updated_at
+                FROM news_item_insights
+                WHERE document_id = %s
+                ORDER BY item_index ASC
+                """,
+                (document_id,),
+            )
+            rows = cursor.fetchall()
+            return [self.map_row_to_dict(cursor, r) if isinstance(r, tuple) else dict(r) for r in rows]
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def list_insights_by_news_item_id_sync(self, news_item_id: str) -> List[dict]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT news_item_id, document_id, filename, item_index, title, status, content, error_message,
+                       text_hash, llm_source, indexed_in_qdrant_at, created_at, updated_at
+                FROM news_item_insights
+                WHERE news_item_id = %s
+                ORDER BY created_at DESC
+                """,
+                (news_item_id,),
+            )
+            rows = cursor.fetchall()
+            return [self.map_row_to_dict(cursor, r) if isinstance(r, tuple) else dict(r) for r in rows]
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def get_document_insight_summary_sync(self, document_id: str) -> Optional[dict]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT news_item_id, content
+                FROM news_item_insights
+                WHERE document_id = %s AND status = 'insights_done' AND content IS NOT NULL
+                ORDER BY item_index ASC
+                """,
+                (document_id,),
+            )
+            rows = cursor.fetchall()
+            if not rows:
+                return None
+            contents = []
+            for row in (self.map_row_to_dict(cursor, r) if isinstance(r, tuple) else r for r in rows):
+                c = (row.get("content") or "").strip()
+                if c:
+                    contents.append(c)
+            if not contents:
+                return None
+            return {
+                "document_id": document_id,
+                "status": "insights_done",
+                "content": "\n\n".join(contents),
+            }
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def list_active_insight_tasks_sync(self) -> List[dict]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT news_item_id, document_id, filename, title
+                FROM news_item_insights
+                WHERE status IN ('insights_generating', 'insights_indexing')
+                ORDER BY news_item_id
+                """
+            )
+            rows = cursor.fetchall()
+            return [self.map_row_to_dict(cursor, r) if isinstance(r, tuple) else dict(r) for r in rows]
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def count_pending_or_queued_insights_sync(self) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM news_item_insights
+                WHERE status IN ('insights_pending', 'insights_queued')
+                """
+            )
+            row = cursor.fetchone()
+            value = row["cnt"] if isinstance(row, dict) else row[0]
+            return int(value or 0)
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def count_ready_for_indexing_insights_sync(self) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM news_item_insights
+                WHERE status = 'insights_done'
+                  AND indexed_in_qdrant_at IS NULL
+                  AND content IS NOT NULL
+                """
+            )
+            row = cursor.fetchone()
+            value = row["cnt"] if isinstance(row, dict) else row[0]
+            return int(value or 0)
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def list_insight_errors_sync(self, news_item_ids: Optional[Sequence[str]] = None) -> List[dict]:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            if news_item_ids:
+                cursor.execute(
+                    """
+                    SELECT news_item_id, document_id, filename, title, error_message
+                    FROM news_item_insights
+                    WHERE status = 'insights_error'
+                      AND news_item_id = ANY(%s)
+                    ORDER BY news_item_id
+                    """,
+                    (list(news_item_ids),),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT news_item_id, document_id, filename, title, error_message
+                    FROM news_item_insights
+                    WHERE status = 'insights_error'
+                    ORDER BY news_item_id
+                    """
+                )
+            rows = cursor.fetchall()
+            return [self.map_row_to_dict(cursor, r) if isinstance(r, tuple) else dict(r) for r in rows]
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def set_insight_status_sync(
+        self,
+        news_item_id: str,
+        status: str,
+        content: Optional[str] = None,
+        error_message: Optional[str] = None,
+        llm_source: Optional[str] = None,
+    ) -> bool:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            updates = ["status = %s", "updated_at = NOW()"]
+            args: List[object] = [status]
+            if content is not None:
+                updates.append("content = %s")
+                args.append(content)
+            if error_message is not None:
+                updates.append("error_message = %s")
+                args.append(error_message)
+            if llm_source is not None:
+                updates.append("llm_source = %s")
+                args.append(llm_source)
+            args.append(news_item_id)
+            cursor.execute(
+                f"UPDATE news_item_insights SET {', '.join(updates)} WHERE news_item_id = %s",
+                tuple(args),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def delete_by_document_id_sync(self, document_id: str) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM news_items WHERE document_id = %s", (document_id,))
+            deleted = cursor.rowcount
+            conn.commit()
+            return deleted
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def delete_insights_by_document_id_sync(self, document_id: str) -> int:
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM news_item_insights WHERE document_id = %s", (document_id,))
+            deleted = cursor.rowcount
+            conn.commit()
+            return deleted
+        finally:
+            self.get_connection_pool().putconn(conn)
     
     # ========================================
     # PRIVATE: Mapping helpers

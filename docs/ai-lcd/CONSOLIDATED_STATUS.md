@@ -9,6 +9,39 @@
 
 ---
 
+### 124. Consolidación hexagonal de `documents/workers/news-items` + guardas legacy ✅
+**Fecha**: 2026-04-07  
+**Ubicación**:
+- `app/backend/adapters/driving/api/v1/routers/{documents,workers,news_items}.py`
+- `app/backend/adapters/driven/persistence/postgres/news_item_repository_impl.py`
+- `app/backend/core/ports/repositories/news_item_repository.py`
+- `app/backend/adapters/driving/api/v1/utils/ingestion_policy.py`
+- `app/backend/file_ingestion_service.py`
+
+**Problema**:
+- Quedaban lecturas/escrituras residuales por stores legacy en rutas de operación y retries que permitían reactivar documentos upload históricos sin control explícito.
+
+**Solución**:
+- Se completó la migración de routers a métodos sync de `NewsItemRepository`.
+- Se añadió política reusable de bloqueo para documentos legacy en `requeue/retry-errors` con override explícito (`force_legacy=true`).
+- Se reforzó la traza de ingestión upload con evento audit JSONL y metadatos de canal.
+
+**Impacto**:
+- Menor acoplamiento a `database.py` en rutas críticas de operación.
+- Mejor control operativo para evitar loops de retries sobre archivos legacy inválidos.
+
+**⚠️ NO rompe**:
+- Endpoints `/api/documents/*`, `/api/workers/*`, `/api/news-items/*` ✅
+- Estados canon `insights_*` en workers/retries ✅
+- Flujo de ingestión upload/inbox actual ✅
+
+**Verificación**:
+- [x] `python -m py_compile` sobre routers/repository/service/utils modificados
+- [x] `pytest app/backend/tests/unit/test_value_objects.py app/backend/tests/unit/test_entities.py -q` (54 passed)
+- [x] Backend healthy post-rebuild + smoke de rutas protegidas auth/reports/notifications (200 con token)
+
+---
+
 ### 123. Migración hexagonal de routers `reports`/`notifications`/`auth` ✅
 **Fecha**: 2026-04-07  
 **Ubicación**:

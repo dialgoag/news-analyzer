@@ -256,13 +256,13 @@ class TestInsightStatus:
         """Test creating insight status."""
         status = PipelineStatus.for_insight(InsightStatusEnum.GENERATING)
         
-        assert status.full_status() == "generating"
+        assert status.full_status() == "insights_generating"
         assert status.is_processing()
     
     def test_insight_from_string(self):
         """Test parsing insight status."""
-        status = PipelineStatus.from_string("generating", "insight")
-        assert status.full_status() == "generating"
+        status = PipelineStatus.from_string("insights_generating", "insight")
+        assert status.full_status() == "insights_generating"
     
     def test_insight_terminal(self):
         """Test insight terminal state."""

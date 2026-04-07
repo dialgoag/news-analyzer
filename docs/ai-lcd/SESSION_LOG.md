@@ -7,6 +7,22 @@
 
 ---
 
+## 2026-04-07 — Cierre de bloque pendiente docs/workers/news-items
+
+### Cambio: Routers `documents`, `workers`, `news_items` consolidados en `NewsItemRepository`
+- **Decisión**: Sustituir llamadas residuales a stores legacy por métodos sync de `news_item_repository` y normalizar estados `insights_*` en retries/workers.
+- **Alternativas consideradas**: Mantener fallback dual con stores legacy (rechazada por duplicidad y trazabilidad débil en la capa driving).
+- **Impacto en roadmap**: Reduce superficie legacy publicada y deja los routers de operaciones principales alineados al puerto hexagonal.
+- **Riesgo**: Medio-bajo; se incrementa cobertura de métodos sync en repositorio, mitigado con tests unitarios y smoke API posterior.
+
+### Cambio: Política explícita para retries de documentos legacy upload
+- **Decisión**: Añadir guardas reutilizables (`ingestion_policy.py`) para bloquear `requeue/retry-errors` en documentos legacy salvo `force_legacy=true`.
+- **Alternativas consideradas**: Bloqueo global sin override (rechazada por limitar remediaciones manuales).
+- **Impacto en roadmap**: Evita reactivar casos históricos inválidos y mejora control operativo de PEND-016.
+- **Riesgo**: Bajo; comportamiento por defecto más seguro, con bypass explícito para soporte.
+
+---
+
 ## 2026-04-07 — Cierre de stores legacy en routers v2
 
 ### Cambio: `reports`, `notifications`, `auth` migrados a puertos hexagonales

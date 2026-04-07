@@ -181,6 +181,72 @@ class NewsItemRepository(ABC):
         """
         pass
 
+    def get_counts_by_document_ids_sync(self, document_ids: Sequence[str]) -> dict:
+        """SYNC: return {document_id: news_items_count}."""
+        pass
+
+    def get_progress_by_document_ids_sync(self, document_ids: Sequence[str]) -> dict:
+        """
+        SYNC: return per-document insights progress counters.
+        Expected shape:
+        {document_id: {"pending":int,"queued":int,"generating":int,"indexing":int,"done":int,"error":int,"total":int}}
+        """
+        pass
+
+    def list_by_document_id_sync(self, document_id: str) -> List[dict]:
+        """SYNC: list news_items rows for a document."""
+        pass
+
+    def list_insights_by_document_id_sync(self, document_id: str) -> List[dict]:
+        """SYNC: list news_item_insights rows for a document."""
+        pass
+
+    def list_insights_by_news_item_id_sync(self, news_item_id: str) -> List[dict]:
+        """SYNC: list news_item_insights rows for a news_item_id."""
+        pass
+
+    def get_document_insight_summary_sync(self, document_id: str) -> Optional[dict]:
+        """
+        SYNC: aggregate done insights for a document.
+        Returns {"document_id","content","status"} or None.
+        """
+        pass
+
+    def list_active_insight_tasks_sync(self) -> List[dict]:
+        """SYNC: list insight tasks currently generating or indexing."""
+        pass
+
+    def count_pending_or_queued_insights_sync(self) -> int:
+        """SYNC: count insights in pending/queued."""
+        pass
+
+    def count_ready_for_indexing_insights_sync(self) -> int:
+        """SYNC: count done insights pending indexing in Qdrant."""
+        pass
+
+    def list_insight_errors_sync(self, news_item_ids: Optional[Sequence[str]] = None) -> List[dict]:
+        """SYNC: list insight rows in error, optionally filtered by IDs."""
+        pass
+
+    def set_insight_status_sync(
+        self,
+        news_item_id: str,
+        status: str,
+        content: Optional[str] = None,
+        error_message: Optional[str] = None,
+        llm_source: Optional[str] = None,
+    ) -> bool:
+        """SYNC: update status/content/error for a news_item_insights row."""
+        pass
+
+    def delete_by_document_id_sync(self, document_id: str) -> int:
+        """SYNC: delete news_items rows for a document."""
+        pass
+
+    def delete_insights_by_document_id_sync(self, document_id: str) -> int:
+        """SYNC: delete news_item_insights rows for a document."""
+        pass
+
     @abstractmethod
     async def count_insights_by_status(self) -> dict:
         """Return counts of news_item_insights grouped by status."""

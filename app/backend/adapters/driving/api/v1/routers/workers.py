@@ -11,7 +11,7 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 import app as app_module
-from database import news_item_insights_store
+from adapters.driving.api.v1.utils.ingestion_policy import evaluate_document, legacy_block_detail
 from middleware import CurrentUser, get_current_user, require_admin
 from pipeline_states import DocStatus, TaskType, WorkerStatus, Stage
 from core.domain.value_objects.document_id import DocumentId
@@ -37,9 +37,9 @@ async def get_workers_status(
         error_workers = await app_module.worker_repository.list_recent_errors_with_documents()
         pending_counts = await app_module.worker_repository.get_pending_task_counts()
         pending_counts = pending_counts or {}
-        active_insights_tasks = news_item_insights_store.list_active_tasks()
-        pending_counts["insights"] = news_item_insights_store.count_pending_or_queued()
-        pending_counts["indexing_insights"] = news_item_insights_store.count_ready_for_indexing()
+        active_insights_tasks = app_module.news_item_repository.list_active_insight_tasks_sync()
+        pending_counts["insights"] = app_module.news_item_repository.count_pending_or_queued_insights_sync()
+        pending_counts["indexing_insights"] = app_module.news_item_repository.count_ready_for_indexing_insights_sync()
         
         # Pool status - No hay generic_worker_pool, reportar en base a master_pipeline_scheduler
         # Todos los workers son ahora despachos individuales desde scheduler
@@ -389,6 +389,7 @@ async def retry_error_workers(
     except Exception:
         pass
     document_ids = body.get("document_ids") if isinstance(body, dict) else None
+    force_legacy = bool(body.get("force_legacy")) if isinstance(body, dict) else False
     try:
         # Separar IDs en documentos vs insights
         doc_ids = []
@@ -419,9 +420,9 @@ async def retry_error_workers(
         
         # Insights via store
         if insight_ids:
-            error_insights = news_item_insights_store.list_errors(insight_ids)
+            error_insights = app_module.news_item_repository.list_insight_errors_sync(insight_ids)
         elif retry_all:
-            error_insights = news_item_insights_store.list_errors()
+            error_insights = app_module.news_item_repository.list_insight_errors_sync()
         
         if not error_docs and not error_insights:
             return {
@@ -433,13 +434,18 @@ async def retry_error_workers(
         retried_count = 0
         retried_documents = []
         errors = []
+        skipped_legacy = []
         
         # Reintentar insights (reset a pending)
         for row in error_insights:
             news_item_id = row.get('news_item_id')
             filename = row.get('filename') or row.get('title') or news_item_id
             try:
-                news_item_insights_store.set_status(news_item_id, news_item_insights_store.STATUS_PENDING, error_message=None)
+                app_module.news_item_repository.set_insight_status_sync(
+                    news_item_id,
+                    "insights_pending",
+                    error_message=None,
+                )
                 retried_count += 1
                 retried_documents.append({"document_id": f"insight_{news_item_id}", "filename": filename})
                 logger.info(f"✅ Retried insight: {news_item_id} ({filename})")
@@ -457,6 +463,12 @@ async def retry_error_workers(
                 doc = app_module.document_repository.get_by_id_sync(document_id)
                 if not doc:
                     errors.append(f"Document {document_id} not found")
+                    continue
+                legacy_decision = evaluate_document(doc)
+                if legacy_decision.is_legacy and not force_legacy:
+                    reason = legacy_block_detail(legacy_decision)
+                    logger.warning(f"⛔ Retry-errors bloqueado para {document_id}: {reason}")
+                    skipped_legacy.append({"document_id": document_id, "reason": reason})
                     continue
                 
                 # Decidir qué etapa reintentar según processing_stage y ocr_text
@@ -476,7 +488,7 @@ async def retry_error_workers(
                     app_module.stage_timing_repository.record_stage_start_sync(
                         document_id=document_id,
                         stage='ocr',
-                        metadata={'source': 'retry-errors'}
+                        metadata={'source': 'retry-errors', 'force_legacy': force_legacy}
                     )
                     await app_module.document_repository.store_ocr_text(DocumentId(document_id), None)
                     await app_module.document_repository.mark_for_reprocessing(DocumentId(document_id), requested=True)
@@ -494,7 +506,7 @@ async def retry_error_workers(
                     app_module.stage_timing_repository.record_stage_start_sync(
                         document_id=document_id,
                         stage='chunking',
-                        metadata={'source': 'retry-errors'}
+                        metadata={'source': 'retry-errors', 'force_legacy': force_legacy}
                     )
                     await app_module.worker_repository.enqueue_task(document_id, filename, TaskType.CHUNKING, priority=10)
                     logger.info(f"   → Retry chunking (stage=chunking)")
@@ -510,7 +522,7 @@ async def retry_error_workers(
                     app_module.stage_timing_repository.record_stage_start_sync(
                         document_id=document_id,
                         stage='indexing',
-                        metadata={'source': 'retry-errors', 'mode': 'indexing_only'}
+                        metadata={'source': 'retry-errors', 'mode': 'indexing_only', 'force_legacy': force_legacy}
                     )
                     await app_module.worker_repository.enqueue_task(document_id, filename, TaskType.INDEXING, priority=10)
                     logger.info(f"   → Retry indexing only (ocr+chunking done)")
@@ -534,7 +546,9 @@ async def retry_error_workers(
             "message": f"Retried {retried_count} document(s) with errors",
             "retried_count": retried_count,
             "retried_documents": retried_documents,
-            "errors": errors if errors else None
+            "skipped_legacy_documents": skipped_legacy or None,
+            "errors": errors if errors else None,
+            "force_legacy_applied": force_legacy,
         }
         
     except Exception as e:

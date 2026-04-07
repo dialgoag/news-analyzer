@@ -12,6 +12,7 @@ filename but registered UUID as document_id.
 """
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -161,7 +162,7 @@ def _register_and_enqueue(
     stage_timing_repository.record_stage_start_sync(
         document_id=document_id,
         stage='upload',
-        metadata={'source': source, 'filename': filename}
+        metadata={'source': source, 'filename': filename, 'ingestion_channel': source}
     )
 
     if enqueue_ocr:
@@ -177,6 +178,42 @@ def _register_and_enqueue(
         f"(source={source}, hash={file_hash[:12]}...)"
     )
     return True
+
+
+def _ensure_upload_audit_trail(
+    *,
+    document_id: str,
+    filename: str,
+    upload_dir: str,
+    file_ext: str,
+    file_path: str,
+    source: str,
+) -> None:
+    """Create processed symlink + append audit event for uploads."""
+    processed_dir = os.path.join(upload_dir, "processed")
+    os.makedirs(processed_dir, exist_ok=True)
+    short_hash = document_id[:8]
+    processed_name = _processed_basename(filename, short_hash)
+    processed_path = os.path.join(processed_dir, processed_name)
+    if not os.path.exists(processed_path):
+        try:
+            os.symlink(file_path, processed_path)
+        except FileExistsError:
+            pass
+    audit_dir = os.path.join(upload_dir, "audit")
+    os.makedirs(audit_dir, exist_ok=True)
+    audit_path = os.path.join(audit_dir, "ingestion_events.jsonl")
+    event = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "event": "upload_ingest",
+        "document_id": document_id,
+        "filename": filename,
+        "storage_path": file_path,
+        "processed_entry": processed_path,
+        "source": source,
+    }
+    with open(audit_path, "a", encoding="utf-8") as audit_file:
+        audit_file.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
 def ingest_from_upload(
@@ -208,6 +245,15 @@ def ingest_from_upload(
 
     with open(file_path, "wb") as f:
         f.write(content)
+
+    _ensure_upload_audit_trail(
+        document_id=document_id,
+        filename=filename,
+        upload_dir=upload_dir,
+        file_ext=file_ext,
+        file_path=file_path,
+        source="upload",
+    )
 
     _register_and_enqueue(
         document_id=document_id,
