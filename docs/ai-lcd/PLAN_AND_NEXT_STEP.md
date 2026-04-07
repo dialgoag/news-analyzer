@@ -135,6 +135,15 @@ Ver fuente única de detalles en `PENDING_BACKLOG.md` (§ Prioridad Alta, PEND-0
    - Sustituir `document_status_store`, `news_item_store` y SQL sueltos por métodos de `DocumentRepository`, `StageTimingRepository`, `NewsItemRepository` y `WorkerRepository`.  
    - Objetivo: los routers solo orquestan, sin conexiones directas a la BD. (Ver **PEND-010** y **PEND-011**).
 
+3.1 **Cierre de legado API publicado (2026-04-07)** ✅  
+   - [x] `app.py` dejó de publicar `/api/legacy/dashboard/*` y `/api/legacy/workers/status`.  
+   - [ ] Migrar stores legacy restantes en routers v2:  
+     `documents.py` (`news_item_store`, `news_item_insights_store`, `document_insights_store`),  
+     `workers.py` (`news_item_insights_store`),  
+     `news_items.py` (`news_item_insights_store`),  
+     `reports.py` (`daily_report_store`, `weekly_report_store`),  
+     `notifications.py` (`notification_store`).
+
 4. **Eliminar cascadas en stage timing / fuentes derivadas** ✅ (2026-04-06)  
    - `StageTimingRepository.delete_for_document_sync` + borrado coordinado en insights/news items al eliminar documentos.  
    - Falta documentar el comportamiento final de auditoría en la guía operativa.
@@ -160,12 +169,13 @@ Ver fuente única de detalles en `PENDING_BACKLOG.md` (§ Prioridad Alta, PEND-0
 
 > Cada paso desencadena el siguiente; no avanzar con #2 hasta cerrar #1, etc. Este orden alimenta el roadmap de Fase 6 y asegura que la documentación refleje fielmente el estado real de la app. El ítem **7** puede avanzar en paralelo a migraciones admin/dashboard si hay capacidad; conviene cerrar **#3–5** antes de invertir fuerte en nuevos esquemas de reporte.
 
-8. **Estandarizar estados de `news_item_insights` al canon prefijado (`insights_*`)** — *pendiente, alta prioridad*  
+8. **Estandarizar estados de `news_item_insights` al canon prefijado (`insights_*`)** — *en progreso, alta prioridad*  
    **Contexto**: Hoy coexisten dos lenguajes de estado (document-level prefijado y news-level genérico), lo que aumenta ambigüedad en troubleshooting y visualización.  
    **Ejecución acordada**:
    - [ ] Parar app, migrar datos y código en una sola ventana de mantenimiento.
    - [ ] Cambiar escrituras de scheduler/worker/repositorios a estados canónicos `insights_*`.
-   - [ ] Actualizar lecturas de dashboard/queries para el nuevo canon.
+   - [x] Actualizar lecturas de dashboard/queries para el nuevo canon.
+   - [x] Legacy dashboard en `app.py` delegado a `DashboardMetricsService` (sin SQL directo nuevo para insights).
    - [ ] Verificar descenso de pendientes + aparición de `started/completed` en `worker_tasks`.
    - [ ] Limpiar estados legacy y consultas antiguas después de validar estabilidad.
 

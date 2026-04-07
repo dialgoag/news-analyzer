@@ -1,7 +1,7 @@
 # Backlog Pendiente - NewsAnalyzer-RAG
 
 > **Fuente única** de pendientes técnicos (mejoras, fixes menores).
-> **Última actualización**: 2026-04-06
+> **Última actualización**: 2026-04-07
 
 ---
 
@@ -21,6 +21,31 @@
 ---
 
 ## Prioridad: Alta
+
+### PEND-018: Estandarizar estados de Insights con prefijo de pipeline
+**Descripción**: `document_status` usa canon prefijado por etapa (`ocr_pending`, `indexing_done`, etc.), pero `news_item_insights.status` sigue con estados genéricos (`pending`, `queued`, `generating`, `done`, `error`). Esto complica trazabilidad, logs y representación consistente en dashboard.
+
+**Evidencia (2026-04-07)**:
+- En runtime hay mezcla de semánticas (document-level prefijado vs news-level no prefijado).
+- El scheduler/worker de insights depende de estos estados para encolar y recuperar tareas en `processing_queue`.
+- Durante debugging se observó riesgo operativo cuando la cola no refleja claramente “stage + estado” para insights.
+
+**Canon objetivo (propuesto)**:
+1. Definir estados canónicos de insights con prefijo (`insights_pending`, `insights_generating`, `insights_done`, `insights_error`, etc.).
+2. Migrar datos en parada controlada (sin requerimiento de zero-downtime).
+3. Migrar primero escritura; después ampliar lecturas para contemplar transición corta si hiciera falta.
+4. Eliminar estados legacy al confirmar estabilidad post-restart.
+
+**Decisión de implementación**:
+- ✅ Hacer migración integral con app detenida (downtime permitido).
+- ✅ Evitar capa permanente de traducción old↔new en repositorios.
+- ✅ Priorizar claridad operativa sobre compatibilidad prolongada con legacy.
+
+**Ubicación**: `app/backend/app.py`, `app/backend/adapters/driven/persistence/postgres/news_item_repository_impl.py`, `app/backend/adapters/driven/persistence/postgres/dashboard_read_repository_impl.py`, `docs/ai-lcd/*`  
+**Esfuerzo**: Medio-Alto  
+**Fecha detección**: 2026-04-07
+
+---
 
 ### PEND-016: Ingesta fuera de Inbox reingresa errores legacy (estandarización de entradas)
 **Descripción**: Se detectó que un documento viejo (`test_upload.pdf`, `source='upload'`, ingestado 2026-04-02) reaparece en workers OCR durante pruebas de hoy, aunque los 6 archivos de hoy entraron por inbox correctamente. El flujo de retry/reprocess no distingue antiguedad ni canal y puede reactivar entradas legacy inválidas.
@@ -194,6 +219,10 @@
 - Ajustar imports/DI para que los routers no requieran `import app as app_module` salvo para caches globales inevitables.
 
 **Actualización 2026-04-06**: Se creó `ReportService` y se migraron `generate_daily_report_for_date`, `generate_weekly_report_for_week` y `check_workers_script.py` a los puertos hexagonales (`DocumentRepository`, `PostgresWorkerRepository`, `PostgresNewsItemRepository`). Los jobs y utilidades de reportes ya no dependen de `document_status_store`, lo que reduce el alcance de legacy pendiente en este item.
+**Actualización 2026-04-07**:
+- Se retiraron rutas `"/api/legacy/dashboard/*"` y `"/api/legacy/workers/status"` de `app.py` (ya no quedan endpoints legacy publicados).
+- `dashboard.py` ya opera vía `DashboardMetricsService` + `DashboardReadRepository` (hexagonal).
+- **Gap restante**: routers `documents.py`, `workers.py`, `news_items.py`, `reports.py`, `notifications.py` aún consumen stores legacy (`news_item_store`, `news_item_insights_store`, `document_insights_store`, `daily_report_store`, `weekly_report_store`, `notification_store`) y deben migrarse a puertos/repositories equivalentes.
 
 **Prioridad**: Media (bloquea el objetivo AI-LCD de “fuente única”).  
 **Archivos**: `routers/admin.py:1-320`, `routers/dashboard.py:1-520`.  

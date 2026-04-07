@@ -21,6 +21,18 @@
 - **Impacto en roadmap**: Mejora trazabilidad en logs/dashboard y simplifica diagnóstico de scheduler/worker de insights.
 - **Riesgo**: Medio; requiere migración de datos + ajuste de consultas, idealmente con app detenida para evitar estados mixtos.
 
+### Cambio: Reducción de SQL legacy en `app.py` (insights)
+- **Decisión**: Delegar endpoints legacy de dashboard (`/api/legacy/dashboard/*`) al `DashboardMetricsService` y reemplazar lecturas directas de `news_item_insights` en `/api/legacy/workers/status` por `news_item_insights_store`.
+- **Alternativas consideradas**: Mantener SQL legacy hasta retirar `app.py` (rechazada por inconsistencia con arquitectura hexagonal vigente).
+- **Impacto en roadmap**: Avanza PEND-010/PEND-017 al disminuir superficie de consultas directas en módulo legacy.
+- **Riesgo**: Bajo-Medio; cambia ruta de lectura pero mantiene contratos de respuesta.
+
+### Cambio: Despublicación de rutas `/api/legacy/*` en `app.py`
+- **Decisión**: Quitar los decoradores de rutas legacy (`dashboard summary/analysis/parallel-data`, `workers status`) para que solo existan rutas canónicas de routers v2.
+- **Alternativas consideradas**: Mantener legacy publicado con redirección interna (rechazada por ambigüedad operativa y duplicación de contratos).
+- **Impacto en roadmap**: Reduce drift entre implementaciones y acelera cierre de PEND-017.
+- **Riesgo**: Bajo; frontend ya consume `/api/dashboard/*` y `/api/workers/status` desde routers modulares.
+
 ---
 
 ## 2026-04-06 — Backlog: memoria analítica tras insights y reportes

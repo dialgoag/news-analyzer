@@ -21,6 +21,8 @@
 - [x] PEND-018 agregado en backlog de alta prioridad
 - [x] Decisión técnica registrada en SESSION_LOG (sin capa de traducción permanente)
 - [x] Plan operativo actualizado con checklist de ejecución y validación
+- [x] `app.py` legacy dashboard delega a `DashboardMetricsService`; workers legacy usa store para métricas de insights
+- [x] Rutas `/api/legacy/dashboard/*` y `/api/legacy/workers/status` despublicadas (solo routers v2 activos)
 
 ---
 

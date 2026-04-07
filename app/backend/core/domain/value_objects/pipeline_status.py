@@ -84,14 +84,13 @@ class InsightStatusEnum(str, Enum):
     Insight generation statuses (per news item).
     
     These match production (pipeline_states.py InsightStatus).
-    No stage prefixes - insights are a single-stage process.
     """
-    PENDING = "pending"
-    QUEUED = "queued"
-    GENERATING = "generating"
-    INDEXING = "indexing"  # Indexing insights in Qdrant
-    DONE = "done"
-    ERROR = "error"
+    PENDING = "insights_pending"
+    QUEUED = "insights_queued"
+    GENERATING = "insights_generating"
+    INDEXING = "insights_indexing"  # Indexing insights in Qdrant
+    DONE = "insights_done"
+    ERROR = "insights_error"
 
 
 # ============================================================================
@@ -139,7 +138,7 @@ class PipelineStatus:
         
         # Insight status (no stage composition)
         >>> status = PipelineStatus.for_insight(InsightStatusEnum.GENERATING)
-        >>> status.full_status()  # "generating"
+        >>> status.full_status()  # "insights_generating"
     """
     
     # Core attributes
@@ -241,7 +240,7 @@ class PipelineStatus:
         Parse status string into PipelineStatus.
         
         Args:
-            status_str: Status string (e.g., "ocr_processing", "completed", "generating")
+            status_str: Status string (e.g., "ocr_processing", "completed", "insights_generating")
             status_type: Type of status ("document", "insight", "worker")
         
         Returns:
@@ -293,7 +292,7 @@ class PipelineStatus:
         Get full status string for production use.
         
         Returns:
-            Status string (e.g., "ocr_processing", "completed", "generating")
+            Status string (e.g., "ocr_processing", "completed", "insights_generating")
         """
         if self.terminal_state:
             return self.terminal_state.value

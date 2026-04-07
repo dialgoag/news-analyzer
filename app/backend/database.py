@@ -1229,12 +1229,12 @@ class NewsItemStore:
 class NewsItemInsightsStore:
     """Insights por noticia (news_item_id), con cola y deduplicación por text_hash."""
 
-    STATUS_PENDING = "pending"
-    STATUS_QUEUED = "queued"
-    STATUS_GENERATING = "generating"
-    STATUS_INDEXING = "indexing"
-    STATUS_DONE = "done"
-    STATUS_ERROR = "error"
+    STATUS_PENDING = "insights_pending"
+    STATUS_QUEUED = "insights_queued"
+    STATUS_GENERATING = "insights_generating"
+    STATUS_INDEXING = "insights_indexing"
+    STATUS_DONE = "insights_done"
+    STATUS_ERROR = "insights_error"
 
     def __init__(self, db_url: str = DATABASE_URL):
         self.db_url = db_url

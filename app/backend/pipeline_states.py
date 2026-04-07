@@ -139,12 +139,12 @@ class WorkerStatus:
 
 class InsightStatus:
     """news_item_insights.status / document_insights.status."""
-    PENDING = "pending"
-    QUEUED = "queued"
-    GENERATING = "generating"
-    INDEXING = "indexing"  # Being indexed in Qdrant (after LLM done)
-    DONE = "done"
-    ERROR = "error"
+    PENDING = "insights_pending"
+    QUEUED = "insights_queued"
+    GENERATING = "insights_generating"
+    INDEXING = "insights_indexing"  # Being indexed in Qdrant (after LLM done)
+    DONE = "insights_done"
+    ERROR = "insights_error"
 
     IN_PROGRESS = {PENDING, QUEUED, GENERATING, INDEXING}
 

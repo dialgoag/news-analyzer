@@ -197,7 +197,7 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
                        status, text_hash, llm_source, error_message,
                        created_at, updated_at
                 FROM news_item_insights
-                WHERE status IN ('insight_pending', 'insight_queued')
+                WHERE status IN ('insights_pending', 'insights_queued')
                 ORDER BY created_at ASC
             """
             
@@ -257,7 +257,7 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
                 """
                 UPDATE news_item_insights
                 SET summary = %s, analysis = %s, llm_source = %s, 
-                    status = 'insight_done', updated_at = %s
+                    status = 'insights_done', updated_at = %s
                 WHERE id = %s
                 """,
                 (summary, analysis, llm_source, datetime.now(), news_item_id)

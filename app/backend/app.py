@@ -829,7 +829,7 @@ def master_pipeline_scheduler():
             idx_insights_orphans = 0
             cursor_cleanup.execute("""
                 UPDATE news_item_insights nii
-                SET status = 'done' WHERE nii.status = 'indexing'
+                SET status = 'insights_done' WHERE nii.status = 'insights_indexing'
                 AND NOT EXISTS (
                     SELECT 1 FROM worker_tasks wt
                     WHERE wt.document_id = 'insight_' || nii.news_item_id
@@ -2675,20 +2675,12 @@ def run_news_item_insights_queue_job_parallel():
         task_row = cursor.fetchone()
         
         if not task_row:
-            # Fallback: try news_item_insights with STATUS_PENDING/QUEUED
-            cursor.execute("""
-                SELECT news_item_id, document_id, filename, title FROM news_item_insights
-                WHERE status IN ('pending', 'queued')
-                ORDER BY news_item_id ASC
-                LIMIT 1
-            """)
-            
-            insights_row = cursor.fetchone()
-            if not insights_row:
-                conn.close()
+            # Fallback hexagonal: usar store/repository en lugar de SQL directo
+            conn.close()
+            pending_items = news_item_insights_store.get_next_pending(limit=1)
+            if not pending_items:
                 return
-            
-            insights_dict = dict(insights_row)
+            insights_dict = pending_items[0]
             news_item_id = insights_dict['news_item_id']
             document_id = insights_dict['document_id']
             filename = insights_dict['filename']
@@ -2701,7 +2693,8 @@ def run_news_item_insights_queue_job_parallel():
             news_item_id = task_dict['document_id']  # Using document_id as proxy
             title = ""
         
-        conn.close()
+        if not conn.closed:
+            conn.close()
         
         # Create unique worker
         worker_id = f"insights_{os.getpid()}_{int(time.time() * 1000) % 100000}"
@@ -3827,7 +3820,7 @@ async def mark_all_notifications_read(
 # DASHBOARD SUMMARY - Métricas consolidadas
 # ============================================================================
 
-@app.get("/api/legacy/dashboard/summary")
+# Legacy endpoint removed: use router `GET /api/dashboard/summary`
 async def get_dashboard_summary(
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -3839,6 +3832,13 @@ async def get_dashboard_summary(
     if cached is not None:
         return cached
     try:
+        # Legacy endpoint delegates to hexagonal service implementation.
+        from adapters.driving.api.v1.dependencies import get_dashboard_metrics_service
+        result = get_dashboard_metrics_service().get_summary()
+        _cache_set("dashboard_summary", result)
+        return result
+
+        # Legacy SQL implementation kept below as historical reference.
         import os
         from pathlib import Path
         
@@ -3898,9 +3898,9 @@ async def get_dashboard_summary(
         cursor.execute("""
             SELECT 
               COUNT(DISTINCT ni.news_item_id) as total_current,
-              SUM(CASE WHEN nii.status = 'done' THEN 1 ELSE 0 END) as done,
-              SUM(CASE WHEN nii.status IN ('pending', 'queued', 'generating') THEN 1 ELSE 0 END) as pending,
-              SUM(CASE WHEN nii.status = 'error' THEN 1 ELSE 0 END) as errors,
+              SUM(CASE WHEN nii.status = 'insights_done' THEN 1 ELSE 0 END) as done,
+              SUM(CASE WHEN nii.status IN ('insights_pending', 'insights_queued', 'insights_generating') THEN 1 ELSE 0 END) as pending,
+              SUM(CASE WHEN nii.status = 'insights_error' THEN 1 ELSE 0 END) as errors,
               MIN(ni.created_at) as date_first,
               MAX(ni.created_at) as date_last
             FROM news_items ni
@@ -3991,9 +3991,9 @@ async def get_dashboard_summary(
         cursor.execute("""
             SELECT 
               COUNT(DISTINCT nii.news_item_id) as total_current,
-              SUM(CASE WHEN nii.status = 'done' THEN 1 ELSE 0 END) as done,
-              SUM(CASE WHEN nii.status IN ('pending', 'queued', 'generating') THEN 1 ELSE 0 END) as pending,
-              SUM(CASE WHEN nii.status = 'error' THEN 1 ELSE 0 END) as errors
+              SUM(CASE WHEN nii.status = 'insights_done' THEN 1 ELSE 0 END) as done,
+              SUM(CASE WHEN nii.status IN ('insights_pending', 'insights_queued', 'insights_generating') THEN 1 ELSE 0 END) as pending,
+              SUM(CASE WHEN nii.status = 'insights_error' THEN 1 ELSE 0 END) as errors
             FROM news_item_insights nii
             INNER JOIN news_items ni ON ni.news_item_id = nii.news_item_id
         """)
@@ -4127,7 +4127,7 @@ def _fetch_parallel_news_items(doc_ids: List[str], max_news_per_doc: int) -> Dic
     return result
 
 
-@app.get("/api/legacy/dashboard/parallel-data", response_model=ParallelFlowResponse)
+# Legacy endpoint removed: use router `GET /api/dashboard/parallel-data`
 async def get_parallel_coordinates_data(
     limit: int = 80,
     max_news_per_doc: int = 20,
@@ -4181,7 +4181,7 @@ async def get_parallel_coordinates_data(
 # WORKERS STATUS - Monitor de trabajadores activos
 # ============================================================================
 
-@app.get("/api/legacy/workers/status")
+# Legacy endpoint removed: use router `GET /api/workers/status`
 async def get_workers_status(
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -4226,14 +4226,8 @@ async def get_workers_status(
         """)
         active_pipeline_tasks = cursor.fetchall()
         
-        # Get ACTIVE insights (generating) and indexing_insights (indexing)
-        cursor.execute("""
-            SELECT news_item_id, document_id, filename, title 
-            FROM news_item_insights 
-            WHERE status IN ('generating', 'indexing')
-            ORDER BY news_item_id
-        """)
-        active_insights_tasks = cursor.fetchall()
+        # Insights activos via store hexagonal (evita SQL directo en app.py)
+        active_insights_tasks = news_item_insights_store.list_active_tasks()
         
         # Get PENDING task counts
         cursor.execute("""
@@ -4244,21 +4238,8 @@ async def get_workers_status(
         """)
         pending_counts = {row['task_type']: row['count'] for row in cursor.fetchall()}
         
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM news_item_insights
-            WHERE status IN ('pending', 'queued')
-        """)
-        result = cursor.fetchone()
-        pending_counts['insights'] = result[list(result.keys())[0]] if result else 0
-
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM news_item_insights
-            WHERE status = 'done' AND indexed_in_qdrant_at IS NULL AND content IS NOT NULL
-        """)
-        result = cursor.fetchone()
-        pending_counts['indexing_insights'] = result[list(result.keys())[0]] if result else 0
+        pending_counts['insights'] = news_item_insights_store.count_pending_or_queued()
+        pending_counts['indexing_insights'] = news_item_insights_store.count_ready_for_indexing()
         
         conn.close()
         
@@ -4523,7 +4504,7 @@ async def get_workers_status(
         raise HTTPException(status_code=500, detail="Error fetching workers status")
 
 
-@app.get("/api/legacy/dashboard/analysis")
+# Legacy endpoint removed: use router `GET /api/dashboard/analysis`
 async def get_dashboard_analysis(
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -4535,6 +4516,13 @@ async def get_dashboard_analysis(
     if cached is not None:
         return cached
     try:
+        # Legacy endpoint delegates to hexagonal service implementation.
+        from adapters.driving.api.v1.dependencies import get_dashboard_metrics_service
+        result = get_dashboard_metrics_service().get_analysis()
+        _cache_set("dashboard_analysis", result)
+        return result
+
+        # Legacy SQL implementation kept below as historical reference.
         conn = document_status_store.get_connection()
         cursor = conn.cursor()
         
@@ -4883,10 +4871,10 @@ async def get_dashboard_analysis(
         # JOIN news_items: solo insights de news_items válidos (cadena doc→news→insight)
         cursor.execute("""
             SELECT 
-                COUNT(*) FILTER (WHERE nii.status IN ('pending', 'queued')) as pending,
-                COUNT(*) FILTER (WHERE nii.status = 'generating') as processing,
-                COUNT(*) FILTER (WHERE nii.status = 'done') as completed,
-                COUNT(*) FILTER (WHERE nii.status = 'error') as errors,
+                COUNT(*) FILTER (WHERE nii.status IN ('insights_pending', 'insights_queued')) as pending,
+                COUNT(*) FILTER (WHERE nii.status = 'insights_generating') as processing,
+                COUNT(*) FILTER (WHERE nii.status = 'insights_done') as completed,
+                COUNT(*) FILTER (WHERE nii.status = 'insights_error') as errors,
                 COUNT(*) as total
             FROM news_item_insights nii
             INNER JOIN news_items ni ON ni.news_item_id = nii.news_item_id
@@ -4903,14 +4891,14 @@ async def get_dashboard_analysis(
                     WHERE NOT EXISTS (
                         SELECT 1 FROM news_item_insights n2 
                         WHERE n2.document_id = nii.document_id 
-                        AND n2.status NOT IN ('done', 'error')
+                        AND n2.status NOT IN ('insights_done', 'insights_error')
                     )
                 ) as docs_all_done,
                 COUNT(DISTINCT nii.document_id) FILTER (
                     WHERE EXISTS (
                         SELECT 1 FROM news_item_insights n2 
                         WHERE n2.document_id = nii.document_id 
-                        AND n2.status IN ('pending', 'queued', 'generating')
+                        AND n2.status IN ('insights_pending', 'insights_queued', 'insights_generating')
                     )
                 ) as docs_with_pending
             FROM news_item_insights nii
@@ -4937,13 +4925,13 @@ async def get_dashboard_analysis(
         # Indexing Insights Stage — insights done but not yet in Qdrant
         cursor.execute("""
             SELECT
-                COUNT(*) FILTER (WHERE nii.status = 'done' AND nii.indexed_in_qdrant_at IS NULL) as pending,
-                COUNT(*) FILTER (WHERE nii.status = 'indexing') as processing,
+                COUNT(*) FILTER (WHERE nii.status = 'insights_done' AND nii.indexed_in_qdrant_at IS NULL) as pending,
+                COUNT(*) FILTER (WHERE nii.status = 'insights_indexing') as processing,
                 COUNT(*) FILTER (WHERE nii.indexed_in_qdrant_at IS NOT NULL) as completed,
-                COUNT(*) FILTER (WHERE (nii.status = 'done' OR nii.status = 'indexing') AND nii.content IS NOT NULL) as total
+                COUNT(*) FILTER (WHERE (nii.status = 'insights_done' OR nii.status = 'insights_indexing') AND nii.content IS NOT NULL) as total
             FROM news_item_insights nii
             INNER JOIN news_items ni ON ni.news_item_id = nii.news_item_id
-            WHERE nii.content IS NOT NULL AND nii.status IN ('done', 'indexing')
+            WHERE nii.content IS NOT NULL AND nii.status IN ('insights_done', 'insights_indexing')
         """)
         idx_ins_data = cursor.fetchone()
         idx_ins_pending = idx_ins_data['pending'] or 0
