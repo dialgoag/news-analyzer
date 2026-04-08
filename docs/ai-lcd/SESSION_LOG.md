@@ -3,7 +3,96 @@
 > Decisiones, cambios importantes, y contexto entre sesiones
 
 **Última actualización**: 2026-04-08  
-**Sesión**: 59 (REQ-026 Upload Worker Stage + Fix #156 + Fix #155 + REQ-025 documentada)
+**Sesión**: 60 (Fix #158 News Segmentation Pydantic Validation)
+
+---
+
+## 2026-04-08 — Fix #158: News Segmentation Pydantic Validation
+
+### Contexto y Petición
+- **Usuario**: "revisa los demas agentes para validar que usen correctamente pydantic"
+- **Contexto**: Después de implementar `NewsSegmentationAgent` con chunking+overlap, necesitábamos verificar que la integración con Pydantic fuera correcta
+
+### Decisión: Mantener langchain-community 0.2.16 (no actualizar a 0.3.x)
+
+**Problema encontrado**:
+1. Intenté usar `langchain-ollama` (paquete adicional) con `ChatOllama`
+2. Esto requería actualizar todo el ecosistema LangChain a 0.3.x
+3. Conflictos de dependencias en cadena:
+   - `langchain 0.3.0` requiere `pydantic>=2.7.4`
+   - `langchain-community 0.3.0` requiere `pydantic-settings>=2.4.0`
+   - `langgraph 0.1.19` requiere `langchain-core<0.3`
+   - `langchain-anthropic 0.1.23` requiere `langchain-core<0.3.0`
+
+**Enfoque elegido**: Usar `Ollama` de `langchain-community` (ya disponible)
+
+**Ventajas**:
+- ✅ Sin dependencias adicionales
+- ✅ Sin actualización masiva de LangChain
+- ✅ Compatible con pydantic 2.5.0 actual
+- ✅ `format='json'` fuerza salida JSON estructurada
+- ✅ Pydantic models (`NewsArticle`, `SegmentationResult`) para validación
+
+**Alternativas consideradas**:
+- ❌ Actualizar a LangChain 0.3.x + langchain-ollama: Conflictos de dependencias en cadena
+- ❌ Mantener ChatOllama sin paquete: ModuleNotFoundError
+- ✅ **Elegida**: `Ollama` de langchain-community con `format='json'`
+
+### Verificación Completa de Agentes
+
+**1. news_segmentation_agent.py** ✅:
+```python
+from langchain_community.llms import Ollama
+from pydantic import BaseModel, Field
+
+class NewsArticle(BaseModel):
+    title: str
+    start_marker: str
+    confidence: float
+
+self.llm = Ollama(format='json')  # Fuerza JSON output
+```
+
+**2. ocr_validation_agent.py** ✅:
+- NO usa Pydantic (correcto)
+- Parseo manual de respuesta LLM
+- No necesita JSON estructurado
+
+### Implementación Realizada
+
+**Archivos modificados**:
+1. `news_segmentation_agent.py` líneas 18, 72-87:
+   - Import: `from langchain_community.llms import Ollama`
+   - Constructor: `Ollama(format='json', num_ctx=8192)`
+   - Ya usa Pydantic models (lines 26-36)
+
+2. `docker/base/cpu/Dockerfile` línea 43:
+   - Corregido: `app/backend/requirements.txt` → `backend/requirements.txt`
+
+3. `docker/base/cuda/Dockerfile` línea 43:
+   - Corregido: `app/backend/requirements.txt` → `backend/requirements.txt`
+
+4. `requirements.txt`:
+   - Mantenido: `pydantic==2.5.0`, `langchain-community==0.2.16`
+   - NO agregado: `langchain-ollama` (innecesario)
+
+### Resultados de Testing
+
+**Funcionamiento correcto** ✅:
+- LLM `llama3.2:1b` devuelve JSON válido
+- Pydantic parsea correctamente la respuesta
+- Artículos detectados: 14 en 6 chunks (primer intento parcial)
+- Auto-recovery funciona cuando hay timeout (worker crasheado → reinicio automático)
+
+**Performance observada**:
+- ~62 segundos por chunk (40k chars)
+- Total estimado: ~9 chunks × 62s = ~9-10 minutos por documento
+- Worker timeout: 10 minutos (ajustado previamente)
+
+### Impacto en Roadmap
+- ✅ Segmentation agent validado y operativo
+- 🎯 **PRÓXIMO**: REQ-025 (Tabla expandible para analizar calidad de segmentación)
+- 🎯 REQ-025 permitirá ver cuántas news articles se detectaron por documento
 
 ---
 

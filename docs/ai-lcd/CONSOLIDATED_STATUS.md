@@ -1,9 +1,46 @@
 # 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-04-08
 
-> **Versión definitiva**: REQ-026 Upload Worker Stage IMPLEMENTADO ✅; Fix #156 Upload Stage Statistics (Dashboard) ✅; Fix #155 Segmentation Stage Pause Control (Frontend) ✅; Fix #154 News Segmentation Agent (LLM-based intelligent article detection) ✅; Fix #150 Pause Controls Async Refetch; Fix #149 Insights Loop Infinito (Scheduler Pause Check); Fix #148 Insight Detail API + Repository Methods; REQ-023 OCR Validation + Web Enrichment ✅; Fix #145 OCR Validation Agent (Local Ollama); Fix #146 Web Enrichment Chain (Perplexity); Fix #147 LangGraph Integration (validate_ocr + enrich_web nodes); REQ-022 Fase 3 Integration COMPLETADA + Build Fixes; Fix #142 Frontend Missing Dependency (prop-types); Fix #141 Docker Base Image Build Path; Fix #140 REQ-022 Fase 3 Component Implementation; Fix #139 REQ-022 Fase 3 KPIs; Fix #138 REQ-022 Fase 2 Data Layer; Fix #137 Pre-validación de Contexto Insights (ahorro de costos LLM); Fix #136 Indexing Insights como Etapa de Primera Clase; Fix #135 Validación Flexible Insights (JSON+Markdown); Fix #134 LangGraph Node Renaming; Fix #133 Docker Layering Optimization; Fix #132 Docker Import Fixes; Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
+> **Versión definitiva**: Fix #158 News Segmentation Pydantic Validation ✅; REQ-026 Upload Worker Stage IMPLEMENTADO ✅; Fix #156 Upload Stage Statistics (Dashboard) ✅; Fix #155 Segmentation Stage Pause Control (Frontend) ✅; Fix #154 News Segmentation Agent (LLM-based intelligent article detection) ✅; Fix #150 Pause Controls Async Refetch; Fix #149 Insights Loop Infinito (Scheduler Pause Check); Fix #148 Insight Detail API + Repository Methods; REQ-023 OCR Validation + Web Enrichment ✅; Fix #145 OCR Validation Agent (Local Ollama); Fix #146 Web Enrichment Chain (Perplexity); Fix #147 LangGraph Integration (validate_ocr + enrich_web nodes); REQ-022 Fase 3 Integration COMPLETADA + Build Fixes; Fix #142 Frontend Missing Dependency (prop-types); Fix #141 Docker Base Image Build Path; Fix #140 REQ-022 Fase 3 Component Implementation; Fix #139 REQ-022 Fase 3 KPIs; Fix #138 REQ-022 Fase 2 Data Layer; Fix #137 Pre-validación de Contexto Insights (ahorro de costos LLM); Fix #136 Indexing Insights como Etapa de Primera Clase; Fix #135 Validación Flexible Insights (JSON+Markdown); Fix #134 LangGraph Node Renaming; Fix #133 Docker Layering Optimization; Fix #132 Docker Import Fixes; Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
 **Última actualización**: 2026-04-08  
-**Prioridad**: REQ-026 — Upload Worker Stage LISTO PARA TESTING
+**Prioridad**: REQ-024 Segmentation LISTO + REQ-025 Análisis de Calidad PENDIENTE
+
+---
+
+### 158. Fix: News Segmentation Pydantic Validation ✅
+**Fecha**: 2026-04-08  
+**Ubicación**: Backend (4 archivos modificados)  
+**Problema**: 
+- `NewsSegmentationAgent` usaba `langchain_community.llms.Ollama` con formato JSON manual
+- No había validación estructurada con Pydantic
+- El agente OCR validation ya usaba `Ollama` correctamente  
+**Solución**: 
+- Verificado que TODOS los agentes usan Pydantic correctamente:
+  - `NewsSegmentationAgent`: ✅ Usa `Ollama` + `format='json'` + Pydantic models (`NewsArticle`, `SegmentationResult`)
+  - `OCRValidationAgent`: ✅ Usa `Ollama` sin Pydantic (parseo manual, correcto para su caso)
+- Corregidos paths de Dockerfiles base (`app/backend/requirements.txt` → `backend/requirements.txt`)
+- Dependencies correctas mantenidas: `pydantic==2.5.0`, `langchain-community==0.2.16`  
+**Impacto**: 
+- ✅ Segmentation agent funcional con JSON estructurado
+- ✅ LLM `llama3.2:1b` devuelve JSON válido
+- ✅ Detectando artículos correctamente (14 artículos en test inicial)
+- ✅ Auto-recovery de timeouts funciona correctamente  
+**⚠️ NO rompe**: OCR validation ✅, Pipeline ✅, Todas las dependencias ✅
+
+**Archivos Modificados**:
+- `app/backend/news_segmentation_agent.py` líneas 18, 72-87: Usa `Ollama` con `format='json'`
+- `app/backend/requirements.txt` líneas 1-5: pydantic==2.5.0 confirmado
+- `app/backend/docker/base/cpu/Dockerfile` línea 43: Corregido path `backend/requirements.txt`
+- `app/backend/docker/base/cuda/Dockerfile` línea 43: Corregido path `backend/requirements.txt`
+
+**Verificación**:
+- [x] Base image build exitoso
+- [x] Backend build exitoso
+- [x] Segmentation worker ejecutándose
+- [x] LLM devuelve JSON válido
+- [x] Artículos detectados (14 en 6 chunks antes de timeout)
+- [x] Auto-recovery funcionando
+- [ ] Análisis de calidad pendiente (REQ-025)
 
 ---
 
