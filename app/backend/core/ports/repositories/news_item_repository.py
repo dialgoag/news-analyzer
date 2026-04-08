@@ -213,6 +213,10 @@ class NewsItemRepository(ABC):
         """SYNC: list news_item_insights rows for a news_item_id."""
         pass
 
+    def list_expired_insights_sync(self, max_retries: int = 3) -> List[dict]:
+        """SYNC: list insights that exceeded max retries (permanently failed)."""
+        pass
+
     def get_document_insight_summary_sync(self, document_id: str) -> Optional[dict]:
         """
         SYNC: aggregate done insights for a document.

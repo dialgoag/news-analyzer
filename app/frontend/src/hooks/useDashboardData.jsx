@@ -20,6 +20,52 @@ import { getWorkerCapacityByType } from '../services/workerDataService';
 import { groupErrorsByType, sortErrorsByPriority } from '../services/errorDataService';
 
 /**
+ * Mapping from stage name to pause key
+ * Must match backend's pause_steps keys
+ */
+const STAGE_PAUSE_KEY = {
+  'Upload': 'upload',
+  'OCR': 'ocr',
+  'Segmentation': 'segmentation',
+  'Chunking': 'chunking',
+  'Indexing': 'indexing',
+  'Insights': 'insights',
+  'Indexing Insights': 'indexing_insights'
+};
+
+/**
+ * Enrich pipeline stages with pause state from runtime config
+ * @param {Array} stages - Stages from /api/dashboard/analysis
+ * @param {Object} runtime - Runtime config from /api/admin/insights-pipeline
+ * @returns {Array} - Enriched stages with pauseKey and paused fields
+ */
+function enrichStagesWithPauseState(stages, runtime) {
+  if (!Array.isArray(stages)) return [];
+  
+  // Build pause lookup: { pauseKey: boolean }
+  const pauseLookup = {};
+  if (runtime?.pause_steps && Array.isArray(runtime.pause_steps)) {
+    runtime.pause_steps.forEach(step => {
+      if (step.id && typeof step.paused === 'boolean') {
+        pauseLookup[step.id] = step.paused;
+      }
+    });
+  }
+
+  // Enrich each stage
+  return stages.map(stage => {
+    const pauseKey = STAGE_PAUSE_KEY[stage.name];
+    const paused = pauseKey ? (pauseLookup[pauseKey] || false) : false;
+    
+    return {
+      ...stage,
+      pauseKey,  // Key for pause control (null if not pausable)
+      paused     // Current pause state
+    };
+  });
+}
+
+/**
  * Main hook for dashboard data
  * 
  * @param {string} API_URL - Base API URL
@@ -35,7 +81,8 @@ export function useDashboardData(API_URL, token, refreshInterval = 20000, refres
     analysis: null,
     documents: null,
     workers: null,
-    parallelData: null
+    parallelData: null,
+    runtime: null
   });
   
   const [loading, setLoading] = useState(true);
@@ -56,8 +103,8 @@ export function useDashboardData(API_URL, token, refreshInterval = 20000, refres
       setRefreshing(true);
       setError(null);
 
-      // Fetch all endpoints in parallel
-      const [summaryRes, analysisRes, docsRes, workersRes, parallelRes] = await Promise.allSettled([
+      // Fetch all endpoints in parallel (including runtime for pause state)
+      const [summaryRes, analysisRes, docsRes, workersRes, parallelRes, runtimeRes] = await Promise.allSettled([
         axios.get(`${API_URL}/api/dashboard/summary`, {
           headers: { Authorization: `Bearer ${token}` },
           timeout: API_TIMEOUT_MS
@@ -77,6 +124,10 @@ export function useDashboardData(API_URL, token, refreshInterval = 20000, refres
         axios.get(`${API_URL}/api/dashboard/parallel-data`, {
           headers: { Authorization: `Bearer ${token}` },
           timeout: API_TIMEOUT_MS
+        }),
+        axios.get(`${API_URL}/api/admin/insights-pipeline`, {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: API_TIMEOUT_MS
         })
       ]);
 
@@ -86,7 +137,8 @@ export function useDashboardData(API_URL, token, refreshInterval = 20000, refres
         analysis: analysisRes.status === 'fulfilled' ? analysisRes.value.data : prev.analysis,
         documents: docsRes.status === 'fulfilled' ? docsRes.value.data?.documents : prev.documents,
         workers: workersRes.status === 'fulfilled' ? workersRes.value.data : prev.workers,
-        parallelData: parallelRes.status === 'fulfilled' ? parallelRes.value.data : prev.parallelData
+        parallelData: parallelRes.status === 'fulfilled' ? parallelRes.value.data : prev.parallelData,
+        runtime: runtimeRes.status === 'fulfilled' ? runtimeRes.value.data : prev.runtime
       }));
 
       // Log warnings for failed requests (but don't throw)
@@ -95,6 +147,7 @@ export function useDashboardData(API_URL, token, refreshInterval = 20000, refres
       if (docsRes.status === 'rejected') console.warn('Documents fetch failed:', docsRes.reason);
       if (workersRes.status === 'rejected') console.warn('Workers fetch failed:', workersRes.reason);
       if (parallelRes.status === 'rejected') console.warn('Parallel data fetch failed:', parallelRes.reason);
+      if (runtimeRes.status === 'rejected') console.warn('Runtime fetch failed:', runtimeRes.reason);
 
       setLoading(false);
     } catch (err) {
@@ -176,8 +229,12 @@ export function useDashboardData(API_URL, token, refreshInterval = 20000, refres
       }
     };
 
-    // Pipeline stages (for Sankey)
-    const pipeline = rawData.analysis?.pipeline || null;
+    // Pipeline stages (for Sankey + Table) - Enrich with pause state
+    const pipelineRaw = rawData.analysis?.pipeline || null;
+    const pipeline = pipelineRaw ? {
+      ...pipelineRaw,
+      stages: enrichStagesWithPauseState(pipelineRaw.stages || [], rawData.runtime)
+    } : null;
 
     // Workers summary
     const workers = {

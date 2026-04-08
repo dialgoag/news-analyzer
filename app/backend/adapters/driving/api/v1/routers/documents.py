@@ -410,12 +410,30 @@ async def upload_document(
     current_user: CurrentUser = Depends(require_upload_permission)
 ):
     """
-    Upload a document (any format) and process it in the background
+    Upload a document - saves with 'pending_' prefix for worker validation.
+    
+    REQ-026: New upload flow with worker validation:
+    1. Receive file
+    2. Compute hash
+    3. Check duplicate
+    4. Save as pending_{hash}_{filename}
+    5. Create DB record: status=upload_pending
+    6. Upload worker will validate and transition to validated state
+    
     Supported formats: PDF, DOCX, PPTX, XLSX, ODT, RTF, HTML, XML, JSON, CSV, Images
-
     Requires: SUPER_USER or ADMIN role
     """
     import app as app_module
+    from upload_utils import build_upload_filename, UploadFileState
+    import uuid
+
+    # Check if upload is paused
+    import insights_pipeline_control as _ipc
+    if _ipc.is_step_paused("upload"):
+        raise HTTPException(
+            status_code=503,
+            detail="Upload is currently paused. Please try again later."
+        )
 
     if not app_module.ocr_service or not app_module.embeddings_service or not app_module.rag_pipeline:
         raise HTTPException(
@@ -432,7 +450,7 @@ async def upload_document(
             detail=f"Format '{file_ext}' not supported. Supported: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
         )
 
-    # Check file size before reading entire content
+    # Read file content
     content = await file.read()
     file_size_mb = len(content) / (1024 * 1024)
 
@@ -443,54 +461,97 @@ async def upload_document(
         )
 
     try:
+        # Compute hash
         file_hash = compute_sha256(data=content)
+        
+        # Check duplicate
         existing = check_duplicate(file_hash)
         if existing:
-            logger.info(f"📋 Duplicate detected: '{file.filename}' already exists as '{existing['filename']}'")
+            logger.info(f"📋 Duplicate: '{file.filename}' exists as '{existing['filename']}'")
             return JSONResponse(
                 status_code=200,
                 content={
-                    "message": "Duplicate file detected, not reprocessed",
+                    "message": "Duplicate file detected",
                     "status": "duplicate",
                     "existing_document_id": existing['document_id'],
                     "existing_filename": existing['filename'],
                     "file_hash": file_hash
                 }
             )
-
+        
+        # Generate document_id
+        document_id = str(uuid.uuid4())
         upload_dir = _upload_dir()
-        document_id, file_hash = ingest_from_upload(content, file.filename, upload_dir)
-
-        # Resolve actual file path (handles .pdf extension, Fix #95)
-        file_path = resolve_file_path(document_id, upload_dir)
-
-        logger.info(f"📄 File received: '{file.filename}' ({len(content)} bytes)")
-        logger.info(f"   Document ID: {document_id}")
-        logger.info(f"   File path: {file_path}")
-        logger.info(f"   File hash: {file_hash[:16]}...")
-
-        background_tasks.add_task(
-            app_module._process_document_sync,
-            file_path,
-            document_id,
+        
+        # Build filename with PENDING prefix
+        pending_filename = build_upload_filename(
+            UploadFileState.PENDING,
+            file_hash[:16],  # Use first 16 chars of hash
             file.filename
         )
-
+        
+        file_path = Path(upload_dir) / pending_filename
+        
+        # Save file with pending prefix
+        with open(file_path, 'wb') as f:
+            f.write(content)
+        
+        logger.info(f"📄 File saved (pending validation): {pending_filename}")
+        logger.info(f"   Document ID: {document_id}")
+        logger.info(f"   File hash: {file_hash[:16]}...")
+        logger.info(f"   Size: {file_size_mb:.2f}MB")
+        
+        # Create DB record: status=upload_pending
+        from core.domain.entities.document import DocumentId
+        from core.domain.value_objects.pipeline_status import PipelineStatus, StageEnum, StateEnum
+        from pipeline_states import Stage
+        
+        doc_id = DocumentId(document_id)
+        
+        # Get document repository
+        from adapters.driven.persistence.postgres.document_repository_impl import DocumentRepositoryImpl
+        document_repository = DocumentRepositoryImpl()
+        
+        await document_repository.create(
+            doc_id=doc_id,
+            filename=file.filename,
+            status=PipelineStatus.create(StageEnum.UPLOAD, StateEnum.PENDING),
+            file_hash=file_hash,
+            processing_stage=Stage.UPLOAD,
+            metadata={
+                'size_bytes': len(content),
+                'original_filename': file.filename,
+                'pending_file': pending_filename
+            }
+        )
+        
+        # Record stage timing (upload received)
+        from adapters.driven.persistence.postgres.stage_timing_repository_impl import StageTimingRepositoryImpl
+        stage_timing_repository = StageTimingRepositoryImpl()
+        
+        stage_timing_repository.record_stage_start_sync(
+            document_id, 'upload',
+            metadata={'pending_file': pending_filename, 'size_bytes': len(content)}
+        )
+        
+        logger.info(f"✅ Document {document_id} created with status=upload_pending")
+        
         return JSONResponse(
             status_code=202,
             content={
-                "message": "Document received, processing in progress",
+                "message": "Document received, queued for validation",
                 "document_id": document_id,
                 "filename": file.filename,
+                "status": "upload_pending",
                 "size_bytes": len(content),
-                "file_hash": file_hash
+                "file_hash": file_hash[:16]
             }
         )
-
+        
     except ValueError as ve:
         return JSONResponse(status_code=200, content={"message": str(ve), "status": "duplicate"})
     except Exception as e:
-        logger.error(f"❌ Upload error: {str(e)}")
+        logger.error(f"❌ Upload error: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 

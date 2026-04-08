@@ -3,7 +3,283 @@
 > Decisiones, cambios importantes, y contexto entre sesiones
 
 **Última actualización**: 2026-04-08  
-**Sesión**: 59 (News Segmentation Agent + REQ-025 documentada)
+**Sesión**: 59 (REQ-026 Upload Worker Stage + Fix #156 + Fix #155 + REQ-025 documentada)
+
+---
+
+## 2026-04-08 — REQ-026: Upload como Worker Stage Completo
+
+### Contexto y Petición
+- **Usuario**: "quiero que sea a imagen y semejanza de los demas psas de la pipeline un worker con su pausa con sus stats y todo sus sub etapas manejo de errores, todo."
+- **Problema actual**: Upload era síncrono dentro del HTTP request, sin worker pool, no pausable, estadísticas incorrectas
+- **Objetivo**: Transformar Upload en etapa completa del pipeline igual que OCR, Segmentation, Chunking, etc.
+
+### Decisión: Sistema de Prefijos para Estados
+
+**Enfoque elegido**: Opción C (guardar directamente con prefijo)
+
+**Convención de nombres**:
+```
+pending_{hash}_{filename}.pdf       → Esperando validación
+processing_{hash}_{filename}.pdf    → Worker validando
+{hash}_{filename}.pdf               → Validado (sin prefijo)
+error_{hash}_{filename}.pdf         → Error (debug)
+```
+
+**Ventajas**:
+- ✅ Todo en mismo directorio `/uploads/`
+- ✅ Operación atómica (rename es atomic en POSIX)
+- ✅ Visual (`ls` muestra estado inmediatamente)
+- ✅ Compatible con código existente (busca `{hash}_{filename}`)
+- ✅ Recuperación de crashes (detectar `processing_*` stuck)
+
+**Alternativas consideradas**:
+- ❌ Opción A (tmp/ + move): Más complejo, requiere dos directorios
+- ❌ Opción B (DB BYTEA): No escalable para archivos grandes
+- ✅ Opción C (prefijo): Solución elegante, mínimo cambio
+
+### Implementación Realizada
+
+#### Backend Core
+
+**1. Upload Utils (`upload_utils.py` - NEW)**:
+- `build_upload_filename()`: Construye nombre con prefijo
+- `parse_upload_filename()`: Extrae estado, hash, nombre original
+- `transition_file_state()`: Transición atómica entre estados
+- `list_files_by_state()`: Lista archivos por estado
+- `cleanup_error_files()`: Limpieza de archivos error viejos
+- `get_validated_path()`: Obtiene path de archivo validated
+
+**2. TaskType.UPLOAD** (`pipeline_states.py`):
+- Agregado como primer TaskType en línea 119
+- Agregado a `TaskType.ALL`
+
+**3. Upload Worker** (`app.py` líneas 2613-2793):
+- Validación de formato (extension check)
+- Validación de tamaño (MAX_UPLOAD_SIZE_MB)
+- Validación de integridad (re-compute SHA256 hash)
+- Validación de legibilidad (PyMuPDF: PDF page count)
+- Stage timing tracking completo
+- Error handling con transition a `error_*`
+
+**4. Master Scheduler** (`app.py`):
+- PASO 0 agregado (líneas 846-871): Crea upload tasks para `upload_pending`
+- Verifica pause state: `_ipc.is_step_paused("upload")`
+- Worker pool: 2 workers upload (configurable: `UPLOAD_PARALLEL_WORKERS`)
+- Handler agregado en task_handlers (línea 1235)
+
+**5. Pause Control** (`pipeline_runtime_store.py`):
+- Agregado `("upload", "Upload/Ingesta")` a `KNOWN_PAUSE_STEPS`
+
+**6. Endpoint `/upload` Refactor** (`documents.py` líneas 406-563):
+- Verifica pause state (retorna 503 si pausado)
+- Guarda archivo con prefijo `pending_{hash}_{filename}`
+- Crea DB record con `status=upload_pending`
+- Registra stage timing
+- Ya NO llama a `_process_document_sync` (worker lo hará)
+
+**7. Dashboard Backend** (`dashboard_read_repository_impl.py`):
+- Agregado `pauseKey` y `paused` a Upload stage (líneas 350-351)
+
+#### Frontend
+
+**8. Dashboard Data Hook** (`useDashboardData.jsx`):
+- Agregado `'Upload': 'upload'` a `STAGE_PAUSE_KEY` (línea 27)
+
+### Flujo Completo Nuevo
+
+**Antes**:
+```
+POST /upload → Guarda archivo → Crea DB → _process_document_sync (blocking)
+             → No pausable
+             → completed_tasks = 0
+             → No retry
+```
+
+**Después**:
+```
+1. POST /upload → Guarda como pending_{hash}_{filename}
+                → Crea DB: upload_pending
+                → Retorna 202
+
+2. Upload worker detecta pending
+                → Rename: pending_ → processing_
+                → Valida: formato ✓ tamaño ✓ hash ✓ legibilidad ✓
+                → Rename: processing_ → {filename} (validated)
+                → DB: upload_done
+
+3. OCR worker detecta upload_done
+                → Procesa archivo validated
+                → Pipeline continúa...
+```
+
+### Decisiones Técnicas
+
+**¿Por qué prefijos en lugar de subdirectorios?**
+- Atomic operation (rename dentro del mismo filesystem)
+- Visual (fácil ver estado con `ls`)
+- No requiere múltiples watches de directorios
+- Compatible con código existente
+
+**¿Por qué worker asíncrono?**
+- No bloquea HTTP request
+- Permite validación exhaustiva sin timeout
+- Retry robusto de errores
+- Observabilidad de sub-etapas
+- Pausable como todas las demás stages
+
+**¿Por qué validar hash de nuevo?**
+- Detecta corrupción durante escritura
+- Verifica integridad del archivo en disco
+- Previene archivos truncados/corruptos en OCR
+
+### Impacto en Arquitectura
+
+**Cambio fundamental**: Upload pasa de ser operación síncrona a ser etapa async del pipeline
+
+**Ventajas**:
+- ✅ Consistencia arquitectural (todas las stages son iguales)
+- ✅ Control fino (pausar ingesta cuando sistema saturado)
+- ✅ Observabilidad (ver pending/processing/completed)
+- ✅ Resiliencia (retry de errores)
+- ✅ Performance (no bloquea HTTP)
+
+**Riesgos mitigados**:
+- Race conditions → Rename es atómica
+- Worker crash → Detectar `processing_*` stuck >10min
+- Archivos existentes → Código busca sin prefijo (compatible)
+- Disk space → Cleanup automático de `error_*` viejos
+
+### Verificación
+
+- [x] Backend build exitoso (Exit code: 0)
+- [x] Frontend build exitoso (Exit code: 0)
+- [x] Contenedores UP y healthy
+- [x] Upload utils creado con tests coverage
+- [ ] Testing manual pendiente
+
+### Alternativas NO Elegidas
+
+**¿Por qué no dejar upload como estaba?**
+- Inconsistente con resto del pipeline
+- No pausable (problema cuando sistema saturado)
+- Estadísticas incorrectas
+- No retry robusto
+
+**¿Por qué no usar subdirectorios?**
+- Rename entre directorios no es atómico si diferentes filesystems
+- Más complejo de implementar
+- Requiere múltiples watches
+
+---
+
+## 2026-04-08 — Fix #156: Upload Stage Statistics (Dashboard)
+
+### Problema Reportado
+- **Usuario**: "lo mismo psa con el upload que ademas no tiene ninguna stadistica segun el no hay ni un archivo y es mentira"
+- **Contexto**: Dashboard v2 mostraba Upload stage con 0 documentos completed, pero sí había archivos subidos
+
+### Root Cause Analysis
+1. **Cálculo incorrecto**: `upload_completed` solo contaba docs en estado `upload_done`
+2. **Flujo real**: `upload_pending → upload_processing → upload_done → ocr_pending`
+3. **Problema**: Una vez en `ocr_pending`, el doc ya NO está en `upload_done`
+4. **Consecuencia**: Upload stage mostraba completed_tasks=0 aunque hubiera docs procesados
+
+### Solución Implementada
+- **Archivo**: `dashboard_read_repository_impl.py` líneas 329-359
+- **Cambio**: Query que cuenta TODOS los docs que YA NO están en `upload_pending` o `upload_processing`
+- **Lógica**: Si un doc pasó upload, está en OCR+ (cualquier estado posterior a upload)
+
+**Código antes:**
+```python
+upload_completed = upload_counts["completed"] or 0  # Solo cuenta upload_done
+```
+
+**Código después:**
+```python
+# Count ALL documents that have passed upload
+cursor.execute(
+    """
+    SELECT COUNT(*) as total FROM document_status
+    WHERE status NOT IN (%s, %s)
+    """,
+    (DocStatus.UPLOAD_PENDING, DocStatus.UPLOAD_PROCESSING)
+)
+upload_completed = cursor.fetchone()["total"] or 0
+```
+
+### Decisión: Guion en control es CORRECTO
+- **¿Por qué guion?**: Upload NO es pausable (no hay workers asíncronos que pausar)
+- **¿Por qué no agregamos pauseKey?**: Upload es ingesta de archivos, proceso síncrono
+- **Comportamiento esperado**: 
+  - Etapas pausables (OCR, Segmentation, Chunking, etc.) → Botón pause/play
+  - Upload (no pausable) → Guion `—`
+
+### Alternativas Consideradas
+- ❌ Hacer Upload pausable: Rechazado (no tiene sentido pausar ingesta de archivos)
+- ❌ Contar solo `upload_done`: Rechazado (no refleja realidad)
+- ✅ Contar todos los que YA pasaron upload: Refleja documentos ingresados correctamente
+
+### Impacto en Roadmap
+- Fix #156 completado (quirúrgico, backend)
+- Mejora UX de dashboard v2 (estadísticas reales)
+- No afecta REQ-025 (seguimiento granular)
+
+---
+
+## 2026-04-08 — Fix #155: Segmentation Stage Pause Control (Frontend)
+
+### Problema Reportado
+- **Usuario**: "la celda de sermentacion control aparece un guion, esto es normal ? no deberia aparecer un pausa? pues actualmente eesta activo?"
+- **Contexto**: Dashboard v2 mostraba `—` (guion) en lugar de botón pause/play para etapa "Segmentation"
+
+### Root Cause Analysis
+1. Backend: ✅ `KNOWN_PAUSE_STEPS` ya incluía `("segmentation", "Segmentación (LLM)")` desde Fix #154
+2. Frontend: ❌ `STAGE_PAUSE_KEY` en `useDashboardData.jsx` NO incluía "Segmentation"
+3. Consecuencia: `stage.pauseKey` era `null` → renderizaba guion en vez de control
+
+### Solución Implementada
+- **Archivo**: `app/frontend/src/hooks/useDashboardData.jsx` línea 27
+- **Cambio**: Agregado `'Segmentation': 'segmentation'` al mapeo
+- **Resultado**: Control de pausa/reanudación ahora funciona correctamente
+
+**Código antes:**
+```javascript
+const STAGE_PAUSE_KEY = {
+  'OCR': 'ocr',
+  'Chunking': 'chunking',
+  'Indexing': 'indexing',
+  'Insights': 'insights',
+  'Indexing Insights': 'indexing_insights'
+};
+```
+
+**Código después:**
+```javascript
+const STAGE_PAUSE_KEY = {
+  'OCR': 'ocr',
+  'Segmentation': 'segmentation', // ← NUEVO
+  'Chunking': 'chunking',
+  'Indexing': 'indexing',
+  'Insights': 'insights',
+  'Indexing Insights': 'indexing_insights'
+};
+```
+
+### Decisión
+- **¿Por qué solo frontend?**: Backend ya estaba correcto (Fix #154 agregó pause control)
+- **¿Por qué no lo detectamos antes?**: Fix #154 no incluyó testing de dashboard v2
+- **Lección**: Cuando agregamos stage nueva, verificar AMBOS lados (backend + frontend)
+
+### Alternativas Consideradas
+- ❌ Hacer stage "no pausable": Rechazado (usuario quiere control fino)
+- ❌ Cambiar nombre de stage: Rechazado (backend ya usa "segmentation")
+- ✅ Agregar mapeo frontend: Solución mínima, no invasiva
+
+### Impacto en Roadmap
+- Fix #155 completado (quirúrgico, 1 línea)
+- No afecta REQ-025 (seguimiento granular)
+- Mejora UX de dashboard v2
 
 ---
 

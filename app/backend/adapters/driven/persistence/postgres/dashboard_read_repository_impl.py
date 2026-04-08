@@ -294,24 +294,62 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
             )
         return groups, real_errors
 
+    def _fetch_pause_states(self, cursor) -> dict:
+        """Fetch current pause states from pipeline_runtime_kv."""
+        cursor.execute(
+            """
+            SELECT key, value
+            FROM pipeline_runtime_kv
+            WHERE key LIKE 'pause_%'
+            """
+        )
+        rows = cursor.fetchall()
+        pause_states = {}
+        for row in rows:
+            key = row["key"]
+            value = row["value"]
+            # Extract step name from key (e.g., "pause_ocr" -> "ocr")
+            step = key.replace("pause_", "")
+            # value is jsonb, should contain boolean
+            pause_states[step] = value if isinstance(value, bool) else False
+        return pause_states
+
     def _build_stage_analysis(self, cursor, inbox_count: int) -> List[dict]:
         stages: List[dict] = []
+        
+        # Fetch pause states from pipeline_runtime_kv
+        pause_states = self._fetch_pause_states(cursor)
 
         upload_counts = self._fetch_upload_stage_counts(cursor)
         ocr_errors = self._count_stage_errors(cursor, Stage.OCR)
+        segmentation_errors = self._count_stage_errors(cursor, Stage.SEGMENTATION)
         chunk_errors = self._count_stage_errors(cursor, Stage.CHUNKING)
         indexing_errors = self._count_stage_errors(cursor, Stage.INDEXING)
 
         upload_pending = upload_counts["pending"] or 0
         upload_processing = upload_counts["processing"] or 0
-        upload_completed = upload_counts["completed"] or 0
+        upload_completed_in_upload_done = upload_counts["completed"] or 0
         upload_paused = upload_counts["paused"] or 0
+        
+        # Count ALL documents that have passed upload (not in upload_pending/processing)
+        # This includes upload_done + all OCR+ stages
+        cursor.execute(
+            """
+            SELECT COUNT(*) as total FROM document_status
+            WHERE status NOT IN (%s, %s)
+            """,
+            (DocStatus.UPLOAD_PENDING, DocStatus.UPLOAD_PROCESSING)
+        )
+        upload_completed = cursor.fetchone()["total"] or 0
+        
         upload_total = upload_pending + upload_processing + upload_completed + upload_paused + ocr_errors
         upload_pending += max(0, inbox_count - upload_total)
 
         stages.append(
             {
                 "name": "Upload",
+                "pauseKey": "upload",
+                "paused": pause_states.get("upload", False),
                 "total_documents": upload_pending + upload_processing + upload_completed + upload_paused + ocr_errors,
                 "pending_tasks": upload_pending,
                 "processing_tasks": upload_processing,
@@ -330,6 +368,9 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
             cursor,
             [
                 DocStatus.OCR_DONE,
+                DocStatus.SEGMENTATION_PENDING,
+                DocStatus.SEGMENTATION_PROCESSING,
+                DocStatus.SEGMENTATION_DONE,
                 DocStatus.CHUNKING_PENDING,
                 DocStatus.CHUNKING_PROCESSING,
                 DocStatus.CHUNKING_DONE,
@@ -342,10 +383,10 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
                 DocStatus.COMPLETED,
             ],
         )
-        ocr_ready_for_chunking = self._count_ready_for_chunking(cursor)
-        chunk_queue_needs_input = self._queue_has_pending(cursor, TaskType.CHUNKING)
+        ocr_ready_for_segmentation = self._count_docs_in_statuses(cursor, [DocStatus.OCR_DONE, DocStatus.SEGMENTATION_PENDING])
+        segmentation_needs_input = self._count_docs_in_statuses(cursor, [DocStatus.SEGMENTATION_PENDING])
         ocr_blockers = []
-        if chunk_queue_needs_input and ocr_ready_for_chunking == 0:
+        if segmentation_needs_input > 0 and ocr_ready_for_segmentation == 0:
             ocr_blockers.append(
                 {
                     "reason": "No hay documentos con status='ocr_done' y texto OCR válido",
@@ -356,6 +397,8 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
         stages.append(
             {
                 "name": "OCR",
+                "pauseKey": "ocr",
+                "paused": pause_states.get("ocr", False),
                 "total_documents": (ocr_queue["pending"] or 0)
                 + (ocr_queue["processing"] or 0)
                 + max(ocr_queue["completed"] or 0, ocr_done_from_docs)
@@ -364,8 +407,53 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
                 "processing_tasks": ocr_queue["processing"] or 0,
                 "completed_tasks": max(ocr_queue["completed"] or 0, ocr_done_from_docs),
                 "error_tasks": ocr_errors,
-                "ready_for_next": ocr_ready_for_chunking,
+                "ready_for_next": ocr_ready_for_segmentation,
                 "blockers": ocr_blockers,
+            }
+        )
+
+        # Segmentation stage (NEW - LLM-based news detection)
+        segmentation_done_from_docs = self._count_docs_in_statuses(
+            cursor,
+            [
+                DocStatus.SEGMENTATION_DONE,
+                DocStatus.CHUNKING_PENDING,
+                DocStatus.CHUNKING_PROCESSING,
+                DocStatus.CHUNKING_DONE,
+                DocStatus.INDEXING_PENDING,
+                DocStatus.INDEXING_PROCESSING,
+                DocStatus.INDEXING_DONE,
+                DocStatus.INSIGHTS_PENDING,
+                DocStatus.INSIGHTS_PROCESSING,
+                DocStatus.INSIGHTS_DONE,
+                DocStatus.COMPLETED,
+            ],
+        )
+        segmentation_pending = self._count_docs_in_statuses(cursor, [DocStatus.SEGMENTATION_PENDING])
+        segmentation_processing = self._count_docs_in_statuses(cursor, [DocStatus.SEGMENTATION_PROCESSING])
+        segmentation_ready_for_chunking = self._count_docs_in_statuses(cursor, [DocStatus.SEGMENTATION_DONE, DocStatus.CHUNKING_PENDING])
+        chunk_queue_needs_input = self._queue_has_pending(cursor, TaskType.CHUNKING)
+        segmentation_blockers = []
+        if chunk_queue_needs_input and segmentation_ready_for_chunking == 0:
+            segmentation_blockers.append(
+                {
+                    "reason": "No hay documentos con segmentación completa",
+                    "count": 0,
+                    "solution": "Esperando que documentos completen segmentación LLM",
+                }
+            )
+        stages.append(
+            {
+                "name": "Segmentation",
+                "pauseKey": "segmentation",
+                "paused": pause_states.get("segmentation", False),
+                "total_documents": segmentation_pending + segmentation_processing + segmentation_done_from_docs + segmentation_errors,
+                "pending_tasks": segmentation_pending,
+                "processing_tasks": segmentation_processing,
+                "completed_tasks": segmentation_done_from_docs,
+                "error_tasks": segmentation_errors,
+                "ready_for_next": segmentation_ready_for_chunking,
+                "blockers": segmentation_blockers,
             }
         )
 
@@ -384,7 +472,7 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
                 DocStatus.COMPLETED,
             ],
         )
-        chunk_ready_for_indexing = self._count_ready_for_indexing(cursor)
+        chunk_ready_for_indexing = self._count_docs_in_statuses(cursor, [DocStatus.CHUNKING_DONE, DocStatus.INDEXING_PENDING])
         indexing_needs_input = self._queue_has_pending(cursor, TaskType.INDEXING)
         chunk_blockers = []
         if indexing_needs_input and chunk_ready_for_indexing == 0:
@@ -398,6 +486,8 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
         stages.append(
             {
                 "name": "Chunking",
+                "pauseKey": "chunking",
+                "paused": pause_states.get("chunking", False),
                 "granularity": "document",
                 "total_documents": (chunk_queue["pending"] or 0)
                 + (chunk_queue["processing"] or 0)
@@ -427,6 +517,8 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
         stages.append(
             {
                 "name": "Indexing",
+                "pauseKey": "indexing",
+                "paused": pause_states.get("indexing", False),
                 "granularity": "document",
                 "total_documents": (indexing_queue["pending"] or 0)
                 + (indexing_queue["processing"] or 0)
@@ -442,8 +534,8 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
         )
 
         # Insights stages
-        insights_stage = self._fetch_insights_stage(cursor)
-        indexing_ins_stage = self._fetch_indexing_insights_stage(cursor)
+        insights_stage = self._fetch_insights_stage(cursor, pause_states)
+        indexing_ins_stage = self._fetch_indexing_insights_stage(cursor, pause_states)
         insights_stage["ready_for_next"] = indexing_ins_stage["pending_tasks"]
         stages.append(insights_stage)
         stages.append(indexing_ins_stage)
@@ -707,7 +799,7 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
         )
         return (cursor.fetchone()["n"] or 0) > 0
 
-    def _fetch_insights_stage(self, cursor) -> dict:
+    def _fetch_insights_stage(self, cursor, pause_states: dict) -> dict:
         cursor.execute(
             """
             SELECT
@@ -744,6 +836,8 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
         docs = cursor.fetchone()
         return {
             "name": "Insights",
+            "pauseKey": "insights",
+            "paused": pause_states.get("insights", False),
             "granularity": "news_item",
             "total_documents": (data["pending"] or 0) + (data["processing"] or 0) + (data["completed"] or 0) + (data["errors"] or 0),
             "pending_tasks": data["pending"] or 0,
@@ -756,7 +850,7 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
             "blockers": [],
         }
 
-    def _fetch_indexing_insights_stage(self, cursor) -> dict:
+    def _fetch_indexing_insights_stage(self, cursor, pause_states: dict) -> dict:
         cursor.execute(
             """
             SELECT
@@ -774,6 +868,8 @@ class PostgresDashboardReadRepository(BasePostgresRepository, DashboardReadRepos
         completed = data["completed"] or 0
         return {
             "name": "Indexing Insights",
+            "pauseKey": "indexing_insights",
+            "paused": pause_states.get("indexing_insights", False),
             "granularity": "news_item",
             "total_documents": pending + processing + completed,
             "pending_tasks": pending,

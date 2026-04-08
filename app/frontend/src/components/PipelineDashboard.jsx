@@ -108,7 +108,7 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
     }
   }, [API_URL, token, refetch]);
 
-  // Handle pause/resume ALL stages
+  // Handle pause ALL stages
   const handlePauseAll = useCallback(async () => {
     if (!token) {
       alert('Error: No estás autenticado. Por favor, inicia sesión nuevamente.');
@@ -117,16 +117,10 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
     
     if (!data?.pipeline?.stages) return;
     
-    // Check if all are paused
-    const allPaused = data.pipeline.stages
-      .filter(s => s.pauseKey)
-      .every(s => s.paused);
+    console.log('[PauseAll] Pausing all stages');
     
-    const newState = !allPaused;
-    console.log(`[PauseAll] Current: all paused = ${allPaused}, New state: ${newState ? 'pause all' : 'resume all'}`);
-    
-    // Backend expects: { "pause_all": true } or { "resume_all": true }
-    const payload = newState ? { pause_all: true } : { resume_all: true };
+    // Backend expects: { "pause_all": true }
+    const payload = { pause_all: true };
     
     try {
       console.log('[PauseAll] Sending request:', payload);
@@ -144,14 +138,49 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
       console.log('[PauseAll] Success:', response.data);
       
       // Force immediate refresh
-      console.log('[PauseAll] Forcing refresh...');
       await refetch();
-      
-      console.log('[PauseAll] Refresh complete');
     } catch (err) {
       console.error('[PauseAll] Error:', err);
       const errorMsg = err.response?.data?.detail || err.message;
-      alert(`Error al pausar/reanudar todo: ${errorMsg}`);
+      alert(`Error al pausar todo: ${errorMsg}`);
+    }
+  }, [API_URL, token, data, refetch]);
+
+  // Handle resume ALL stages
+  const handleResumeAll = useCallback(async () => {
+    if (!token) {
+      alert('Error: No estás autenticado. Por favor, inicia sesión nuevamente.');
+      return;
+    }
+    
+    if (!data?.pipeline?.stages) return;
+    
+    console.log('[ResumeAll] Resuming all stages');
+    
+    // Backend expects: { "resume_all": true }
+    const payload = { resume_all: true };
+    
+    try {
+      console.log('[ResumeAll] Sending request:', payload);
+      const response = await axios.put(
+        `${API_URL}/api/admin/insights-pipeline`,
+        payload,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: API_TIMEOUT_MS
+        }
+      );
+      console.log('[ResumeAll] Success:', response.data);
+      
+      // Force immediate refresh
+      await refetch();
+    } catch (err) {
+      console.error('[ResumeAll] Error:', err);
+      const errorMsg = err.response?.data?.detail || err.message;
+      alert(`Error al reanudar todo: ${errorMsg}`);
     }
   }, [API_URL, token, data, refetch]);
 
@@ -264,34 +293,31 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
               icon={ChartBarIcon}
               priority="high"
               defaultCollapsed={false}
+              headerAction={
+                data.pipeline.stages.some(s => s.pauseKey) ? (
+                  <div className="pause-all-controls">
+                    <button
+                      onClick={handlePauseAll}
+                      className="pause-all-button pause-all-button--pause"
+                      disabled={!isAdmin}
+                      title={!isAdmin ? "Requiere permisos de administrador" : "Pausar todas las etapas"}
+                    >
+                      <PauseIcon style={{ width: 14, height: 14 }} />
+                      <span>Pausar TODO</span>
+                    </button>
+                    <button
+                      onClick={handleResumeAll}
+                      className="pause-all-button pause-all-button--resume"
+                      disabled={!isAdmin}
+                      title={!isAdmin ? "Requiere permisos de administrador" : "Reanudar todas las etapas"}
+                    >
+                      <PlayIcon style={{ width: 14, height: 14 }} />
+                      <span>Reanudar TODO</span>
+                    </button>
+                  </div>
+                ) : null
+              }
             >
-              {/* Global Pause Control (Admin only) */}
-              {isAdmin && (
-                <div className="pipeline-global-control">
-                  <button
-                    onClick={handlePauseAll}
-                    className="pause-all-button"
-                    title={
-                      data.pipeline.stages.filter(s => s.pauseKey).every(s => s.paused)
-                        ? "Reanudar todas las etapas"
-                        : "Pausar todas las etapas"
-                    }
-                  >
-                    {data.pipeline.stages.filter(s => s.pauseKey).every(s => s.paused) ? (
-                      <>
-                        <PlayIcon style={{ width: 16, height: 16 }} />
-                        <span>Reanudar TODO</span>
-                      </>
-                    ) : (
-                      <>
-                        <PauseIcon style={{ width: 16, height: 16 }} />
-                        <span>Pausar TODO</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              )}
-              
               <PipelineStatusTable
                 stages={data.pipeline.stages}
                 isAdmin={isAdmin}

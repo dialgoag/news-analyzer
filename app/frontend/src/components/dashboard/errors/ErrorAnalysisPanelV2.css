@@ -1,0 +1,235 @@
+/* ErrorAnalysisPanelV2 Component Styles */
+
+.error-analysis-panel-v2 {
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.error-analysis-panel-v2--empty {
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.error-analysis-panel-v2--empty p {
+  font-size: 18px;
+  color: #4caf50;
+  margin: 0;
+}
+
+/* Statistics Header */
+.error-analysis-panel-v2__stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.stat-card {
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-card__label {
+  font-size: 11px;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-card__value {
+  font-size: 24px;
+  font-weight: 700;
+  font-family: 'Fira Code', monospace;
+  color: #e2e8f0;
+}
+
+.stat-card__value--total {
+  color: #f44336;
+}
+
+.stat-card__value--retriable {
+  color: #3b82f6;
+}
+
+.stat-card__value--critical {
+  color: #f44336;
+}
+
+/* Action Bar */
+.error-analysis-panel-v2__actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.action-button {
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+}
+
+.action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.action-button--primary {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.action-button--primary:hover:not(:disabled) {
+  background: #2563eb;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+.action-button--secondary {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.action-button--secondary:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.3);
+}
+
+.action-button--tertiary {
+  background: rgba(148, 163, 184, 0.1);
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.action-button--tertiary:hover:not(:disabled) {
+  background: rgba(148, 163, 184, 0.2);
+}
+
+/* Status Message */
+.error-analysis-panel-v2__status {
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.error-analysis-panel-v2__status--success {
+  background: rgba(76, 175, 80, 0.15);
+  border: 1px solid rgba(76, 175, 80, 0.3);
+  color: #4caf50;
+}
+
+.error-analysis-panel-v2__status--error {
+  background: rgba(244, 67, 54, 0.15);
+  border: 1px solid rgba(244, 67, 54, 0.3);
+  color: #f44336;
+}
+
+.error-analysis-panel-v2__status--warning {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #f59e0b;
+}
+
+/* Sections */
+.error-analysis-panel-v2__section {
+  margin-bottom: 24px;
+}
+
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f1f5f9;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-subtitle {
+  font-size: 12px;
+  font-weight: 400;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+/* Help Section */
+.error-analysis-panel-v2__help {
+  margin-top: 20px;
+  padding: 12px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 6px;
+}
+
+.error-analysis-panel-v2__help summary {
+  font-size: 12px;
+  font-weight: 500;
+  color: #60a5fa;
+  cursor: pointer;
+  user-select: none;
+}
+
+.error-analysis-panel-v2__help summary:hover {
+  color: #93c5fd;
+}
+
+.help-content {
+  margin-top: 12px;
+  font-size: 12px;
+  color: #cbd5e1;
+  line-height: 1.6;
+}
+
+.help-content p {
+  margin: 6px 0;
+}
+
+.help-content strong {
+  color: #f1f5f9;
+}
+
+.help-content em {
+  color: #94a3b8;
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .error-analysis-panel-v2__stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .error-analysis-panel-v2 {
+    padding: 16px;
+  }
+
+  .error-analysis-panel-v2__stats {
+    grid-template-columns: 1fr;
+  }
+
+  .stat-card__value {
+    font-size: 20px;
+  }
+
+  .error-analysis-panel-v2__actions {
+    flex-direction: column;
+  }
+
+  .action-button {
+    width: 100%;
+  }
+}

@@ -39,6 +39,11 @@ class DocStatus:
     OCR_PROCESSING = "ocr_processing"
     OCR_DONE = "ocr_done"
 
+    # Segmentation stage (NEW - LLM-based news article detection)
+    SEGMENTATION_PENDING = "segmentation_pending"
+    SEGMENTATION_PROCESSING = "segmentation_processing"
+    SEGMENTATION_DONE = "segmentation_done"
+
     # Chunking stage
     CHUNKING_PENDING = "chunking_pending"
     CHUNKING_PROCESSING = "chunking_processing"
@@ -62,6 +67,7 @@ class DocStatus:
     ACTIVE_STATES = {
         UPLOAD_PENDING, UPLOAD_PROCESSING, UPLOAD_DONE,
         OCR_PENDING, OCR_PROCESSING, OCR_DONE,
+        SEGMENTATION_PENDING, SEGMENTATION_PROCESSING, SEGMENTATION_DONE,
         CHUNKING_PENDING, CHUNKING_PROCESSING, CHUNKING_DONE,
         INDEXING_PENDING, INDEXING_PROCESSING, INDEXING_DONE,
         INSIGHTS_PENDING, INSIGHTS_PROCESSING, INSIGHTS_DONE,
@@ -69,15 +75,15 @@ class DocStatus:
     TERMINAL_STATES = {COMPLETED, ERROR, PAUSED}
 
     PENDING_STATES = {
-        UPLOAD_PENDING, OCR_PENDING, CHUNKING_PENDING,
+        UPLOAD_PENDING, OCR_PENDING, SEGMENTATION_PENDING, CHUNKING_PENDING,
         INDEXING_PENDING, INSIGHTS_PENDING,
     }
     PROCESSING_STATES = {
-        UPLOAD_PROCESSING, OCR_PROCESSING, CHUNKING_PROCESSING,
+        UPLOAD_PROCESSING, OCR_PROCESSING, SEGMENTATION_PROCESSING, CHUNKING_PROCESSING,
         INDEXING_PROCESSING, INSIGHTS_PROCESSING,
     }
     DONE_STATES = {
-        UPLOAD_DONE, OCR_DONE, CHUNKING_DONE,
+        UPLOAD_DONE, OCR_DONE, SEGMENTATION_DONE, CHUNKING_DONE,
         INDEXING_DONE, INSIGHTS_DONE, COMPLETED,
     }
 
@@ -99,24 +105,26 @@ class Stage:
     """document_status.processing_stage — which pipeline step the doc is in."""
     UPLOAD = "upload"
     OCR = "ocr"
+    SEGMENTATION = "segmentation"
     CHUNKING = "chunking"
     INDEXING = "indexing"
     INSIGHTS = "insights"
     COMPLETED = "completed"
 
-    ORDERED = [UPLOAD, OCR, CHUNKING, INDEXING, INSIGHTS, COMPLETED]
+    ORDERED = [UPLOAD, OCR, SEGMENTATION, CHUNKING, INDEXING, INSIGHTS, COMPLETED]
 
 
 class TaskType:
     """processing_queue.task_type / worker_tasks.task_type."""
+    UPLOAD = "upload"
     OCR = "ocr"
+    SEGMENTATION = "segmentation"
     CHUNKING = "chunking"
     INDEXING = "indexing"
     INSIGHTS = "insights"
     INDEXING_INSIGHTS = "indexing_insights"
-    INDEXING_INSIGHTS = "indexing_insights"
 
-    ALL = [OCR, CHUNKING, INDEXING, INSIGHTS, INDEXING_INSIGHTS]
+    ALL = [UPLOAD, OCR, SEGMENTATION, CHUNKING, INDEXING, INSIGHTS, INDEXING_INSIGHTS]
 
 
 class QueueStatus:

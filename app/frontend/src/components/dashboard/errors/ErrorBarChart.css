@@ -1,0 +1,109 @@
+/* ErrorBarChart Component Styles */
+
+.error-bar-chart {
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.error-bar-chart--empty {
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.error-bar-chart--empty p {
+  font-size: 18px;
+  color: #4caf50;
+  margin: 0;
+}
+
+/* SVG elements */
+.error-bar-chart__svg {
+  display: block;
+}
+
+.error-bar-group {
+  transition: opacity 0.2s ease;
+}
+
+.error-bar-group:hover .error-bar__rect {
+  fill-opacity: 1 !important;
+}
+
+.error-bar-group--selected .error-bar__rect {
+  stroke: #60a5fa;
+  stroke-width: 2;
+}
+
+.error-bar__rect {
+  transition: fill-opacity 0.2s ease;
+}
+
+.error-bar__icon {
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.error-bar__label {
+  font-size: 12px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.error-bar__count {
+  font-size: 13px;
+  font-weight: 700;
+  font-family: 'Fira Code', monospace;
+  pointer-events: none;
+}
+
+.error-bar__note {
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* Retry button */
+.error-bar__retry-button {
+  transition: transform 0.15s ease;
+}
+
+.error-bar__retry-button:hover {
+  transform: translateX(2px);
+}
+
+.error-bar__retry-button:hover .retry-button__bg {
+  fill-opacity: 0.4;
+}
+
+.retry-button__text {
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* Axis */
+.error-bar__axis-label {
+  font-size: 11px;
+  font-family: 'Fira Code', monospace;
+}
+
+.error-bar__axis-title {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .error-bar-group,
+  .error-bar__rect,
+  .error-bar__retry-button {
+    transition: none;
+  }
+  
+  .error-bar__retry-button:hover {
+    transform: none;
+  }
+}

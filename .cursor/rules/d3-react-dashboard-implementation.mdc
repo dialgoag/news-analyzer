@@ -1,0 +1,297 @@
+---
+alwaysApply: false
+---
+---
+description: Engineering implementation rules for dashboards built with React and D3.
+globs: ["**/*.{ts,tsx,js,jsx}"]
+alwaysApply: false
+---
+
+# D3 + React Dashboard Implementation
+
+Use this rule when building or modifying interactive dashboards with React and D3.
+
+## Purpose
+
+Ensure dashboards are:
+- maintainable
+- performant
+- accessible
+- responsive
+- interoperable across linked views
+
+---
+
+## 1. React and D3 separation of responsibilities
+
+- React owns component structure, rendering lifecycle, and DOM composition.
+- D3 should primarily handle:
+  - scales
+  - layout calculations
+  - path generation
+  - force / sankey / brush logic
+  - controlled attribute updates
+- Avoid letting D3 create arbitrary DOM nodes that React also manages.
+- Prefer React-rendered SVG structure with D3 used for geometry and behavior.
+
+### Default pattern
+- React creates `svg`, `g`, `path`, `rect`, `circle`, `text`.
+- D3 computes positions, scales, layouts, and interaction helpers.
+- If D3 must mutate DOM for a specialized behavior, keep that surface isolated and well-contained.
+
+---
+
+## 2. State management for coordinated dashboards
+
+- Linked visualizations must use shared state, not ad hoc local coupling.
+- Prefer:
+  - React Context for dashboard-local coordination
+  - Zustand / Redux only when the state scope is broader
+- Centralize filters such as:
+  - timeRange
+  - category
+  - stage
+  - status
+  - keyword
+  - selectedEntity
+- A view may derive local display state, but source-of-truth analytical filters must remain centralized.
+
+### Required behavior
+- One view updates shared filters.
+- Other views react declaratively to those filters.
+- Avoid duplicated filtering logic scattered across unrelated components when a shared selector can be extracted.
+
+---
+
+## 3. D3 update pattern
+
+- Use stable data joins.
+- Always provide a stable key when binding collections.
+- Support proper enter / update / exit behavior when elements are dynamic.
+- Transitions should improve comprehension, not decorate the UI.
+- Keep transitions:
+  - short
+  - deterministic
+  - interrupt-safe
+
+### Guidance
+- Use transitions for:
+  - value updates
+  - sorting changes
+  - filtering reveals
+  - layout shifts
+- Avoid large animated motion that makes comparisons harder.
+
+---
+
+## 4. Choosing D3 vs simpler rendering paths
+
+- Do not choose D3 by default for every chart.
+- Prefer plain React + SVG or declarative charting tools when the visualization is simple.
+- Use D3 when you need:
+  - custom layout
+  - brushing
+  - zooming
+  - force simulation
+  - sankey layout
+  - advanced scales / axes / geometry
+  - bespoke interactions
+
+### Default preference order
+1. plain React + SVG for simple custom charts
+2. Plot / Vega-Lite / Plotly / BI tool when fast delivery matters
+3. D3 when customization or behavior truly requires it
+
+---
+
+## 5. Performance rules
+
+### 5.1 Memoize expensive calculations
+Memoize:
+- scales
+- derived datasets
+- grouped/aggregated data
+- force/sankey/treemap layouts
+- expensive tooltip lookup structures
+
+Avoid recomputing chart geometry on unrelated renders.
+
+### 5.2 Debounce noisy inputs
+Debounce:
+- search input
+- sliders
+- free-text filters
+- resize-driven recalculations if needed
+
+### 5.3 Virtualize large lists
+Use virtualization for:
+- long tables
+- large side panels
+- item lists with 100+ rows
+
+### 5.4 Lazy load heavy views
+Lazy-load views such as:
+- force graphs
+- word clouds
+- very large detail panels
+- non-primary tabs
+
+### 5.5 Minimize DOM pressure
+- Avoid excessive SVG node counts where aggregation can help.
+- Consider canvas or hybrid rendering if mark count becomes very large.
+- Prefer aggregation, binning, or sampling over rendering every raw point unnecessarily.
+
+---
+
+## 6. Interaction rules
+
+- Every interaction must support an analytical purpose.
+- Supported interaction patterns include:
+  - hover for exact values
+  - click/select for filtering
+  - brushing for range selection
+  - zoom/pan when spatial or temporal inspection requires it
+  - linked highlighting across coordinated views
+  - details-on-demand panels
+
+### Interaction constraints
+- Never rely on hover alone for critical information.
+- Provide a persistent or keyboard-accessible alternative where possible.
+- Preserve context when filtering; avoid making the user lose orientation.
+- Include a clear reset path for applied interactions.
+
+---
+
+## 7. Accessibility requirements
+
+### 7.1 Keyboard access
+Interactive marks must be keyboard reachable where feasible.
+Use:
+- `tabIndex`
+- keyboard activation for Enter / Space
+- visible focus state
+
+### 7.2 Semantics
+Add:
+- `role`
+- `aria-label`
+- `title`
+- `desc`
+for charts or key elements where appropriate.
+
+### 7.3 Color
+Do not rely on color alone to communicate critical state.
+Combine color with:
+- labels
+- icons
+- patterns
+- stroke style
+- shape
+- ordering
+- annotation
+
+### 7.4 Contrast and readability
+- Maintain readable contrast.
+- Keep labels legible at expected dashboard sizes.
+- Avoid tiny text in dense SVG layouts.
+
+---
+
+## 8. Responsiveness
+
+- Charts must adapt to container size rather than assume fixed desktop width.
+- Prefer container-based sizing.
+- Recalculate scales and layouts when dimensions materially change.
+- Preserve readability on smaller screens:
+  - simplify labels
+  - collapse legends if needed
+  - reduce chart density
+  - switch to stacked layouts where appropriate
+
+---
+
+## 9. Testing expectations
+
+### Test logic, not only snapshots
+Add tests for:
+- data transforms
+- filtering logic
+- scale domain/range behavior
+- derived layout logic where practical
+- interaction state changes
+
+### Accessibility testing
+Test:
+- keyboard navigation
+- focus order
+- accessible names
+- critical chart semantics where possible
+
+### Performance sanity
+Where relevant, verify:
+- expensive calculations are memoized
+- renders are not triggered unnecessarily
+- repeated state updates do not cause avoidable redraws
+
+---
+
+## 10. Code structure expectations
+
+Prefer splitting code into:
+- data transform utilities
+- scale/layout hooks
+- interaction hooks
+- presentational chart components
+- dashboard orchestration components
+
+### Suggested structure
+- `hooks/` for reusable interaction and sizing hooks
+- `lib/` or `utils/` for transforms and layout helpers
+- `components/charts/` for chart views
+- `components/dashboard/` for coordinated composition
+
+Avoid embedding heavy transformation logic directly inside JSX.
+
+---
+
+## 11. Implementation checklist
+
+Before considering a dashboard view complete, verify:
+
+### Functionality
+- all views render correctly
+- linked filters behave consistently
+- tooltips or detail views show precise values
+- selection and reset behaviors are clear
+- brush / zoom interactions work if present
+
+### Performance
+- no obvious unnecessary rerenders
+- expensive calculations are memoized
+- heavy views are lazy-loaded if needed
+- large collections are virtualized when appropriate
+
+### Accessibility
+- interactive elements are reachable
+- chart has meaningful labels or descriptions
+- critical state is not encoded only with color
+- focus states are visible
+
+### Code quality
+- React owns structure
+- D3 is used for calculations/behavior, not chaotic DOM ownership
+- state is centralized where coordination matters
+- components remain reusable and composable
+- logic is testable
+
+---
+
+## 12. Review behavior
+
+When reviewing dashboard code:
+- identify ownership conflicts between React and D3
+- flag missing memoization on costly computations
+- flag brittle local state where shared filter state is required
+- flag inaccessible interactions
+- suggest simpler non-D3 approaches when D3 is unnecessary
+- prefer maintainable patterns over clever but opaque chart code

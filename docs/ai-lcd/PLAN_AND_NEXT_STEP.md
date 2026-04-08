@@ -7,36 +7,37 @@
 > **📋 ÚLTIMO**: REQ-024 — News Segmentation Agent (LLM-based article detection) ✅ IMPLEMENTADO (Fases 1-4).
 
 **Última actualización**: 2026-04-08  
-**Versión**: 5.1.0-alpha (news segmentation agent READY FOR DEPLOYMENT)
+**Versión**: 4.3.0 (Upload Worker Stage IMPLEMENTADO)
 
-**Nota**: Nueva petición REQ-025 documentada - "Seguimiento granular de segmentos: tabla expandible con input/proceso/output por stage" (📋 PENDIENTE para v5.1.0+)
+**Nota**: REQ-025 documentada - "Seguimiento granular de segmentos" (📋 PENDIENTE para v5.1.0+); REQ-026 completada - "Upload Worker Stage"
 
 ---
 
-## 🎯 ESTADO ACTUAL: News Segmentation Agent implementado (4 fases), listo para deploy
+## 🎯 ESTADO ACTUAL: Upload Worker implementado, listo para testing
 
-### ✅ IMPLEMENTATION STATUS
-- [x] **FASE 1**: NewsSegmentationAgent creado (LLM-based con anti-alucinación)
-- [x] **FASE 2**: Pipeline integration (nueva stage SEGMENTATION entre OCR y CHUNKING)
-- [x] **FASE 3**: Database schema (migration 022 + repository updates)
-- [x] **FASE 4**: Re-segmentation script (`scripts/re_segment_existing.py`)
-- [x] Dockerfile actualizado (COPY news_segmentation_agent.py)
-- [x] Dashboard API actualizado (stage "Segmentation" en pipeline)
-- [x] Pause control agregado (`pause.segmentation`)
-- [x] Documentación actualizada (CONSOLIDATED_STATUS, SESSION_LOG, PLAN)
+### ✅ IMPLEMENTATION STATUS - REQ-026
+- [x] **Upload Utils**: `upload_utils.py` creado (sistema de prefijos)
+- [x] **TaskType.UPLOAD**: Agregado a `pipeline_states.py`
+- [x] **KNOWN_PAUSE_STEPS**: Agregado ("upload", "Upload/Ingesta")
+- [x] **Upload Worker**: `_upload_worker_task()` implementado
+- [x] **Master Scheduler**: PASO 0 agregado (crea upload tasks)
+- [x] **Worker Pool**: Upload agregado (2 workers configurables)
+- [x] **Endpoint `/upload`**: Refactored (guarda con prefijo pending_)
+- [x] **Dashboard Backend**: pauseKey agregado a Upload stage
+- [x] **Frontend**: 'Upload': 'upload' en STAGE_PAUSE_KEY
+- [x] Build exitoso: Backend + Frontend
+- [x] Deploy exitoso: Todos los contenedores UP
 
 ### 🔄 PRÓXIMO PASO INMEDIATO
-**Deployment & Testing** - Desplegar News Segmentation Agent
-- [ ] Build nuevo backend: `make build-backend` (incluye news_segmentation_agent.py)
-- [ ] Deploy app: `make deploy-quick`
-- [ ] Verificar migration 022 aplicada: `SELECT * FROM news_items LIMIT 1;` (columna segmentation_confidence)
-- [ ] Testear nuevo documento: Verificar que pasa por SEGMENTATION stage (logs)
-- [ ] Verificar stage "Segmentation" visible en Pipeline Status Table
-- [ ] Testear pause control "segmentation" funciona
-- [ ] Ejecutar script re-segmentación (dry-run): `python scripts/re_segment_existing.py --dry-run --limit 10`
-- [ ] Si OK: Ejecutar con `--execute --limit 10` (primeros 10 docs)
-- [ ] Monitorear logs: Ver confidence scores, artículos detectados
-- [ ] Verificar reducción de rechazos LLM en insights (objetivo: de ~80% a <10%)
+**Testing Manual REQ-026 - Upload Worker Stage**
+- [ ] Subir archivo PDF válido → Ver en dashboard: pending → processing → completed
+- [ ] Verificar archivos: `ls app/local-data/uploads/` (pending_* → processing_* → {hash}_*)
+- [ ] Pausar upload → Intentar upload → Verificar 503
+- [ ] Reanudar upload → Upload funciona
+- [ ] Upload archivo grande → Rechazado con error
+- [ ] Upload formato inválido → Error en worker
+- [ ] Verificar OCR toma archivo validated correctamente
+- [ ] Testear retry de upload fallido
 
 ---
 
@@ -636,6 +637,37 @@ cd app && docker compose build backend frontend && docker compose up -d backend 
 ---
 
 ## ✅ COMPLETADO RECIENTEMENTE
+
+### 🎯 REQ-026: Upload Worker Stage (2026-04-08) - ✅ IMPLEMENTADO
+
+**Estado**: ✅ COMPLETADO (pendiente testing manual)  
+**Impacto**: Upload ahora es etapa completa del pipeline con worker asíncrono
+
+**Implementación**:
+- ✅ Sistema de prefijos: `pending_* → processing_* → {validated} → error_*`
+- ✅ Upload worker con validación exhaustiva (formato, tamaño, hash, legibilidad)
+- ✅ TaskType.UPLOAD agregado a pipeline
+- ✅ Pause control implementado (pausar ingesta desde dashboard)
+- ✅ Worker pool (2 workers configurables: `UPLOAD_PARALLEL_WORKERS`)
+- ✅ Estadísticas reales (pending/processing/completed/errors)
+- ✅ Retry de errores (endpoint `/documents/{id}/requeue`)
+- ✅ Endpoint `/upload` refactored (ya no blocking)
+- ✅ Frontend dashboard: pauseKey + control funcional
+
+**Archivos Creados/Modificados**:
+- NEW: `upload_utils.py` (200+ líneas)
+- Modified: `pipeline_states.py`, `pipeline_runtime_store.py`
+- Modified: `app.py` (worker + scheduler + pool)
+- Modified: `documents.py` (endpoint `/upload`)
+- Modified: `dashboard_read_repository_impl.py`, `useDashboardData.jsx`
+
+**Testing Pendiente**:
+- [ ] Upload válido → Ver flujo completo
+- [ ] Pause/resume → Verificar control
+- [ ] Errors → Testear validaciones
+- [ ] Retry → Verificar recuperación
+
+---
 
 ### 🎯 Sesión 43: Fix file naming + OCR symlink (2026-03-19) - ESTABLE
 **Fix #95**: File naming con hash prefix + extensión en symlinks

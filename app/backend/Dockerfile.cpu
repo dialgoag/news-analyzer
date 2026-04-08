@@ -25,6 +25,8 @@ COPY backend/backup_service.py .
 COPY backend/backup_models.py .
 COPY backend/backup_scheduler.py .
 COPY backend/pipeline_states.py .
+COPY backend/ocr_validation_agent.py .
+COPY backend/news_segmentation_agent.py .
 # worker_pool.py REMOVED in Fase 5C - GenericWorkerPool eliminated
 COPY backend/migration_runner.py .
 COPY backend/file_ingestion_service.py .
@@ -38,6 +40,9 @@ COPY backend/shared/ shared/
 
 # Migraciones de base de datos
 COPY backend/migrations/ ./migrations/
+
+# Scripts (NEW - re-segmentation, etc.)
+COPY backend/scripts/ ./scripts/
 
 COPY backend/entrypoint.sh .
 RUN chmod +x /app/entrypoint.sh

@@ -2,25 +2,46 @@
 
 > Análisis profundo de noticias en PDF con interfaz web multi-usuario
 
-**Última actualización**: 2026-03-27 (Fix #96–97 + ops doc; #95 sigue vigente)  
+**Última actualización**: 2026-04-08 (REQ-026: Upload Worker Stage)  
 **Fase AI-DLC**: Construcción  
 **Audiencia**: Desarrolladores, futuras sesiones de trabajo  
-**Versión**: 3.0.12 - Sistema estable y verificado ✅
+**Versión**: 4.3.0 - Upload Worker implementado ✅
 
 ---
 
-## 🔥 Reciente: #96–97 + operaciones (2026-03-27)
+## 🔥 Reciente: REQ-026 — Upload Worker Stage (2026-04-08)
 
-- **#96**: Un solo worker activo por `(document_id, task_type)` — migración `015`, `assign_worker` con advisory lock (evita mismo archivo duplicado en workers por carrera).
-- **#97**: Login — validación `minLength` y mensajes para red/422/401.
-- **#98**: `POST /api/workers/shutdown` y `/api/workers/start` — solo **JWT rol admin** (`require_admin`).
-- **Ops**: `03-operations/ORDERLY_SHUTDOWN_AND_REBUILD.md` — shutdown API y rebuild backend/frontend (**fuente única**).
+### ✅ IMPLEMENTADO Y DESPLEGADO
 
-Ver `CONSOLIDATED_STATUS.md` §96–98 y `SESSION_LOG.md` sesión 44.
+**Estado**: Código completo, sistema UP, listo para testing manual
+
+**Cambio principal**: Upload transformado de operación síncrona a worker stage completo del pipeline
+
+**Features**:
+- ✅ Worker asíncrono con validación exhaustiva (formato, tamaño, hash, legibilidad)
+- ✅ Sistema de prefijos: `pending_* → processing_* → validated → error_*`
+- ✅ Pausable desde dashboard
+- ✅ Worker pool (2 workers configurables: `UPLOAD_PARALLEL_WORKERS`)
+- ✅ Estadísticas reales (pending/processing/completed/errors)
+- ✅ Retry de errores
+- ✅ Operaciones atómicas (rename)
+
+**Documentación completa**:
+- 📋 [Resumen Ejecutivo](./SESSION_SUMMARY_2026-04-08.md) - Overview de la sesión 59
+- 🧪 [Guía de Testing](./REQ-026_TESTING_GUIDE.md) - Comandos para verificar funcionamiento
+- 📚 [Índice de Docs](./REQ-026_DOCUMENTATION_INDEX.md) - Navegación completa
+- 🏗️ [Plan Técnico](./PLAN_REQ-026_UPLOAD_WORKER.md) - Arquitectura y decisiones
+- 💻 [Implementación](./REQ-026_UPLOAD_WORKER_IMPLEMENTED.md) - Código modificado
+
+**Ver también**: `CONSOLIDATED_STATUS.md` §157 y `SESSION_LOG.md` sesión 59.
+
+**Próxima acción**: Testing manual (ver [REQ-026_TESTING_GUIDE.md](./REQ-026_TESTING_GUIDE.md))
 
 ---
 
-## 🔥 Fix estable: #95 - File Naming + OCR Symlink (2026-03-19)
+## 🔥 Reciente anterior: REQ-024 — News Segmentation Agent (2026-04-08)
+
+**Fix #154**: LLM-based intelligent article detection con anti-alucinación
 
 > **Problema**: Archivos con mismo nombre se sobrescribían; OCR rechazaba symlinks sin extensión `.pdf`  
 > **Solución**: Hash prefix (8 chars) + extensión `.pdf` en symlinks  

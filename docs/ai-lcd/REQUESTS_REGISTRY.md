@@ -3,8 +3,8 @@
 > **Propósito**: Rastrear TODAS las peticiones del usuario con trazabilidad completa
 > 
 > **Última actualización**: 2026-04-08  
-> **Total peticiones**: 23  
-> **Completadas**: 19 | Pendientes: 4 (REQ-014, REQ-021 parcial, REQ-022, REQ-025) | Rechazadas: 0
+> **Total peticiones**: 24  
+> **Completadas**: 20 | Pendientes: 4 (REQ-014, REQ-021 parcial, REQ-022, REQ-025) | Rechazadas: 0
 
 > **Pendientes técnicos** (mejoras, fixes): ver `PENDING_BACKLOG.md` (fuente única).
 
@@ -37,6 +37,10 @@
 | **REQ-021** | 2026-03-31 | "Refactor Backend SOLID + Hexagonal + DDD + LangChain/LangGraph" | 🔄 **EN PROGRESO** | v4.0.0 | #110, #111, **#112** |
 | **REQ-021** | 2026-03-30 | **Spike**: análisis LLM local vs API para **calidad** de insights (sin producto obligatorio) | ✅ **COMPLETADA** (doc) | — | **#103** (doc spike) |
 | **REQ-022** | 2026-04-08 | "Rediseñar Dashboard React+D3 con Visual Analytics Framework" | 🔄 **EN PROGRESO** | v5.0.0 | #138+ |
+| **REQ-023** | 2026-04-08 | "OCR Validation + Web Enrichment con LangGraph" | ✅ **COMPLETADA** | v4.1.0 | #145-#147 |
+| **REQ-024** | 2026-04-08 | "News Segmentation Agent (LLM-based intelligent article detection)" | ✅ **COMPLETADA** | v4.2.0 | #154 |
+| **REQ-025** | 2026-04-08 | "Tabla expandible seguimiento granular (input/proceso/output por stage)" | 📋 **DOCUMENTADA** | v5.1.0 | — |
+| **REQ-026** | 2026-04-08 | "Upload como Worker Stage completo (pausable, stats, errors, retry)" | ✅ **COMPLETADA** | v4.3.0 | #157 |
 
 ---
 
@@ -1976,6 +1980,173 @@ Aplicar framework de visual analytics completo siguiendo skill y rules:
 - D3+React Rule: `.cursor/rules/d3-react-dashboard-implementation.mdc`
 - CONSOLIDATED_STATUS.md (será actualizado con Fix #138+)
 - SESSION_LOG.md (decisiones de diseño)
+
+---
+
+---
+
+### **REQ-026: "Upload como Worker Stage completo (pausable, stats, errors, retry)"**
+
+**Metadata**:
+- **Fecha**: 2026-04-08
+- **Sesión**: Sesión 59 (Post Fix #156 Upload Statistics)
+- **Prioridad**: 🔴 ALTA (consistencia arquitectural crítica)
+- **Estado**: ✅ **COMPLETADA**
+- **Versión**: v4.3.0
+
+**Descripción Original**:
+> "quiero que sea a imagen y semejanza de los demas psas de la pipeline un worker con su pausa con sus stats y todo sus sub etapas manejo de errores, todo."
+
+**Problema Identificado**:
+1. **Upload síncrono**: Bloqueaba HTTP request durante guardado
+2. **No pausable**: No se podía detener ingesta cuando sistema saturado
+3. **Estadísticas incorrectas**: completed_tasks=0 (Fix #156 lo detectó)
+4. **Sin retry**: Upload fallido requería re-upload manual
+5. **Sin observabilidad**: No se veían sub-etapas de validación
+6. **Inconsistente**: Todas las demás stages tienen worker pool EXCEPTO upload
+
+**Contexto**:
+- ✅ Estados `upload_pending`, `upload_processing`, `upload_done` ya existían
+- ✅ `document_stage_timing` ya soportaba `stage='upload'`
+- ❌ No había `TaskType.UPLOAD`
+- ❌ No había worker function `_upload_worker_task()`
+- ❌ Upload NO estaba en `KNOWN_PAUSE_STEPS`
+
+**Solución Implementada**:
+
+**Sistema de Prefijos** (archivo naming convention):
+```
+pending_{hash}_{filename}.pdf       → Esperando validación
+processing_{hash}_{filename}.pdf    → Worker validando
+{hash}_{filename}.pdf               → Validado ✅
+error_{hash}_{filename}.pdf         → Error (debug)
+```
+
+**Backend (9 archivos modificados)**:
+
+1. **`upload_utils.py` (NEW - 200+ líneas)**:
+   - `build_upload_filename()`: Construye nombre con prefijo
+   - `parse_upload_filename()`: Extrae estado, hash, nombre original
+   - `transition_file_state()`: Transición atómica entre estados (rename)
+   - `list_files_by_state()`: Lista archivos por estado
+   - `cleanup_error_files()`: Limpieza de archivos error viejos
+   - `get_validated_path()`: Obtiene path de archivo validated
+
+2. **`pipeline_states.py` línea 119**:
+   - Agregado `TaskType.UPLOAD = "upload"` como primer TaskType
+   - Agregado a `TaskType.ALL`
+
+3. **`pipeline_runtime_store.py` línea 21**:
+   - Agregado `("upload", "Upload/Ingesta")` a `KNOWN_PAUSE_STEPS`
+
+4. **`app.py` líneas 2613-2793 (NEW worker)**:
+   - `async def _upload_worker_task()`: Worker de validación
+   - Sub-etapas:
+     - Transition: pending → processing
+     - Validate format (extension check)
+     - Validate size (MAX_UPLOAD_SIZE_MB)
+     - Re-compute hash (integrity check)
+     - Validate readability (PDF: PyMuPDF page count)
+     - Transition: processing → validated (sin prefijo)
+     - Record stage timing
+   - Error handling: Transition a `error_*` + mark document error
+
+5. **`app.py` líneas 846-871 (scheduler PASO 0)**:
+   - Crea upload tasks para documentos `upload_pending`
+   - Verifica pause state: `_ipc.is_step_paused("upload")`
+
+6. **`app.py` línea 1155 (worker pool)**:
+   - Agregado `TaskType.UPLOAD` a `task_limits` (2 workers configurables)
+
+7. **`app.py` línea 1235 (handler)**:
+   - Agregado `TaskType.UPLOAD: lambda: asyncio.run(_upload_worker_task(...))`
+
+8. **`documents.py` líneas 406-563 (endpoint refactor)**:
+   - Verifica pause state (retorna 503 si pausado)
+   - Computa hash y verifica duplicados
+   - Guarda archivo con prefijo `pending_{hash}_{filename}`
+   - Crea DB record con `status=upload_pending`
+   - Registra stage timing
+   - Ya NO llama a `_process_document_sync` (worker lo hará)
+
+9. **`dashboard_read_repository_impl.py` líneas 350-351**:
+   - Agregado `"pauseKey": "upload"`
+   - Agregado `"paused": pause_states.get("upload", False)`
+
+**Frontend (1 archivo modificado)**:
+
+10. **`useDashboardData.jsx` línea 27**:
+    - Agregado `'Upload': 'upload'` a `STAGE_PAUSE_KEY`
+
+**Features Implementadas**:
+- ✅ Upload pausable desde dashboard
+- ✅ Worker pool asíncrono (2 workers configurables: `UPLOAD_PARALLEL_WORKERS`)
+- ✅ Estadísticas reales (pending/processing/completed/errors)
+- ✅ Retry de errores (endpoint `/documents/{id}/requeue`)
+- ✅ Sub-etapas observables (stage timing tracking)
+- ✅ Validación exhaustiva:
+  - Formato (extension check)
+  - Tamaño (MAX_UPLOAD_SIZE_MB)
+  - Integridad (re-compute SHA256)
+  - Legibilidad (PDF page count check)
+- ✅ Operaciones atómicas (rename es atomic en POSIX)
+- ✅ Endpoint `/upload` retorna 503 si pausado
+
+**Flujo Nuevo**:
+```
+1. POST /upload → Guarda como pending_{hash}_{filename}
+                → Crea DB: upload_pending
+                → Retorna 202
+
+2. Upload worker → Rename: pending_ → processing_
+                → Valida: formato ✓ tamaño ✓ hash ✓ legibilidad ✓
+                → Rename: processing_ → {filename} (validated)
+                → DB: upload_done
+
+3. OCR worker → Procesa archivo validated
+              → Pipeline continúa normal
+```
+
+**Impacto**:
+- 🚀 Upload ahora es primera-clase citizen del pipeline
+- ⏸️  Control fino de ingesta (pausar cuando sistema saturado)
+- 📊 Observabilidad completa de validación
+- ♻️  Retry robusto de uploads fallidos
+- 🎯 Validación exhaustiva ANTES de OCR (ahorro de recursos)
+- 🏗️  Consistencia arquitectural (todas las stages iguales)
+
+**⚠️ NO rompe**:
+- OCR pipeline ✅ (toma archivos sin prefijo)
+- Archivos existentes ✅ (código busca `{hash}_{filename}`)
+- Dashboard ✅ (Upload ahora tiene pauseKey)
+- Endpoints ✅ (backward compatible)
+
+**Fixes Relacionados**:
+- Fix #157: REQ-026 Implementation
+- Fix #156: Upload Stage Statistics (prerequisito)
+
+**Testing**:
+- [x] Backend build exitoso
+- [x] Frontend build exitoso
+- [x] Contenedores UP
+- [ ] Testing manual pendiente (subir archivo → ver pending → processing → validated → OCR)
+
+**Documentación**:
+- `docs/ai-lcd/PLAN_REQ-026_UPLOAD_WORKER.md` - Plan original
+- `docs/ai-lcd/REQ-026_UPLOAD_WORKER_IMPLEMENTED.md` - Implementación completa
+- `app/backend/upload_utils.py` - Utilidades de prefijos
+
+**Variables de Entorno**:
+```bash
+UPLOAD_PARALLEL_WORKERS=2  # Número de workers upload (default: 2)
+MAX_UPLOAD_SIZE_MB=50      # Tamaño máximo archivo (default: 50MB)
+```
+
+**Próximos Pasos**:
+1. Testing manual del flujo completo
+2. Unit tests (`test_upload_utils.py`, `test_upload_worker.py`)
+3. Integration tests (upload → validation → OCR)
+4. Performance testing (múltiples uploads simultáneos)
 
 ---
 

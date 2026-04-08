@@ -1,0 +1,255 @@
+/* WorkerStatusPanel Component Styles */
+
+.worker-status-panel {
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  padding: 20px;
+  position: relative;
+}
+
+.worker-status-panel--empty {
+  padding: 40px;
+  text-align: center;
+  color: #64748b;
+}
+
+/* Header */
+.worker-status-panel__header {
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.worker-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.worker-summary__metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metric__label {
+  font-size: 11px;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.metric__value {
+  font-size: 24px;
+  font-weight: 700;
+  font-family: 'Fira Code', monospace;
+}
+
+.metric__value--active {
+  color: #4caf50;
+}
+
+.metric__value--idle {
+  color: #94a3b8;
+}
+
+.metric__value--max {
+  color: #64748b;
+}
+
+.metric__value--percent {
+  font-size: 20px;
+}
+
+.metric__value--good {
+  color: #4caf50;
+}
+
+.metric__value--warning {
+  color: #f59e0b;
+}
+
+.metric__value--critical {
+  color: #f44336;
+}
+
+/* Status indicator */
+.worker-status-panel__status {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+}
+
+.worker-status-panel__status--good {
+  background: rgba(76, 175, 80, 0.15);
+  border: 1px solid rgba(76, 175, 80, 0.3);
+  color: #4caf50;
+}
+
+.worker-status-panel__status--warning {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #f59e0b;
+}
+
+.worker-status-panel__status--critical {
+  background: rgba(244, 67, 54, 0.15);
+  border: 1px solid rgba(244, 67, 54, 0.3);
+  color: #f44336;
+}
+
+/* Charts grid */
+.worker-status-panel__charts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+/* Legend */
+.worker-status-panel__legend {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.5);
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #cbd5e1;
+}
+
+.legend-swatch {
+  width: 20px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+.legend-swatch--good {
+  background: rgba(76, 175, 80, 0.3);
+}
+
+.legend-swatch--warning {
+  background: rgba(245, 158, 11, 0.4);
+}
+
+.legend-swatch--critical {
+  background: rgba(244, 67, 54, 0.5);
+}
+
+.legend-marker {
+  width: 3px;
+  height: 20px;
+  background: #0f172a;
+  border-radius: 1px;
+}
+
+/* Tooltip */
+.worker-status-panel__tooltip {
+  background: rgba(15, 23, 42, 0.98);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 12px;
+  color: #e2e8f0;
+  max-width: 320px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  animation: tooltipFadeIn 0.15s ease;
+}
+
+@keyframes tooltipFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Help section */
+.worker-status-panel__help {
+  margin-top: 16px;
+  padding: 12px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 6px;
+}
+
+.worker-status-panel__help summary {
+  font-size: 12px;
+  font-weight: 500;
+  color: #60a5fa;
+  cursor: pointer;
+  user-select: none;
+}
+
+.worker-status-panel__help summary:hover {
+  color: #93c5fd;
+}
+
+.help-content {
+  margin-top: 12px;
+  font-size: 12px;
+  color: #cbd5e1;
+  line-height: 1.6;
+}
+
+.help-content p {
+  margin: 6px 0;
+}
+
+.help-content strong {
+  color: #f1f5f9;
+}
+
+.help-content em {
+  color: #94a3b8;
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .worker-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .worker-status-panel__legend {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 640px) {
+  .worker-status-panel {
+    padding: 16px;
+  }
+
+  .worker-summary {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .metric__value {
+    font-size: 20px;
+  }
+
+  .worker-status-panel__charts {
+    gap: 8px;
+  }
+
+  .worker-status-panel__legend {
+    gap: 12px;
+    font-size: 10px;
+  }
+}

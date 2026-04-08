@@ -176,3 +176,205 @@ export const groupDocumentsByStage = (documents, mapStageFunc) => {
   
   return stages;
 };
+
+/**
+ * Transform dashboard data to Sankey format
+ * Creates nodes (stages) and links (document flows between stages)
+ * 
+ * @param {Object} analysisData - Analysis data from /api/dashboard/analysis
+ * @returns {Object} - {nodes: [], links: []} for d3.sankey()
+ */
+export const transformForSankey = (analysisData) => {
+  if (!analysisData?.pipeline?.stages) {
+    return { nodes: [], links: [] };
+  }
+
+  const stagesArray = analysisData.pipeline.stages;
+  
+  // Backend returns array, we need to work with it
+  if (!Array.isArray(stagesArray) || stagesArray.length === 0) {
+    return { nodes: [], links: [] };
+  }
+
+  const nodes = [];
+  const links = [];
+  const nodeMap = new Map(); // For quick lookup
+
+  // Define stage colors
+  const stageColors = {
+    'Upload': '#f59e0b',       // Orange
+    'OCR': '#3b82f6',          // Blue
+    'Chunking': '#8b5cf6',     // Purple
+    'Indexing': '#ec4899',     // Pink
+    'Insights': '#10b981',     // Green
+    'Indexing Insights': '#14b8a6'  // Teal
+  };
+
+  // Create nodes from array
+  stagesArray.forEach((stageData, index) => {
+    const stageName = stageData.name;
+    const total = stageData.total_documents || stageData.completed_tasks || 0;
+    
+    if (total === 0 && index > 0) return; // Skip empty stages except first one
+    
+    nodes.push({
+      id: `stage-${index}`,
+      name: stageName,
+      value: total,
+      color: stageColors[stageName] || '#94a3b8',
+      stage: stageName.toLowerCase(),
+      index,
+      meta: {
+        pending: stageData.pending_tasks || 0,
+        processing: stageData.processing_tasks || 0,
+        done: stageData.completed_tasks || 0,
+        error: stageData.error_tasks || 0
+      }
+    });
+    
+    nodeMap.set(stageName, nodes.length - 1);
+  });
+
+  // Create links between consecutive stages
+  for (let i = 0; i < stagesArray.length - 1; i++) {
+    const currentStage = stagesArray[i];
+    const nextStage = stagesArray[i + 1];
+    
+    if (!currentStage || !nextStage) continue;
+
+    const currentNodeIndex = nodeMap.get(currentStage.name);
+    const nextNodeIndex = nodeMap.get(nextStage.name);
+    
+    if (currentNodeIndex === undefined || nextNodeIndex === undefined) continue;
+
+    // Documents that completed current stage flow to next stage
+    const flowValue = currentStage.completed_tasks || 0;
+    
+    if (flowValue > 0) {
+      links.push({
+        source: currentNodeIndex,
+        target: nextNodeIndex,
+        value: flowValue,
+        stage: currentStage.name,
+        nextStage: nextStage.name
+      });
+    }
+  }
+
+  return { nodes, links };
+};
+
+/**
+ * Prepare sparkline data from historical metrics
+ * Creates time-series data for KPI sparklines
+ * 
+ * @param {Array} historicalData - Array of historical snapshots
+ * @param {string} metric - Metric to extract (e.g., 'total_docs', 'total_news')
+ * @param {number} hours - How many hours to show (default 1)
+ * @returns {Array} - [{timestamp, value}]
+ */
+export const prepareSparklineData = (historicalData = [], metric, hours = 1) => {
+  if (!Array.isArray(historicalData) || historicalData.length === 0) {
+    // Return empty sparkline with placeholders
+    const now = new Date();
+    const points = [];
+    for (let i = 11; i >= 0; i--) {
+      points.push({
+        timestamp: new Date(now.getTime() - i * 5 * 60 * 1000), // 5-minute intervals
+        value: 0
+      });
+    }
+    return points;
+  }
+
+  const now = new Date();
+  const startTime = new Date(now.getTime() - hours * 60 * 60 * 1000);
+  
+  // Filter to time range and extract metric
+  return historicalData
+    .filter(snapshot => {
+      const snapshotTime = new Date(snapshot.timestamp);
+      return snapshotTime >= startTime && snapshotTime <= now;
+    })
+    .map(snapshot => ({
+      timestamp: new Date(snapshot.timestamp),
+      value: snapshot[metric] || 0
+    }))
+    .sort((a, b) => a.timestamp - b.timestamp);
+};
+
+/**
+ * Calculate comparison metrics (current vs previous period)
+ * @param {number} current - Current value
+ * @param {number} previous - Previous period value
+ * @returns {Object} - {change, changePercent, direction, isImprovement}
+ */
+export const calculateComparison = (current, previous, metric = 'count') => {
+  const change = current - previous;
+  const changePercent = previous > 0 ? Math.round((change / previous) * 100) : 0;
+  const direction = change > 0 ? 'up' : change < 0 ? 'down' : 'stable';
+  
+  // For most metrics, up is good. For errors, down is good.
+  const isImprovement = metric === 'errors' 
+    ? direction === 'down' 
+    : direction === 'up';
+  
+  return {
+    change,
+    changePercent,
+    direction,
+    isImprovement,
+    indicator: direction === 'up' ? '↑' : direction === 'down' ? '↓' : '→'
+  };
+};
+
+/**
+ * Extract comparison data from sparkline
+ * Compares most recent value vs value from N intervals ago
+ * 
+ * @param {Array} sparklineData - Array from prepareSparklineData
+ * @param {number} intervals - How many intervals back to compare (default 12 = 1 hour at 5min intervals)
+ * @returns {Object} - Comparison metrics
+ */
+export const extractSparklineComparison = (sparklineData, intervals = 12) => {
+  if (!sparklineData || sparklineData.length < 2) {
+    return { change: 0, changePercent: 0, direction: 'stable', isImprovement: false, indicator: '→' };
+  }
+
+  const current = sparklineData[sparklineData.length - 1].value;
+  const compareIndex = Math.max(0, sparklineData.length - intervals - 1);
+  const previous = sparklineData[compareIndex].value;
+  
+  return calculateComparison(current, previous);
+};
+
+/**
+ * Generate tooltip HTML for KPI card with sparkline
+ * @param {Object} kpiData - KPI data with sparkline
+ * @param {Object} comparison - Comparison metrics
+ * @returns {string} - HTML string
+ */
+export const generateKPITooltipHTML = (kpiData, comparison) => {
+  const trendLine = comparison.direction === 'up' 
+    ? '📈 Tendencia ascendente'
+    : comparison.direction === 'down'
+    ? '📉 Tendencia descendente'
+    : '➡️ Estable';
+  
+  const improvementText = comparison.isImprovement
+    ? '<span style="color: #4caf50;">✓ Mejorando</span>'
+    : '<span style="color: #f59e0b;">⚠ Requiere atención</span>';
+  
+  return `
+    <div style="font-family: system-ui; font-size: 12px;">
+      <strong style="font-size: 14px;">${kpiData.label}</strong><br/>
+      <hr style="margin: 4px 0; border-color: #334155; opacity: 0.3;">
+      Valor actual: <strong>${kpiData.current}</strong><br/>
+      ${trendLine}<br/>
+      Cambio: <strong>${comparison.indicator} ${Math.abs(comparison.change)}</strong> (${Math.abs(comparison.changePercent)}%)<br/>
+      <br/>
+      ${improvementText}
+    </div>
+  `;
+};
+

@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 
 # (step_id matches processing_queue.task_type / worker pool)
 KNOWN_PAUSE_STEPS: List[Tuple[str, str]] = [
+    ("upload", "Upload/Ingesta"),
     ("ocr", "OCR"),
+    ("segmentation", "Segmentación (LLM)"),
     ("chunking", "Chunking"),
     ("indexing", "Indexado documentos (vectores)"),
     ("insights", "Insights (LLM)"),

@@ -686,7 +686,8 @@ def master_pipeline_scheduler():
         #           document_status → previous *_done so scheduler re-creates task.
         _RUNTIME_ROLLBACK = {
             TaskType.OCR:      DocStatus.UPLOAD_DONE,
-            TaskType.CHUNKING: DocStatus.OCR_DONE,
+            TaskType.SEGMENTATION: DocStatus.OCR_DONE,
+            TaskType.CHUNKING: DocStatus.SEGMENTATION_DONE,
             TaskType.INDEXING: DocStatus.CHUNKING_DONE,
             TaskType.INSIGHTS: DocStatus.INDEXING_DONE,
         }
@@ -696,7 +697,7 @@ def master_pipeline_scheduler():
                 logger.debug(f"🧹 Cleaned {stale_cleaned} stale completed worker_tasks")
 
             crashed_workers = worker_repository.list_stuck_workers_sync(
-                threshold_minutes=5,
+                threshold_minutes=10,
                 statuses=[WorkerStatus.STARTED, WorkerStatus.ASSIGNED],
             )
             
@@ -842,6 +843,32 @@ def master_pipeline_scheduler():
             except Exception as e:
                 logger.error(f"❌ Inbox monitor error: {e}")
         
+        # PASO 0: Documentos upload_pending sin Upload validation task → Crear Upload tasks (REQ-026)
+        import insights_pipeline_control as _ipc
+        
+        if not _ipc.is_step_paused("upload"):
+            ready_for_upload_validation = []
+            for row in document_repository.list_all_sync(limit=None, status=DocStatus.UPLOAD_PENDING):
+                doc_id = row["document_id"]
+                filename = row.get("filename") or f"{doc_id}.pdf"
+                
+                # Skip if already in queue
+                if worker_repository.has_queue_task_sync(doc_id, TaskType.UPLOAD):
+                    continue
+                
+                ready_for_upload_validation.append((doc_id, filename))
+                
+                if len(ready_for_upload_validation) >= 50:
+                    break
+            
+            if ready_for_upload_validation:
+                for doc_id, filename in ready_for_upload_validation:
+                    worker_repository.enqueue_task_sync(doc_id, filename, TaskType.UPLOAD, priority=0)
+                logger.info(f"✅ Created {len(ready_for_upload_validation)} Upload validation tasks")
+        else:
+            if debug_mode:
+                logger.debug("⏸️  Upload paused, skipping upload task creation")
+        
         # PASO 1: Documentos con upload_done/ocr_pending sin OCR task → crear task OCR
         pending_for_ocr = []
         for status in (DocStatus.UPLOAD_DONE, DocStatus.OCR_PENDING):
@@ -871,12 +898,29 @@ def master_pipeline_scheduler():
                 )
                 logger.debug(f"   Total documents in DB: {total_docs}, Pending: {pending_count}")
         
-        # PASO 2: Documentos con OCR completado sin Chunking task → Crear Chunking tasks
-        ready_for_chunking = []
+        # PASO 2: Documentos con OCR completado sin Segmentation task → Crear Segmentation tasks
+        ready_for_segmentation = []
         for row in document_repository.list_all_sync(limit=None, status=DocStatus.OCR_DONE):
             if row.get("processing_stage") != Stage.OCR:
                 continue
             if not (row.get("ocr_text") or "").strip():
+                continue
+            doc_id = row["document_id"]
+            if worker_repository.has_queue_task_sync(doc_id, TaskType.SEGMENTATION):
+                continue
+            ready_for_segmentation.append(row)
+            if len(ready_for_segmentation) >= 50:
+                break
+        if ready_for_segmentation:
+            for row in ready_for_segmentation:
+                doc_id, filename = row['document_id'], row['filename']
+                worker_repository.enqueue_task_sync(doc_id, filename, TaskType.SEGMENTATION, priority=1)
+            logger.info(f"✅ Created {len(ready_for_segmentation)} Segmentation tasks")
+
+        # PASO 3: Documentos con Segmentation completada sin Chunking task → Crear Chunking tasks
+        ready_for_chunking = []
+        for row in document_repository.list_all_sync(limit=None, status=DocStatus.SEGMENTATION_DONE):
+            if row.get("processing_stage") != Stage.SEGMENTATION:
                 continue
             doc_id = row["document_id"]
             if worker_repository.has_queue_task_sync(doc_id, TaskType.CHUNKING):
@@ -889,8 +933,8 @@ def master_pipeline_scheduler():
                 doc_id, filename = row['document_id'], row['filename']
                 worker_repository.enqueue_task_sync(doc_id, filename, TaskType.CHUNKING, priority=1)
             logger.info(f"✅ Created {len(ready_for_chunking)} Chunking tasks")
-        
-        # PASO 3: Documentos listos para Indexing sin task en cola → Crear Indexing tasks
+
+        # PASO 4: Documentos listos para Indexing sin task en cola → Crear Indexing tasks
         # Incluye: chunking_done (normal) e indexing_pending (recovery/rollback sin task creada)
         ready_for_indexing = []
         for status in (DocStatus.CHUNKING_DONE, DocStatus.INDEXING_PENDING):
@@ -1108,7 +1152,9 @@ def master_pipeline_scheduler():
             TOTAL_WORKERS = int(os.getenv("PIPELINE_WORKERS_COUNT", "25"))
             # Límites por tipo: pueden usar hasta TOTAL_WORKERS si hay trabajo
             task_limits = {
+                TaskType.UPLOAD: max(1, min(int(os.getenv("UPLOAD_PARALLEL_WORKERS", "2")), TOTAL_WORKERS)),
                 TaskType.OCR: max(1, min(int(os.getenv("OCR_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
+                TaskType.SEGMENTATION: max(1, min(int(os.getenv("SEGMENTATION_PARALLEL_WORKERS", "2")), TOTAL_WORKERS)),
                 TaskType.CHUNKING: max(1, min(int(os.getenv("CHUNKING_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
                 TaskType.INDEXING: max(1, min(int(os.getenv("INDEXING_PARALLEL_WORKERS", "25")), TOTAL_WORKERS)),
                 TaskType.INSIGHTS: max(1, min(int(os.getenv("INSIGHTS_PARALLEL_WORKERS", "1")), TOTAL_WORKERS)),
@@ -1185,7 +1231,9 @@ def master_pipeline_scheduler():
                         worker_repository.set_queue_task_status_sync(task_id, QueueStatus.PROCESSING)
                         
                         _task_handlers = {
+                            TaskType.UPLOAD: lambda: asyncio.run(_upload_worker_task(doc_id, filename, worker_id)),
                             TaskType.OCR: lambda: asyncio.run(_ocr_worker_task(doc_id, filename, worker_id)),
+                            TaskType.SEGMENTATION: lambda: asyncio.run(_segmentation_worker_task(doc_id, filename, worker_id)),
                             TaskType.CHUNKING: lambda: asyncio.run(_chunking_worker_task(doc_id, filename, worker_id)),
                             TaskType.INDEXING: lambda: asyncio.run(_indexing_worker_task(doc_id, filename, worker_id)),
                             TaskType.INDEXING_INSIGHTS: lambda: asyncio.run(_indexing_insights_worker_task(doc_id, filename, worker_id)),
@@ -1848,29 +1896,74 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
                 processing_stage=Stage.OCR
             )
             return
-        
-        # STEP 2: Segmentación en noticias + chunking
+
+        # STEP 2: Segmentación de noticias con LLM (NUEVO)
+        document_repository.update_status_sync(
+            document_id,
+            PipelineStatus.create(StageEnum.SEGMENTATION, StateEnum.PROCESSING),
+            processing_stage=Stage.SEGMENTATION,
+            clear_error_message=True
+        )
+        logger.info(f"  [2/4] News segmentation with LLM...")
+        start_segment = datetime.now()
+
+        try:
+            from news_segmentation_agent import get_segmentation_agent
+            
+            segmentation_agent = get_segmentation_agent()
+            items = segmentation_agent.segment_document(text, min_confidence=0.7)
+            
+            if not items:
+                document_repository.update_status_sync(
+                    document_id,
+                    PipelineStatus.terminal(TerminalStateEnum.ERROR),
+                    error_message="No valid news articles detected by LLM segmentation",
+                    processing_stage=Stage.SEGMENTATION
+                )
+                return
+            
+            # Log segmentation quality
+            avg_confidence = sum(it['confidence'] for it in items) / len(items)
+            total_chars = sum(it['body_length'] for it in items)
+            logger.info(f"        ✅ Detected {len(items)} articles (avg confidence: {avg_confidence:.2f}, {total_chars} chars total)")
+            
+            # Store segmentation metrics (for monitoring)
+            document_repository.update_status_sync(
+                document_id,
+                PipelineStatus.create(StageEnum.SEGMENTATION, StateEnum.DONE),
+                processing_stage=Stage.SEGMENTATION,
+                segmentation_items_count=len(items),
+                segmentation_avg_confidence=avg_confidence
+            )
+            
+        except Exception as e:
+            logger.error(f"      ❌ SEGMENTATION FAILED: {str(e)}", exc_info=True)
+            document_repository.update_status_sync(
+                document_id,
+                PipelineStatus.terminal(TerminalStateEnum.ERROR),
+                error_message=f"Segmentation failed: {e}",
+                processing_stage=Stage.SEGMENTATION
+            )
+            return
+
+        segment_time = (datetime.now() - start_segment).total_seconds()
+        logger.info(f"        ✅ Segmentation completed in {segment_time:.2f}s")
+
+        # STEP 3: Chunking (MODIFICADO - usa items de segmentation)
         document_repository.update_status_sync(
             document_id,
             PipelineStatus.create(StageEnum.CHUNKING, StateEnum.PROCESSING),
             processing_stage=Stage.CHUNKING,
             clear_indexed_at=True
         )
-        logger.info(f"  [2/3] News segmentation + chunking...")
+        logger.info(f"  [3/4] Chunking segmented articles...")
         start_chunk = datetime.now()
 
         try:
-            items = segment_news_items_from_text(text)
-            if not items:
-                document_repository.update_status_sync(
-                    document_id,
-                    PipelineStatus.terminal(TerminalStateEnum.ERROR),
-                    error_message="No news items detected",
-                    processing_stage=Stage.CHUNKING
-                )
-                return
-
-            # STEP 2.1: Check for existing items by text_hash to avoid duplicates on reprocessing
+            # Items ya vienen validados del STEP 2 (segmentation)
+            # No llamar a segment_news_items_from_text() - eso era la lógica vieja
+            
+            # STEP 3.1: Check for existing items by text_hash to avoid duplicates on reprocessing
             existing_items_by_hash = {}
             existing_items = news_item_repository.list_by_document_id_sync(document_id)
             for existing in existing_items:
@@ -1889,6 +1982,7 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
             for idx, it in enumerate(items):
                 title = (it.get("title") or f"Noticia {idx + 1}").strip()
                 body = it.get("text") or ""
+                confidence = it.get("confidence", 0.5)  # NEW: Get confidence from segmentation
                 body_norm = _normalize_text_for_hash(body)
                 text_hash = hashlib.sha256(body_norm.encode("utf-8")).hexdigest() if body_norm else None
 
@@ -1903,15 +1997,16 @@ def _process_document_sync(file_path: str, document_id: str, filename: str):
                     # New item - generate new ID
                     news_item_id = f"{document_id}::{idx}"
                     new_items_count += 1
-                    logger.debug(f"   ✨ New item: {news_item_id} (hash: {text_hash[:16] if text_hash else 'N/A'}...)")
+                    logger.debug(f"   ✨ New item: {news_item_id} (confidence: {confidence:.2f}, hash: {text_hash[:16] if text_hash else 'N/A'}...)")
                 
-                # Store item for upsert
+                # Store item for upsert (WITH confidence)
                 items_to_upsert.append({
                     "news_item_id": news_item_id,
                     "item_index": idx,
                     "title": title,
                     "status": DocStatus.INDEXING_DONE,
                     "text_hash": text_hash,
+                    "segmentation_confidence": confidence,  # NEW
                 })
                 
                 item_chunks = rag_pipeline.chunk_text(body, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
@@ -2543,6 +2638,189 @@ def run_news_item_insights_queue_job_parallel():
 # Master scheduler now dispatches directly to repository-based workers
 # ============================================================================
 
+async def _upload_worker_task(document_id: str, filename: str, worker_id: str):
+    """
+    Upload validation worker: validates uploaded file and transitions to ready state.
+    
+    Sub-stages:
+    1. Transition: pending → processing (rename file)
+    2. Validate format (extension check)
+    3. Validate size (MAX_UPLOAD_SIZE_MB)
+    4. Re-compute hash (integrity check)
+    5. Validate readability (file not corrupted)
+    6. Transition: processing → validated (remove prefix)
+    7. Record stage timing
+    
+    File naming convention (REQ-026):
+    - pending_{hash}_{filename}.pdf      → Awaiting validation
+    - processing_{hash}_{filename}.pdf   → Worker validating
+    - {hash}_{filename}.pdf              → Validated, ready for OCR
+    - error_{hash}_{filename}.pdf        → Failed validation
+    
+    REQ-026: Upload as full pipeline stage with worker pool
+    """
+    from pathlib import Path
+    import hashlib
+    from upload_utils import (
+        UploadFileState,
+        list_files_by_state,
+        transition_file_state,
+        parse_upload_filename
+    )
+    
+    current_file = None
+    
+    try:
+        logger.info(f"[{worker_id}] Assigned Upload validation task for: {filename}")
+        
+        # 1. RECORD STAGE START
+        stage_timing_repository.record_stage_start_sync(
+            document_id=document_id,
+            stage='upload',
+            metadata={'worker_id': worker_id, 'filename': filename}
+        )
+        
+        # 2. Mark as started
+        worker_repository.update_worker_status_sync(
+            worker_id, document_id, TaskType.UPLOAD, WorkerStatus.STARTED
+        )
+        
+        # 3. Find pending file
+        pending_files = list_files_by_state(UPLOAD_DIR, UploadFileState.PENDING)
+        current_file = next((f for f in pending_files if document_id in f or filename in f), None)
+        
+        if not current_file:
+            raise ValueError(f"File not found in pending state for document {document_id}")
+        
+        logger.info(f"[{worker_id}] Found pending file: {current_file}")
+        
+        # 4. Transition: pending → processing
+        current_file = transition_file_state(
+            UPLOAD_DIR, current_file, UploadFileState.PROCESSING
+        )
+        logger.info(f"[{worker_id}] Transitioned to processing: {current_file}")
+        
+        # 5. Validate file
+        file_path = Path(UPLOAD_DIR) / current_file
+        
+        # 5a. Format validation
+        ext = file_path.suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise ValueError(f"Invalid format: {ext}. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
+        
+        # 5b. Size validation
+        file_size_bytes = file_path.stat().st_size
+        file_size_mb = file_size_bytes / (1024 * 1024)
+        
+        MAX_SIZE = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50"))
+        if file_size_mb > MAX_SIZE:
+            raise ValueError(f"File too large: {file_size_mb:.1f}MB (max: {MAX_SIZE}MB)")
+        
+        logger.info(f"[{worker_id}] File size: {file_size_mb:.2f}MB - OK")
+        
+        # 5c. Integrity check (re-compute hash)
+        with open(file_path, 'rb') as f:
+            content = f.read()
+        actual_hash = hashlib.sha256(content).hexdigest()
+        
+        _, expected_hash, _ = parse_upload_filename(current_file)
+        if not actual_hash.startswith(expected_hash):
+            raise ValueError(f"Hash mismatch - file corrupted (expected: {expected_hash}, got: {actual_hash[:16]})")
+        
+        logger.info(f"[{worker_id}] Hash verification: OK ({actual_hash[:16]}...)")
+        
+        # 5d. Readability check (basic validation)
+        if ext == '.pdf':
+            # For PDFs: verify with PyMuPDF
+            try:
+                import fitz
+                doc = fitz.open(file_path)
+                page_count = doc.page_count
+                doc.close()
+                
+                if page_count == 0:
+                    raise ValueError("PDF has 0 pages")
+                
+                logger.info(f"[{worker_id}] PDF readability: OK ({page_count} pages)")
+            except Exception as pdf_err:
+                raise ValueError(f"PDF unreadable: {pdf_err}")
+        
+        # 6. Transition: processing → validated (no prefix)
+        validated_file = transition_file_state(
+            UPLOAD_DIR, current_file, UploadFileState.VALIDATED
+        )
+        logger.info(f"[{worker_id}] Transitioned to validated: {validated_file}")
+        
+        # 7. Update document status: upload_done
+        doc_id = DocumentId(document_id)
+        upload_done_status = PipelineStatus.create(StageEnum.UPLOAD, StateEnum.DONE)
+        
+        await document_repository.update_status(
+            doc_id,
+            upload_done_status,
+            processing_stage=Stage.UPLOAD
+        )
+        
+        # 8. RECORD STAGE END
+        stage_timing_repository.record_stage_end_sync(
+            document_id, 'upload', 'done',
+            metadata={
+                'validated_file': validated_file,
+                'file_size_mb': file_size_mb,
+                'file_hash': actual_hash[:16]
+            }
+        )
+        
+        # 9. Mark worker completed
+        worker_repository.update_worker_status_sync(
+            worker_id, document_id, TaskType.UPLOAD, WorkerStatus.COMPLETED
+        )
+        worker_repository.mark_task_completed_sync(document_id, TaskType.UPLOAD)
+        
+        logger.info(f"[{worker_id}] ✅ Upload validation completed: {validated_file}")
+        
+    except Exception as e:
+        logger.error(f"[{worker_id}] Upload validation failed: {e}", exc_info=True)
+        
+        try:
+            err_msg = str(e)[:200]
+            
+            # Transition: processing → error (if file exists)
+            if current_file:
+                try:
+                    error_file = transition_file_state(
+                        UPLOAD_DIR, current_file, UploadFileState.ERROR
+                    )
+                    logger.info(f"[{worker_id}] Moved to error state: {error_file}")
+                except Exception as rename_err:
+                    logger.warning(f"[{worker_id}] Could not rename to error state: {rename_err}")
+            
+            # RECORD STAGE END with error
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'upload', 'error', error_message=err_msg
+            )
+            
+            # Update document status: error
+            error_status = PipelineStatus.terminal(TerminalStateEnum.ERROR)
+            doc_id = DocumentId(document_id)
+            await document_repository.update_status(
+                doc_id,
+                error_status,
+                error_message=err_msg,
+                processing_stage=Stage.UPLOAD
+            )
+            
+            # Mark worker error
+            worker_repository.update_worker_status_sync(
+                worker_id, document_id, TaskType.UPLOAD, WorkerStatus.ERROR,
+                error_message=err_msg
+            )
+            worker_repository.mark_task_completed_sync(document_id, TaskType.UPLOAD)
+            
+        except Exception as e2:
+            logger.error(f"[{worker_id}] Failed to mark upload error: {e2}")
+
+
 async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
     """
     Background worker task: processes ONE OCR task independently.
@@ -2679,6 +2957,166 @@ async def _ocr_worker_task(document_id: str, filename: str, worker_id: str):
         except Exception as e2:
             logger.error(f"[{worker_id}] Failed to mark error: {e2}")
 
+
+
+async def _segmentation_worker_task(document_id: str, filename: str, worker_id: str):
+    """
+    Worker task: Performs LLM-based segmentation on documents that have completed OCR.
+    Reads OCR text, uses NewsSegmentationAgent to detect news articles,
+    stores segmented items, then marks document as segmentation_done.
+    """
+    try:
+        logger.info(f"[{worker_id}] Assigned Segmentation task for: {filename}")
+
+        # 1. RECORD STAGE START
+        stage_timing_repository.record_stage_start_sync(
+            document_id=document_id,
+            stage='segmentation',
+            metadata={'worker_id': worker_id, 'filename': filename}
+        )
+
+        # 2. Mark as started
+        worker_repository.update_worker_status_sync(
+            worker_id, document_id, 'segmentation', 'started'
+        )
+
+        # Get document
+        doc_id = DocumentId(document_id)
+        document = await document_repository.get_by_id(doc_id)
+
+        if not document or not document.ocr_text:
+            logger.error(f"[{worker_id}] No OCR text found for {document_id}")
+
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'segmentation', 'error', error_message="No OCR text"
+            )
+
+            error_status = PipelineStatus.terminal(TerminalStateEnum.ERROR)
+            await document_repository.update_status(
+                doc_id,
+                error_status,
+                error_message="No OCR text for segmentation"
+            )
+
+            worker_repository.update_worker_status_sync(
+                worker_id, document_id, 'segmentation', 'error',
+                error_message="No OCR text"
+            )
+            worker_repository.mark_task_completed_sync(document_id, 'segmentation')
+            return
+
+        ocr_text = document.ocr_text
+        logger.info(f"[{worker_id}] Starting segmentation for {filename} ({len(ocr_text)} chars)...")
+
+        # Perform segmentation with LLM
+        try:
+            items = await asyncio.to_thread(_perform_segmentation, ocr_text, document_id, filename)
+
+            if not items:
+                raise ValueError("No valid news articles detected by LLM segmentation")
+
+            # Calculate metrics
+            avg_confidence = sum(it['confidence'] for it in items) / len(items)
+            
+            # Update document status
+            segmentation_done_status = PipelineStatus.create(StageEnum.SEGMENTATION, StateEnum.DONE)
+            await document_repository.update_status(
+                doc_id,
+                segmentation_done_status,
+                processing_stage=Stage.SEGMENTATION,
+                segmentation_items_count=len(items),
+                segmentation_avg_confidence=avg_confidence
+            )
+
+            # RECORD STAGE END as done
+            stage_timing_repository.record_stage_end_sync(
+                document_id, 'segmentation', 'done'
+            )
+
+            logger.info(f"[{worker_id}] ✅ Segmentation completed: {len(items)} articles detected (avg confidence: {avg_confidence:.2f})")
+
+        except Exception as e:
+            logger.error(f"[{worker_id}] Segmentation failed: {e}", exc_info=True)
+            raise
+
+        # Mark worker as completed
+        worker_repository.update_worker_status_sync(
+            worker_id, document_id, 'segmentation', 'completed'
+        )
+        worker_repository.mark_task_completed_sync(document_id, 'segmentation')
+
+    except Exception as e:
+        logger.error(f"[{worker_id}] Segmentation worker error: {e}", exc_info=True)
+
+        # RECORD STAGE END with error
+        stage_timing_repository.record_stage_end_sync(
+            document_id, 'segmentation', 'error', error_message=str(e)
+        )
+
+        error_status = PipelineStatus.terminal(TerminalStateEnum.ERROR)
+        document_repository.update_status_sync(
+            document_id,
+            error_status,
+            error_message=f"Segmentation failed: {e}",
+            processing_stage=Stage.SEGMENTATION
+        )
+
+        worker_repository.update_worker_status_sync(
+            worker_id, document_id, 'segmentation', 'error',
+            error_message=str(e)
+        )
+        worker_repository.mark_task_completed_sync(document_id, 'segmentation')
+
+
+def _perform_segmentation(text: str, document_id: str, filename: str) -> list:
+    """Perform LLM-based segmentation. Returns list of segmented news items."""
+    try:
+        logger.info(f"  [SEGMENTATION] Using LLM to detect news articles...")
+        start_segment = datetime.now()
+
+        from news_segmentation_agent import get_segmentation_agent
+        
+        segmentation_agent = get_segmentation_agent()
+        items = segmentation_agent.segment_document(text, min_confidence=0.7)
+        
+        if not items:
+            raise ValueError("No valid news articles detected")
+
+        # Store items with segmentation confidence
+        items_to_store = []
+        for idx, it in enumerate(items):
+            title = it.get("title", f"Noticia {idx + 1}").strip()
+            body = it.get("text", "")
+            confidence = it.get("confidence", 0.5)
+            
+            body_norm = _normalize_text_for_hash(body)
+            text_hash = hashlib.sha256(body_norm.encode("utf-8")).hexdigest() if body_norm else None
+            
+            items_to_store.append({
+                "news_item_id": f"{document_id}::{idx}",
+                "item_index": idx,
+                "title": title,
+                "status": DocStatus.SEGMENTATION_DONE,  # Mark as segmentation_done (ready for chunking)
+                "text_hash": text_hash,
+                "segmentation_confidence": confidence,
+                "text": body  # Store text for chunking stage
+            })
+
+        # Persist items metadata
+        news_item_repository.upsert_items_sync(
+            document_id=document_id,
+            filename=filename,
+            items=items_to_store
+        )
+
+        segment_time = (datetime.now() - start_segment).total_seconds()
+        logger.info(f"  [SEGMENTATION] ✅ Completed in {segment_time:.2f}s")
+
+        return items
+
+    except Exception as e:
+        logger.error(f"  [SEGMENTATION] ❌ Failed: {e}", exc_info=True)
+        raise
 
 
 async def _chunking_worker_task(document_id: str, filename: str, worker_id: str):

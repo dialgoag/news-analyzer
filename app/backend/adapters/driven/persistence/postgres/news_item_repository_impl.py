@@ -512,28 +512,59 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
             rows = 0
             now = datetime.utcnow().isoformat()
             for it in items:
-                cursor.execute(
-                    """
-                    INSERT INTO news_items (news_item_id, document_id, filename, item_index, title, status, text_hash, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(news_item_id) DO UPDATE SET
-                        title = excluded.title,
-                        status = excluded.status,
-                        text_hash = excluded.text_hash,
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        it["news_item_id"],
-                        document_id,
-                        filename,
-                        int(it.get("item_index", 0)),
-                        it.get("title") or None,
-                        it.get("status") or "pending",
-                        it.get("text_hash") or None,
-                        now,
-                        now,
-                    ),
-                )
+                # Get segmentation_confidence if available (NEW)
+                segmentation_conf = it.get("segmentation_confidence")
+                
+                if segmentation_conf is not None:
+                    # New schema with segmentation_confidence column
+                    cursor.execute(
+                        """
+                        INSERT INTO news_items (news_item_id, document_id, filename, item_index, title, status, text_hash, segmentation_confidence, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT(news_item_id) DO UPDATE SET
+                            title = excluded.title,
+                            status = excluded.status,
+                            text_hash = excluded.text_hash,
+                            segmentation_confidence = excluded.segmentation_confidence,
+                            updated_at = excluded.updated_at
+                        """,
+                        (
+                            it["news_item_id"],
+                            document_id,
+                            filename,
+                            int(it.get("item_index", 0)),
+                            it.get("title") or None,
+                            it.get("status") or "pending",
+                            it.get("text_hash") or None,
+                            segmentation_conf,
+                            now,
+                            now,
+                        ),
+                    )
+                else:
+                    # Legacy schema (backward compatible)
+                    cursor.execute(
+                        """
+                        INSERT INTO news_items (news_item_id, document_id, filename, item_index, title, status, text_hash, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT(news_item_id) DO UPDATE SET
+                            title = excluded.title,
+                            status = excluded.status,
+                            text_hash = excluded.text_hash,
+                            updated_at = excluded.updated_at
+                        """,
+                        (
+                            it["news_item_id"],
+                            document_id,
+                            filename,
+                            int(it.get("item_index", 0)),
+                            it.get("title") or None,
+                            it.get("status") or "pending",
+                            it.get("text_hash") or None,
+                            now,
+                            now,
+                        ),
+                    )
                 rows += 1
             conn.commit()
             return rows

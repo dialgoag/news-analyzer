@@ -13,7 +13,8 @@ export function CollapsibleSection({
   defaultCollapsed = false, 
   children, 
   badge,
-  priority = 'normal' // 'high', 'normal', 'low'
+  priority = 'normal', // 'high', 'normal', 'low'
+  headerAction = null // Optional button/element to show in header
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
@@ -21,30 +22,38 @@ export function CollapsibleSection({
 
   return (
     <div className={`collapsible-section collapsible-section--${priority} ${collapsed ? 'collapsed' : 'expanded'}`}>
-      <button
-        className="collapsible-section-header"
-        onClick={toggleCollapse}
-        aria-expanded={!collapsed}
-        aria-controls={`collapsible-content-${title.replace(/\s+/g, '-')}`}
-      >
-        {collapsed ? (
-          <ChevronRightIcon className="collapse-icon" aria-hidden="true" />
-        ) : (
-          <ChevronDownIcon className="collapse-icon" aria-hidden="true" />
-        )}
+      <div className="collapsible-section-header-wrapper">
+        <button
+          className="collapsible-section-header"
+          onClick={toggleCollapse}
+          aria-expanded={!collapsed}
+          aria-controls={`collapsible-content-${title.replace(/\s+/g, '-')}`}
+        >
+          {collapsed ? (
+            <ChevronRightIcon className="collapse-icon" aria-hidden="true" />
+          ) : (
+            <ChevronDownIcon className="collapse-icon" aria-hidden="true" />
+          )}
+          
+          {IconComponent && (
+            <IconComponent className="section-icon" aria-hidden="true" />
+          )}
+          
+          <span className="section-title">{title}</span>
+          
+          {badge && (
+            <span className="section-badge" aria-label={`${badge} items`}>
+              {badge}
+            </span>
+          )}
+        </button>
         
-        {IconComponent && (
-          <IconComponent className="section-icon" aria-hidden="true" />
+        {headerAction && (
+          <div className="collapsible-section-header-action" onClick={(e) => e.stopPropagation()}>
+            {headerAction}
+          </div>
         )}
-        
-        <span className="section-title">{title}</span>
-        
-        {badge && (
-          <span className="section-badge" aria-label={`${badge} items`}>
-            {badge}
-          </span>
-        )}
-      </button>
+      </div>
       
       {!collapsed && (
         <div 

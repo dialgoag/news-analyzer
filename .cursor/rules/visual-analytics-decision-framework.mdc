@@ -1,0 +1,340 @@
+---
+alwaysApply: false
+---
+---
+description: Visual analytics and dashboard decision framework for choosing the right charts, interactions, and dashboard structure.
+globs: ["**/*"]
+alwaysApply: false
+---
+
+# Visual Analytics Decision Framework
+
+Use this rule when designing, reviewing, or discussing dashboards, charts, KPI views, analytical UX, or decision-support interfaces.
+
+## Purpose
+
+Ensure visualizations and dashboards:
+- answer a real analytical question
+- support decision-making
+- reduce cognitive load
+- reveal patterns clearly
+- use the right chart for the task
+- avoid decorative or misleading design
+
+---
+
+## 1. Start from the question, not the chart
+
+Before proposing a visualization, identify:
+- What question is being answered?
+- Who is the audience?
+- Is this for monitoring, exploration, diagnosis, or explanation?
+- What decision or action should this support?
+- What are the relevant metrics, dimensions, and time grain?
+
+If context is missing, ask concise clarifying questions.
+
+---
+
+## 2. Default response structure
+
+When proposing dashboard or chart solutions, use this structure where practical:
+
+- Objective
+- Assumptions
+- Recommended visualization(s)
+- Dashboard structure
+- Interaction model
+- Expected insights
+- Risks / caveats
+- Suggested next step
+
+---
+
+## 3. Chart selection by analytical task
+
+### Trend over time
+Prefer:
+- line chart
+- sparkline
+- step chart
+- area chart only when cumulative magnitude matters
+
+Use for:
+- evolution
+- seasonality
+- change points
+- event impact
+- trends by segment
+
+### Comparison across categories
+Prefer:
+- sorted horizontal bar chart
+- grouped bar for small controlled comparisons
+- dot plot
+- slope chart for before/after change
+
+Use for:
+- ranking
+- top vs bottom
+- segment comparison
+- actual vs target
+
+### Distribution
+Prefer:
+- histogram
+- box plot
+- violin plot for analytical audiences
+- strip plot / beeswarm where useful
+
+Use for:
+- spread
+- skew
+- outliers
+- cycle time
+- latency
+- revenue per user
+
+### Relationship / correlation
+Prefer:
+- scatter plot
+- scatter with trend line
+- hexbin when overplotting is heavy
+- correlation heatmap
+
+Use for:
+- relationship between two variables
+- cluster patterns
+- anomaly detection
+- subgroup behavior
+
+### Composition / part-to-whole
+Prefer:
+- stacked bar
+- 100% stacked bar
+- waterfall
+- treemap for larger hierarchical composition
+
+Avoid pie/donut except for very small category counts and low-precision comparison.
+
+### Hierarchy
+Prefer:
+- treemap
+- icicle
+- sunburst only when radial hierarchy is genuinely helpful
+- circle packing only when approximate area reading is acceptable
+
+### Flow / stage progression
+Prefer:
+- funnel
+- Sankey
+- alluvial
+- process timeline
+
+Use only when movement or transition between states matters.
+
+### Spatial / geographic
+Prefer:
+- choropleth for normalized rates
+- symbol map for counts
+- flow map for movement
+
+Do not use geographic maps unless location is analytically relevant.
+
+### Multivariate
+Prefer:
+- heatmap
+- small multiples
+- faceting
+- scatter matrix
+- layered plots with restrained encoding
+
+### Network / relationship structure
+Prefer:
+- node-link only when graph structure is central and manageable
+- adjacency matrix when density is high
+
+---
+
+## 4. Dashboard architecture
+
+Default dashboard order:
+
+### 1. Title framed as a question
+Examples:
+- Why did conversion fall last month?
+- Which services are driving latency?
+- Where is the processing pipeline stalling?
+
+### 2. Global filters
+Typical filters:
+- date range
+- region
+- product
+- channel
+- status
+- segment
+
+### 3. KPI summary row
+- 3 to 6 KPIs maximum
+- show current value
+- show comparison baseline
+- make directionality clear
+- avoid KPI walls
+
+### 4. Primary analytical view
+One dominant chart answering the main question.
+
+### 5. Secondary comparison / segmentation row
+Use to compare:
+- segments
+- categories
+- cohorts
+- services
+- regions
+- time periods
+
+### 6. Diagnostic detail row
+Use:
+- distributions
+- outlier views
+- top contributors
+- exception tables
+- breakdowns
+
+### 7. Detail or audit area
+Use:
+- table
+- drill-through
+- event log
+- annotation panel
+- methodology note
+
+---
+
+## 5. Interaction principles
+
+Use interaction only if it improves understanding.
+
+Preferred interactions:
+- filter
+- drill-down
+- details on demand
+- brushing and linking
+- compare periods
+- highlight related items
+- zoom/pan only when needed
+
+### Rules
+- preserve context after filtering
+- provide a clear reset path
+- do not overload the dashboard with interactions
+- avoid hidden states that are hard to notice
+- do not make hover the only way to access important information
+
+---
+
+## 6. Visual encoding rules
+
+Prefer precise encodings:
+- position
+- aligned length
+- common scales
+
+Use carefully:
+- area
+- color intensity
+- size
+
+Use sparingly:
+- angle
+- radial forms
+- motion
+- 3D
+
+### Color rules
+- use neutral defaults
+- reserve strong color for emphasis, alert, or selected state
+- keep categorical palettes limited
+- use sequential scales for ordered values
+- use diverging scales only when a meaningful midpoint exists
+- avoid rainbow scales
+
+### Labeling and annotation
+Include when useful:
+- direct labels
+- threshold lines
+- target bands
+- event markers
+- anomaly annotations
+- metric definitions if ambiguous
+
+---
+
+## 7. Anti-patterns
+
+Avoid unless clearly justified:
+- dashboard made mostly of KPI cards
+- multiple unrelated charts on one page
+- too many slices in pie/donut charts
+- decorative 3D
+- dual-axis charts with ambiguous interpretation
+- unsorted bars without logic
+- choropleths using raw counts
+- excessive legend dependence
+- chart clutter without hierarchy
+- radar charts for most business analytics
+- Sankey when a simpler chart would communicate better
+- word clouds for precise analytical comparison
+
+---
+
+## 8. Tool / implementation choice
+
+Default tool choice guidance:
+
+- Use BI tools for standardized dashboards and governed reporting.
+- Use Plot / Vega-Lite / Plotly for fast analytical delivery.
+- Use D3 when you need:
+  - bespoke interaction
+  - custom layout
+  - force graphs
+  - sankey / advanced geometry
+  - rendering control not available in higher-level tools
+
+Do not default to D3 for simple bar, line, scatter, or heatmap charts.
+
+---
+
+## 9. Review mode
+
+When reviewing an existing dashboard, evaluate:
+
+- Is the business question clear?
+- Is the chosen chart appropriate for the task?
+- Are metrics defined clearly?
+- Is there a visual hierarchy?
+- Does interaction help analysis?
+- Are there clutter or trust issues?
+- Can a user identify trends, outliers, comparisons, and drivers quickly?
+- Is the dashboard actionable?
+
+Return:
+- strengths
+- weaknesses
+- redesign suggestions
+- quick wins
+- deeper structural changes
+
+---
+
+## 10. Expected behavior from the assistant
+
+When asked for dashboard help:
+- do not propose random chart lists
+- explain why each recommended view fits
+- state assumptions explicitly
+- mention likely insights or hypotheses
+- prefer a small number of high-value views over many weak ones
+- optimize for decision support, not visual novelty
+- call out interpretation risks and data quality caveats

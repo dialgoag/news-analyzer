@@ -1,0 +1,282 @@
+# Regla: Cero Duplicación y Calidad Básica
+
+## Propósito
+
+Prevenir errores básicos y duplicaciones que degradan la calidad del código y frustran al usuario.
+
+**Origen**: Session 2026-04-08 - Usuario reportó duplicaciones inaceptables y errores básicos (scroll, headers duplicados).
+
+---
+
+## 🚫 Prohibiciones Absolutas
+
+### 1. NUNCA Duplicar Funcionalidad
+
+**Regla de oro**: **1 funcionalidad = 1 implementación**
+
+❌ **PROHIBIDO**:
+- Múltiples headers con misma funcionalidad (refresh, título, etc.)
+- Componentes con nombres similares: `Component` vs `ComponentV2` vs `ComponentLegacy`
+- Misma lógica en múltiples archivos
+- Archivos backup con sufijos: `.old`, `.backup`, `.legacy`, `_v1`, `_v2`
+
+✅ **CORRECTO**:
+- Una sola implementación por funcionalidad
+- Si hay versiones, eliminar la anterior **inmediatamente**
+- Usar git para historial, NO archivos backup en el código
+- Nombres únicos y descriptivos
+
+**Ejemplo de error detectado**:
+```
+❌ MAL:
+- DashboardView.jsx tiene header con botón "Refrescar"
+- PipelineDashboard.jsx tiene header con botón "Refresh" + selector intervalo
+→ Ambos hacen lo mismo, confunde al usuario
+
+✅ BIEN:
+- Solo PipelineDashboard.jsx tiene header completo (mejor funcionalidad)
+- DashboardView.jsx solo orquesta, sin duplicar UI
+```
+
+---
+
+### 2. NUNCA Dejar Archivos Backup en el Código
+
+❌ **PROHIBIDO**:
+- `Component.old.jsx`
+- `Component.backup.jsx`
+- `Component_v1.jsx` cuando existe `Component_v2.jsx`
+- Cualquier archivo con sufijos de versión/backup
+
+✅ **CORRECTO**:
+- Usar git para historial: `git log`, `git show`, `git diff`
+- Si necesitas backup temporal: usar branches de git
+- Después de refactoring: **eliminar archivos obsoletos inmediatamente**
+
+**Comando de verificación obligatorio**:
+```bash
+# Ejecutar SIEMPRE después de refactoring
+find . -name "*.old.*" -o -name "*.backup.*" -o -name "*_v1.*" -o -name "*Legacy*"
+
+# Si encuentra algo: ELIMINAR INMEDIATAMENTE
+```
+
+---
+
+### 3. NUNCA Ignorar Errores Básicos de UI/UX
+
+❌ **PROHIBIDO**:
+- Scroll que no se adapta al contenido (altura fija cuando debería ser dinámica)
+- Elementos duplicados visualmente (dos headers, dos menús, etc.)
+- Controles que no funcionan (buttons sin handler, links rotos)
+- Diseño responsive roto (scroll horizontal innecesario)
+
+✅ **CORRECTO**:
+- Scroll dinámico: `overflow-y-auto` + `height: fit-content`
+- Validar visualmente ANTES de declarar "completado"
+- Probar todos los controles interactivos
+- Responsive design funcional en todos los breakpoints
+
+**Ejemplo de error detectado**:
+```
+❌ MAL:
+.dashboard {
+  min-height: 100vh;  /* Altura fija */
+  overflow-hidden;    /* Bloquea scroll */
+}
+
+✅ BIEN:
+.dashboard {
+  min-height: 100%;
+  height: fit-content;  /* Se adapta al contenido */
+}
+.dashboard-container {
+  overflow-y-auto;      /* Scroll cuando necesario */
+}
+```
+
+---
+
+## ✅ Checklist Obligatorio: Post-Refactoring
+
+**SIEMPRE ejecutar después de cualquier refactoring, unificación de versiones, o cambio grande:**
+
+### A. Búsqueda de Duplicaciones
+
+- [ ] **Archivos backup**: `find . -name "*.old.*" -o -name "*.backup.*"`
+- [ ] **Componentes duplicados**: Buscar nombres similares (ej: `ErrorPanel` vs `ErrorPanelV2`)
+- [ ] **Headers/menús duplicados**: Verificar que no haya múltiples headers, navbars, toolbars
+- [ ] **Lógica duplicada**: Grep funciones/métodos con nombres similares
+
+### B. Validación de UI/UX
+
+- [ ] **Scroll funciona**: Expandir/colapsar componentes → scroll se ajusta
+- [ ] **Sin elementos duplicados**: Visualmente, no hay headers/botones/menús repetidos
+- [ ] **Controles funcionan**: Todos los botones/links tienen handlers y funcionan
+- [ ] **Responsive**: Sin scroll horizontal innecesario, layout se adapta
+
+### C. Validación de Código
+
+- [ ] **Imports limpios**: No hay imports de versiones obsoletas (v1, legacy)
+- [ ] **CSS limpio**: No hay clases duplicadas o estilos sobrescritos
+- [ ] **Nombres descriptivos**: Componentes tienen nombres únicos y claros
+- [ ] **Comentarios**: Eliminados comentarios obsoletos (ej: "// TODO: migrate to v2")
+
+### D. Tests Básicos
+
+- [ ] **Build exitoso**: `docker compose build` sin errores
+- [ ] **Frontend carga**: No hay errores en consola del navegador
+- [ ] **Funcionalidad core**: Operaciones críticas funcionan (login, dashboard, API)
+
+---
+
+## 🔍 Comandos de Verificación Automática
+
+### 1. Buscar Archivos Obsoletos
+```bash
+# Frontend
+find app/frontend/src -name "*.old.*" -o -name "*.backup.*" -o -name "*Legacy*" -o -name "*V1.*"
+
+# Backend
+find app/backend -name "*.old.*" -o -name "*.backup.*" -o -name "*Legacy*"
+
+# Si encuentra algo: ELIMINAR y documentar en git commit
+```
+
+### 2. Buscar Componentes Duplicados (Frontend)
+```bash
+# Listar componentes con nombres similares
+find app/frontend/src -name "*.jsx" | xargs -I {} basename {} .jsx | sort | uniq -d
+
+# Si hay duplicados: investigar y eliminar versiones obsoletas
+```
+
+### 3. Buscar CSS Duplicado
+```bash
+# Buscar clases CSS con sufijos de versión
+grep -r "class.*-v[0-9]" app/frontend/src/
+grep -r "class.*-legacy" app/frontend/src/
+
+# Si encuentra: consolidar en una sola clase
+```
+
+### 4. Buscar Imports Obsoletos
+```bash
+# Buscar imports de versiones antiguas
+grep -r "import.*V1" app/frontend/src/
+grep -r "import.*Legacy" app/frontend/src/
+grep -r "import.*\.old" app/frontend/src/
+
+# Si encuentra: actualizar a versiones nuevas y eliminar archivos obsoletos
+```
+
+---
+
+## 📋 Template de Commit al Eliminar Duplicaciones
+
+Cuando elimines duplicaciones, usa este formato de commit:
+
+```
+refactor: eliminate duplicated [component/functionality]
+
+BEFORE:
+- Component A: [descripción]
+- Component B: [descripción]
+→ Both did the same thing, caused confusion
+
+AFTER:
+- Kept: Component B (better functionality/design)
+- Removed: Component A (obsolete)
+
+Impact:
+- Cleaner codebase
+- Single source of truth
+- Improved maintainability
+
+Files removed:
+- path/to/ComponentA.jsx
+- path/to/ComponentA.css
+
+Verification:
+- [x] Build successful
+- [x] UI loads without errors
+- [x] Functionality preserved
+```
+
+---
+
+## 🎯 Principios Fundamentales
+
+### 1. DRY (Don't Repeat Yourself)
+- Si copias código → pregúntate: ¿puedo reutilizar el original?
+- Si hay 2 implementaciones → elimina una
+
+### 2. YAGNI (You Aren't Gonna Need It)
+- No crear archivos backup "por si acaso"
+- Git es tu backup
+
+### 3. KISS (Keep It Simple, Stupid)
+- 1 funcionalidad = 1 archivo
+- Nombres claros, sin sufijos ambiguos
+
+### 4. Visual Validation
+- SIEMPRE abrir el navegador y verificar visualmente
+- No confiar solo en builds exitosos
+
+---
+
+## 🚨 Señales de Alerta (Red Flags)
+
+Si ves alguno de estos, **DETÉN y limpia**:
+
+1. **Archivos con sufijos**: `.old`, `.backup`, `_v1`, `_legacy`
+2. **Componentes con "V2" en el nombre**: elimina V1 inmediatamente
+3. **Headers/menús duplicados**: consolida en uno solo
+4. **Scroll que no funciona**: revisa `overflow` y `height`
+5. **Imports desde archivos obsoletos**: actualiza y elimina archivos viejos
+6. **CSS con clases duplicadas**: `-v1`, `-legacy`, `-old`
+7. **TODOs obsoletos**: "// TODO: migrate to v2" → si ya se migró, elimina el TODO
+8. **Comentarios explicando por qué existe duplicación**: señal de tech debt
+
+---
+
+## 📚 Referencias
+
+- **Documentación de limpieza**: `docs/ai-lcd/CODE_CLEANUP_2026-04-08.md`
+- **Session log**: `docs/ai-lcd/SESSION_LOG.md` (2026-04-08)
+- **Consolidated status**: `docs/ai-lcd/CONSOLIDATED_STATUS.md` (Fix #143)
+
+---
+
+## ⚡ Acción Inmediata al Detectar Duplicación
+
+1. **DETÉN el desarrollo**
+2. **Identifica cuál versión es mejor** (funcionalidad, diseño, código)
+3. **Elimina la versión inferior** (archivos + imports + CSS)
+4. **Verifica que nada se rompa** (build + tests + visual)
+5. **Commit con mensaje descriptivo** (usa template arriba)
+6. **Documenta en SESSION_LOG** (qué se eliminó y por qué)
+
+---
+
+## ❓ FAQs
+
+**Q: ¿Y si necesito la versión antigua para referencia?**
+A: Usa `git show <commit>:path/to/file.jsx` o crea un branch temporal.
+
+**Q: ¿Puedo dejar un archivo `.old` temporalmente mientras desarrollo?**
+A: NO. Usa branches de git. Si necesitas experimentos, crea `feature/experiment` branch.
+
+**Q: ¿Qué hago si el usuario pide "guardar versión anterior por si acaso"?**
+A: Explica que git es el backup. Muestra cómo recuperar: `git log`, `git checkout <commit> -- file`.
+
+**Q: ¿Cuándo es OK tener múltiples versiones?**
+A: NUNCA en el mismo branch. Si necesitas A/B testing, usa feature flags, NO archivos duplicados.
+
+---
+
+**REGLA FINAL**: Si tienes dudas sobre si algo es duplicación, **probablemente lo es**. Elimínalo.
+
+**Creado**: 2026-04-08  
+**Trigger**: Usuario reportó duplicaciones inaceptables  
+**Status**: ✅ ACTIVA - Aplicar en TODOS los desarrollos futuros

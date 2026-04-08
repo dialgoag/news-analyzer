@@ -563,6 +563,8 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
         processing_stage: Optional[str] = None,
         clear_indexed_at: bool = False,
         clear_error_message: bool = False,
+        segmentation_items_count: Optional[int] = None,
+        segmentation_avg_confidence: Optional[float] = None,
     ) -> None:
         """SYNC version - Update document status and metadata."""
         status_str = self.map_status_from_domain(status)
@@ -599,6 +601,15 @@ class PostgresDocumentRepository(BasePostgresRepository, DocumentRepository):
             if processing_stage is not None:
                 updates.append("processing_stage = %s")
                 params.append(processing_stage)
+            
+            # NEW: Segmentation metrics
+            if segmentation_items_count is not None:
+                updates.append("segmentation_items_count = %s")
+                params.append(segmentation_items_count)
+            
+            if segmentation_avg_confidence is not None:
+                updates.append("segmentation_avg_confidence = %s")
+                params.append(segmentation_avg_confidence)
             
             params.append(document_id)
             query = f"""

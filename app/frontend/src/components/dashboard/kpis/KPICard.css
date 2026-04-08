@@ -1,0 +1,171 @@
+/* KPICard Component Styles */
+
+.kpi-card {
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  padding: 16px;
+  min-width: 200px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  position: relative;
+}
+
+.kpi-card:hover {
+  border-color: rgba(148, 163, 184, 0.4);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  transform: translateY(-2px);
+}
+
+/* Status variants */
+.kpi-card--warning {
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.kpi-card--error {
+  border-color: rgba(244, 67, 54, 0.4);
+}
+
+/* Header */
+.kpi-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.kpi-card__icon {
+  width: 20px;
+  height: 20px;
+  color: #94a3b8;
+}
+
+.kpi-card__label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #cbd5e1;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Main Value */
+.kpi-card__value {
+  font-size: 32px;
+  font-weight: 700;
+  font-family: 'Fira Code', monospace;
+  margin-bottom: 12px;
+  line-height: 1;
+}
+
+/* Trend Row (Sparkline + Comparison) */
+.kpi-card__trend-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+}
+
+.kpi-card__sparkline {
+  flex: 1;
+  min-width: 100px;
+}
+
+.kpi-card__no-data {
+  font-size: 24px;
+  color: #475569;
+  text-align: center;
+  line-height: 32px;
+}
+
+/* Sparkline SVG */
+.kpi-sparkline {
+  display: block;
+}
+
+/* Comparison Indicator */
+.kpi-card__comparison {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.comparison__indicator {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.comparison__value {
+  font-family: 'Fira Code', monospace;
+}
+
+.comparison__percent {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.comparison--up {
+  /* Color set inline based on isImprovement */
+}
+
+.comparison--down {
+  /* Color set inline based on isImprovement */
+}
+
+.comparison--stable {
+  color: #94a3b8;
+}
+
+/* Tooltip */
+.kpi-card__tooltip {
+  background: rgba(15, 23, 42, 0.98);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 12px;
+  color: #e2e8f0;
+  max-width: 300px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  animation: tooltipFadeIn 0.15s ease;
+}
+
+@keyframes tooltipFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.kpi-card__tooltip hr {
+  margin: 6px 0;
+  border: none;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.kpi-card__tooltip strong {
+  color: #f1f5f9;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .kpi-card {
+    min-width: 160px;
+    padding: 12px;
+  }
+
+  .kpi-card__value {
+    font-size: 24px;
+  }
+
+  .kpi-card__sparkline {
+    min-width: 80px;
+  }
+}
