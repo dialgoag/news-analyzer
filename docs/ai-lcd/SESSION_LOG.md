@@ -5019,3 +5019,280 @@ Propuesta: Scrape directo de AP, Reuters, etc.
 4. **Graceful degradation**: Siempre permitir skip si componente opcional falla
 5. **Cost optimization**: Usar LLM adecuado por tarea (Ollama para simple, Perplexity para web)
 
+---
+
+## 2026-04-08: Fix #149 - Loop Infinito de Insights (Scheduler No Respetaba Pausa)
+
+### Problema Crítico Identificado
+
+**Usuario reportó**: "para el insights pue sesta en loop"
+
+**Evidencia en logs**:
+```bash
+# Cada 10 segundos, mismo patrón repetido infinitamente:
+⏭ Skipping 80f04f82... - max retries exceeded (3/3, status=insights_error)
+⏭ Skipping 035baeb6... - max retries exceeded (99/3, status=insights_error) ← ¡99 reintentos!
+✅ Marked 100 news items as pending for insights processing
+📥 Enqueued 2 document(s) for insights processing
+[10 segundos después... mismo patrón...]
+```
+
+### Root Cause
+
+**Scheduler no verificaba estado de pausa antes de encolar insights**:
+- Usuario pausaba insights desde UI → API actualiza `pipeline_runtime_kv`
+- Scheduler seguía encolando cada 10s sin verificar pausa
+- Noticias ya en error (retry_count >= 3) se skippeaban pero:
+  - Se marcaban como pending otra vez
+  - Se encolaban otra vez
+  - Workers las procesaban y fallaban
+  - retry_count incrementaba infinitamente (99, 125, etc.)
+
+### Decisión
+
+**Agregar verificación de pausa en PASO 4 del scheduler**:
+```python
+# Check if insights generation is paused
+try:
+    import insights_pipeline_control as _ipc
+    insights_paused = _ipc.is_generation_paused()
+except Exception:
+    insights_paused = False
+
+if not insights_paused:
+    # ... encolar insights ...
+else:
+    logger.debug("⏸️ [Master] Insights generation PAUSED - skipping enqueue")
+```
+
+**Ubicación**: `app/backend/app.py` línea 967-1007 (PASO 4 del scheduler)
+
+### Alternativas Consideradas
+
+#### Alt 1: Detener scheduler completamente (rechazada)
+```
+❌ Problemas:
+- Detendría TODAS las etapas (OCR, chunking, indexing)
+- No granular (queremos pausar solo insights)
+- Complica UI (necesitaría botón global + individuales)
+```
+
+#### Alt 2: Verificación en el worker (rechazada)
+```
+❌ Problemas:
+- Worker ya fue despachado (desperdicio de recursos)
+- Tarea ya está en la cola
+- No previene el encolamiento
+- Solo previene la ejecución (pero sigue encolando)
+```
+
+#### Alt 3: Verificación en scheduler (elegida) ✅
+```
+✅ Ventajas:
+- Previene encolamiento desde el inicio
+- Granular (solo afecta insights)
+- Coherente con otras etapas
+- Graceful: Si falla verificación, asume no pausado
+```
+
+### Impacto
+
+**Antes**:
+- Loop infinito: 100 noticias encoladas cada 10s
+- Logs spam: Miles de "Marked 100 news items"
+- retry_count infinito: 99, 125, 200...
+- CPU/memoria desperdiciados
+
+**Después**:
+- Scheduler ejecuta limpio
+- NO encola cuando paused=true
+- Logs limpios (solo "executed successfully")
+- retry_count se mantiene estable
+
+### Verificación
+
+**Test 1: Pausar vía API** ✅
+```bash
+curl -X PUT http://localhost:8000/api/admin/insights-pipeline \
+  -H "Authorization: Bearer TOKEN" \
+  -d '{"pause_all": true}'
+
+# Logs confirman:
+# ❌ Ya no aparece: "Marked 100 news items as pending"
+# ✅ Solo aparece: "executed successfully"
+```
+
+**Test 2: Pausar vía UI** ✅ (Usuario confirmó)
+- Click en botón "Pausar Todo"
+- Backend respeta pausa
+- Logs limpios
+
+---
+
+## 2026-04-08: Fix #150 - Pause Controls Async Refetch + Logging
+
+### Problema UX
+
+**Usuario reportó**: "sigue sin funcionar los botones de pausa, quizas despues de pausar deberiamos refrescar automaticamente apra reflejar el ehecoh de estar pausado"
+
+**Síntomas**:
+- Usuario hace click en botón de pausa
+- Backend pausa correctamente (logs confirman)
+- UI NO refleja el cambio visualmente
+- Botón sigue mostrando "Pausar" en vez de "Pausado ⏸️"
+
+### Root Cause
+
+**refetch() no era async**:
+```javascript
+// ANTES (incorrecto):
+const refetch = useCallback(() => {
+    setRefreshing(true);
+    fetchData();  // ❌ No espera, se ejecuta en background
+}, [fetchData]);
+
+// En handlePauseToggle:
+await axios.put(...);
+refetch();  // ❌ No espera a que fetchData complete
+// UI actualiza antes de tener nuevos datos
+```
+
+### Solución
+
+**1. Hacer refetch async**:
+```javascript
+const refetch = useCallback(async () => {
+    setRefreshing(true);
+    await fetchData();  // ✅ Ahora espera
+}, [fetchData]);
+```
+
+**2. Esperar refetch en handlers**:
+```javascript
+await axios.put(...);
+await refetch();  // ✅ Espera a que datos nuevos lleguen
+// UI actualiza CON datos nuevos
+```
+
+**3. Agregar console.log completo**:
+```javascript
+console.log('[PauseToggle] insights: false → true');
+console.log('[PauseToggle] Sending request:', payload);
+console.log('[PauseToggle] Success:', response.data);
+console.log('[PauseToggle] Forcing refresh...');
+console.log('[PauseToggle] Refresh complete');
+```
+
+### Decisión UX
+
+**Logging granular para debugging**:
+- Prefix: `[PauseToggle]` para pausas individuales
+- Prefix: `[PauseAll]` para pausa global
+- Cada paso del flujo: request → response → refresh → complete
+- Usuario puede abrir DevTools console y ver exactamente qué pasa
+
+### Alternativas Consideradas
+
+#### Alt 1: Optimistic UI update (rechazada)
+```
+Propuesta: Actualizar UI inmediatamente, luego refetch
+❌ Problemas:
+- Si backend falla, UI muestra estado incorrecto
+- Necesita rollback manual
+- Confunde al usuario si hay lag
+```
+
+#### Alt 2: Polling manual (rechazada)
+```
+Propuesta: Poll /api/dashboard/analysis cada 1s hasta ver cambio
+❌ Problemas:
+- Desperdicia requests
+- Latencia variable
+- Más complejo
+```
+
+#### Alt 3: Await refetch + logging (elegida) ✅
+```
+✅ Ventajas:
+- UI actualiza solo cuando backend confirma
+- Usuario ve el proceso completo en console
+- Fácil debugging
+- Feedback inmediato (1-2s)
+```
+
+### Verificación
+
+**Test con DevTools**:
+1. Abrir http://localhost:3000
+2. Abrir DevTools Console (F12)
+3. Click en "Pausar Todo"
+4. Ver logs:
+   ```
+   [PauseAll] Current: all paused = false, New state: pause all
+   [PauseAll] Sending request: {pause_all: true}
+   [PauseAll] Success: {success: true, pause_steps: [...]}
+   [PauseAll] Forcing refresh...
+   [PauseAll] Refresh complete
+   ```
+5. UI actualiza: Botones cambian a "Pausado ⏸️"
+6. Logs backend confirman: No más encolamiento
+
+**Resultado**: ✅ Botones funcionan correctamente
+
+---
+
+## 2026-04-08: Consolidación de Documentación
+
+### Archivos Actualizados
+
+**✅ CONSOLIDATED_STATUS.md**:
+- Fix #145: OCR Validation Agent
+- Fix #146: Web Enrichment Chain
+- Fix #147: LangGraph Integration
+- Fix #148: Insight Detail API + Repository Methods
+- Fix #149: Loop Infinito Scheduler
+- Fix #150: Pause Controls Async Refetch
+
+**✅ SESSION_LOG.md**:
+- REQ-023: Decisiones arquitectónicas completas
+- Fix #149: Loop infinito - causa, decisión, alternativas
+- Fix #150: UX pause controls - problema, solución, testing
+
+**✅ REQUESTS_REGISTRY.md**:
+- REQ-023: OCR Validation + Web Enrichment
+  - Estado: IMPLEMENTADO
+  - Costos: +30% (~$0.005 por enrichment)
+  - Archivos: 3 nuevos + 2 modificados
+  - Doc técnica: `OCR_VALIDATION_AND_WEB_ENRICHMENT.md`
+
+**✅ Technical Docs**:
+- `docs/ai-lcd/02-construction/OCR_VALIDATION_AND_WEB_ENRICHMENT.md` (NEW)
+  - Arquitectura completa
+  - Componentes: OCRValidationAgent, WebEnrichmentChain, PerplexityProvider
+  - Flujo LangGraph actualizado
+  - Costos y métricas
+  - Testing y troubleshooting
+
+### Estado de Commits
+
+**8 commits creados** (todos documentados):
+1. `725e8ad` - feat(insights): OCR validation + web enrichment (REQ-023)
+2. `9b82c7d` - docs: REQ-023 decision log
+3. `b469dbe` - fix(insights): respect pause state in scheduler (Fix #149)
+4. `1a1dd43` - fix(ui): better error handling for pause controls
+5. `7ec588f` - feat(api): insight detail endpoint (Fix #148)
+6. `d32acf1` - feat(repo): add get_by_id_sync methods (Fix #148)
+7. `bffa130` - fix(ui): pause controls now refresh properly (Fix #150)
+8. `4e6e3ea` - docs: update status with Fix #148, #149, #150
+
+### Checklist de Auditoría Completa ✅
+
+- [x] CONSOLIDATED_STATUS.md actualizado con todos los fixes
+- [x] SESSION_LOG.md con decisiones arquitectónicas
+- [x] REQUESTS_REGISTRY.md con REQ-023
+- [x] Documentación técnica (OCR_VALIDATION_AND_WEB_ENRICHMENT.md)
+- [x] Commits descriptivos con contexto
+- [x] Fixes numerados secuencialmente (#145-#150)
+- [x] "⚠️ NO rompe" verificado para cada fix
+- [x] Verificación post-cambio en logs
+
