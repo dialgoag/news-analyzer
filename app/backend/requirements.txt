@@ -1,7 +1,7 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-pydantic==2.7.4
-pydantic-settings>=2.4.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
 python-multipart==0.0.6
 
 # Database
@@ -11,11 +11,10 @@ psycopg2-binary>=2.9.9
 yoyo-migrations>=9.0.0
 
 # LangChain Ecosystem (versiones compatibles verificadas)
-langchain==0.3.0
-langchain-community==0.3.0
-langchain-core==0.3.33
-langchain-openai==0.2.0
-langchain-ollama>=0.2.0  # For ChatOllama with structured output
+langchain==0.2.16
+langchain-community==0.2.16
+langchain-core==0.2.40
+langchain-openai==0.1.25
 langgraph==0.1.19
 # langmem==0.0.28  # TODO: Añadir cuando se implemente memoria (requiere langchain-anthropic>=0.3.3)
 

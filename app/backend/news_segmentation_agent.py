@@ -15,7 +15,7 @@ import logging
 import json
 import re
 from typing import List, Dict, Any, Optional
-from langchain_ollama import ChatOllama
+from langchain_community.llms import Ollama
 from pydantic import BaseModel, Field
 import os
 
@@ -70,19 +70,16 @@ class NewsSegmentationAgent:
         self._connect()
     
     def _connect(self):
-        """Initialize Ollama LLM connection with structured output support."""
+        """Initialize Ollama LLM connection."""
         try:
             ollama_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
             
-            # Use ChatOllama for structured output support
-            from langchain_ollama import ChatOllama
-            
-            self.llm = ChatOllama(
+            self.llm = Ollama(
                 base_url=ollama_url,
                 model=self.model,
                 temperature=self.temperature,
                 num_ctx=8192,  # Larger context for chunks
-                format='json'   # Force JSON output
+                format='json'   # Request JSON output
             )
             logger.info(f"✅ NewsSegmentationAgent initialized: model={self.model}, temp={self.temperature}")
         except Exception as e:
