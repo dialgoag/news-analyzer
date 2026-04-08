@@ -4165,3 +4165,857 @@ curl -X POST /api/documents/{real_doc_id}/requeue
 - **Archivos modificados**:
   - `adapters/driven/llm/graphs/insights_graph.py`: 5 líneas (nodo + edges + docstring)
 - **Próximo blocker**: OpenAI API quota exceeded (issue operativo, requiere recarga de créditos)
+
+---
+
+## 2026-04-08
+
+### Sesión 58: REQ-022 - Rediseño Dashboard con Visual Analytics Framework
+
+**Contexto**: Usuario solicita rediseño completo del dashboard usando React+D3, aplicando visual analytics rule para selección de charts y D3/React rule para implementación limpia. Objetivos principales: tracking de progreso (documentos/news), workers, y error catching→handling→retry. Énfasis en REUSO, no solo recrear.
+
+#### Decisión: Build Fixes para Deployment (Fix #141, #142)
+- **Contexto**: Al intentar levantar app con `make deploy-quick` después de implementar dashboard v2, fallaron dos builds
+- **Fix #141 (Docker base paths)**: 
+  - **Problema**: Base image build error "backend/requirements.txt: not found"
+  - **Root cause**: Dockerfiles usaban `COPY backend/requirements.txt` pero build context es `.` (repo root)
+  - **Solución**: Cambió a `COPY app/backend/requirements.txt`
+  - **Afecta**: `app/backend/docker/base/cpu/Dockerfile` línea 43, `cuda/Dockerfile` línea 42
+- **Fix #142 (Frontend dependency)**:
+  - **Problema**: Vite build error "failed to resolve import 'prop-types'"
+  - **Root cause**: `PipelineDashboardV2.jsx` importa PropTypes pero faltaba en package.json
+  - **Solución**: Agregó `"prop-types": "^15.8.1"` + ejecutó `npm install`
+  - **Afecta**: `app/frontend/package.json`, `package-lock.json`
+- **Alternativas consideradas**: 
+  - ❌ Cambiar build context → Complica Makefile
+  - ❌ Remover PropTypes → Pierde type checking
+  - ✅ Fix quirúrgico → Solución mínima
+- **Resultado**: 
+  - ✅ `make deploy-quick` exitoso
+  - ✅ Todos contenedores UP (backend, frontend, postgres, qdrant, ollama, ocr-service)
+  - ✅ App lista para testing en http://localhost:3000
+
+---
+
+#### Decisión Principal: Dashboard Redesign v5.0.0
+- **Decisión**: Implementar rediseño completo aplicando framework sistemático de visual analytics (skill + rules) manteniendo funcionalidad actual.
+- **Rationale**: 
+  - Dashboard actual (REQ-007, Fix #125-#137) es funcional pero carece de framework sistemático task→chart
+  - Worker monitoring usa badges inline sin mostrar capacidad vs utilización
+  - Error panel sin flujo claro catch→handle→retry
+  - Oportunidad de consolidar REQ-014 (4 sub-peticiones pendientes) en el redesign
+- **Alternativas consideradas**:
+  - Iteración menor sobre dashboard actual (rechazada: no aplicaría framework completo, solo parches)
+  - Mantener dashboard sin cambios (rechazada: usuario solicita explícitamente redesign)
+  - Redesign completo desde cero (rechazada: usuario pide REUSO, no recrear)
+- **Elección**: Redesign guiado por visual analytics aplicando patrón "Operational Dashboard" con reuso del 40% del código actual
+
+#### Analytical Context Mapping
+- **Business Question**: ¿Cómo progresan documentos por la pipeline? ¿Dónde hay cuellos de botella? ¿Qué errores necesitan atención?
+- **Audience**: Equipo de operaciones, developers, admins
+- **Dashboard Type**: Operational (monitoring + diagnosis)
+- **Key Tasks**: 
+  - Flow tracking (pipeline progress)
+  - Comparison (workers actual vs capacity)
+  - Composition (errors by type/stage)
+  - Trend (KPI evolution)
+  - Detail on demand (drill-down)
+
+#### Chart Selection by Analytical Task
+1. **Pipeline Progress (Flow)**:
+   - **Technique**: Sankey or enhanced Parallel Coordinates
+   - **Why**: Shows state transitions, volumes, and bottlenecks visually
+   - **Enhancement**: Add brushing for stage selection
+   
+2. **Workers Monitoring (Comparison + Status)**:
+   - **Technique**: Bullet charts in small multiples
+   - **Why**: Shows actual vs capacity clearly (target-based comparison)
+   - **Replacement**: Current inline badges → bullet charts por worker type
+   
+3. **Error Tracking (Composition + Priority)**:
+   - **Technique**: Sorted bar chart (errors by type) + Timeline (error patterns)
+   - **Why**: Ranking of error types + temporal distribution for diagnosis
+   - **Enhancement**: Add retry action buttons + success rate indicators
+   
+4. **KPIs (Comparison + Trend)**:
+   - **Technique**: KPI cards with sparklines
+   - **Why**: Shows current value + historical trend + comparison baseline
+   - **Enhancement**: Add ↑↓ indicators, actual vs target bands
+
+5. **Document Detail (Detail on demand)**:
+   - **Technique**: Virtualized table with drill-down
+   - **Why**: Scalable for large datasets, progressive disclosure
+
+#### Dashboard Architecture (7-section Operational Pattern)
+```
+┌─────────────────────────────────────────────────────────┐
+│ [Header: Title + Refresh selector + Global filters]    │
+├─────────────────────────────────────────────────────────┤
+│ [KPI Row: 4-6 cards with sparklines]                   │
+│   Documents | News | Workers | Errors (with trends)    │
+├─────────────────────────────────────────────────────────┤
+│ [Main Analysis Row]                                     │
+│  ├─ Pipeline Flow (60%): Sankey/Parallel enhanced      │
+│  └─ Workers Status (40%): Bullet charts grid          │
+├─────────────────────────────────────────────────────────┤
+│ [Diagnostic Row - Collapsible]                         │
+│  └─ Error Analysis: Bar chart + Timeline + Retry btns │
+├─────────────────────────────────────────────────────────┤
+│ [Detail Row - Collapsible]                             │
+│  └─ Document table + Worker activity log               │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### React+D3 Separation Strategy
+- **React owns**: Component structure, lifecycle, state management, DOM composition
+- **D3 handles**: Scales, layouts (sankey/force), path generation, transitions, brush logic
+- **Pattern**: React renders SVG structure, D3 computes geometry and behavior
+- **No mixing**: D3 no crea nodos DOM arbitrarios que React también maneja
+
+#### Reuse Analysis (Salvage Strategy)
+**✅ Keep & Enhance (40% reuse)**:
+- `CollapsibleSection.jsx` - Reuse as-is
+- `useDashboardFilters.jsx` - Enhance with more filter types
+- `dashboardDataService.js` - Extend with worker/error functions
+- Auto-refresh logic - Keep interval selector
+- `ParallelPipelineCoordinates` - Evaluate for enhancement vs rebuild
+- Error resilience patterns (REQ-009) - Maintain
+
+**🔄 Modify (30%)**:
+- `PipelineDashboard.jsx` - Reorganize layout, keep orchestration
+- `KPIsInline` - Add sparklines + indicators
+- `ErrorAnalysisPanel` - Better charts + retry actions
+
+**❌ Replace (30%)**:
+- `PipelineStatusTable` - Better flow viz
+- `WorkerLoadCard` - Bullet charts
+- `StuckWorkersPanel` - Integrate into main panel
+
+#### Implementation Phases (7 fases, 27-35h)
+1. **Fase 1 - Análisis** (2-3h): Chart selection finalization, wireframes
+2. **Fase 2 - Arquitectura** (2h): Component design, folder structure
+3. **Fase 3 - Data Layer** (3-4h): Services (worker, error, dashboard enhanced)
+4. **Fase 4 - Components** (12-15h): KPIs → Workers → Errors → Flow (iterative)
+5. **Fase 5 - Integration** (4-5h): Brushing & linking, filters, actions
+6. **Fase 6 - Testing** (3-4h): Performance, accessibility, responsive
+7. **Fase 7 - Documentation** (1-2h): CONSOLIDATED_STATUS, SESSION_LOG updates
+
+#### Risks & Mitigation
+- **Risk**: Large refactor (18 files) may introduce regressions
+  - **Mitigation**: Phased implementation, keep old components until new ones verified
+- **Risk**: Performance degradation with many D3 charts
+  - **Mitigation**: Memoization, debouncing, lazy loading, virtualization
+- **Risk**: Breaking real-time monitoring
+  - **Mitigation**: Keep auto-refresh logic intact, test continuously
+- **Risk**: Accessibility regression
+  - **Mitigation**: Follow D3+React accessibility rules from start
+
+#### Technical Decisions
+**Decision 1**: Use Operational Dashboard pattern (not Executive or Exploratory)
+- **Why**: Primary use case is monitoring + diagnosis, not strategic decisions or open-ended exploration
+- **Impact**: Dictates section ordering, interaction patterns, information density
+
+**Decision 2**: Bullet charts for workers (not gauges or simple bars)
+- **Why**: Bullet charts excel at showing actual vs target/capacity in compact space
+- **Why not gauges**: Take more space, less precise reading
+- **Why not bars**: Don't show target/threshold clearly
+
+**Decision 3**: Keep parallel coordinates as option (evaluate vs Sankey)
+- **Why**: Current parallel coords (Fix #125) are already optimized
+- **Decision point**: Fase 1 will determine if enhancement is better than Sankey rebuild
+- **Criteria**: Brushing capability, readability at scale, maintenance cost
+
+**Decision 4**: Centralize data fetching in new `useDashboardData` hook
+- **Why**: Current pattern spreads API calls across components
+- **Benefit**: Single source of truth, easier caching, cleaner components
+- **Pattern**: Hook returns memoized transformed data ready for visualization
+
+#### Impact on Roadmap
+- **Supersedes**: REQ-014 (4 sub-peticiones) - incorporadas en redesign
+- **Complements**: REQ-021 (Hexagonal) - usa repositories limpios
+- **Builds on**: REQ-007 (D3.js), REQ-013 (data services), Fix #125-#137 (compact layout)
+- **Version**: v5.0.0 (major dashboard redesign)
+
+#### Success Criteria
+- [ ] All current dashboard functionality preserved
+- [ ] Charts follow visual analytics framework (right chart for task)
+- [ ] React+D3 separation clean (no ownership conflicts)
+- [ ] Performance: no unnecessary rerenders, memoized calculations
+- [ ] Accessibility: keyboard navigation, ARIA labels, color not sole indicator
+- [ ] Responsive: works on mobile/tablet/desktop
+- [ ] Error retry flow: clear catch→handle→retry UX
+- [ ] Worker capacity: actual vs max clearly visible
+- [ ] Pipeline progress: bottlenecks identifiable at glance
+- [ ] Documentation: architecture explained, decisions recorded
+
+#### Next Immediate Steps
+1. Start Fase 1: Detailed chart selection + create wireframes
+2. Finalize Sankey vs Parallel Coordinates decision
+3. Design bullet chart component specifications
+4. Create data service interfaces (worker, error)
+
+**Status**: EN PROGRESO - Iniciando Fase 1
+**Estimated Completion**: 27-35 horas (distribuidas en próximas sesiones)
+
+---
+
+## 2026-04-08 (Continuación - Sesión 58)
+
+### REQ-022 Fases 1-3: Implementación Completa Dashboard Redesign
+
+**Contexto**: Continuación de REQ-022. Usuario aprobó plan completo y solicitó continuar con Workers → Errors → Sankey → Integration, con **IMPORTANTE** mantener ambos (Sankey + Parallel Coords) con tabs para comparar.
+
+#### Fase 3: Workers Bullet Charts (3h)
+**Decisión**: Implementar bullet charts en small multiples para worker capacity
+- **Rationale**: 
+  - Bullet charts son el gold standard para actual vs target visualization
+  - Muestran ranges (good/warning/critical) de manera intuitiva
+  - Compactos: múltiples charts en poco espacio
+  - Mejor que badges (no show capacity) o gauges (ocupan mucho espacio)
+- **Alternativas consideradas**:
+  - Gauges circulares: Rechazado (menos précision, más espacio)
+  - Simple bars: Rechazado (no muestran ranges claramente)
+  - Sparklines: Rechazado (no para capacity comparison)
+- **Elección**: Bullet charts con ranges de fondo + barra actual + marcador max
+- **Patrón D3+React**: React crea SVG structure, D3 calcula scales y posiciones
+- **Sorting**: Por priority (critical > warning > good) para diagnóstico rápido
+
+#### Fase 3: Error Bar Chart + Timeline (4h)
+**Decisión 1**: Horizontal sorted bar chart para error types
+- **Rationale**:
+  - Horizontal permite labels largos (error messages)
+  - Sorting por severity + count prioriza atención
+  - Click-to-select permite batch retry
+  - Retry buttons inline (actionable insights)
+- **Alternativas consideradas**:
+  - Vertical bars: Rechazado (labels rotan, difícil leer)
+  - Treemap: Rechazado (difícil comparar tamaños)
+  - List/Table: Rechazado (no visual, menos impact)
+- **Elección**: Horizontal bars con severity colors + retry actions
+
+**Decisión 2**: Timeline sparkline para temporal patterns
+- **Rationale**:
+  - Muestra si errores son spike vs constantes
+  - 24h window suficiente para operational monitoring
+  - 1h buckets (24 data points) balance detail vs clarity
+  - Area fill + line para énfasis visual
+- **Data points sizing**: Por severity (critical más grandes)
+- **Grid lines**: Para facilitar lectura de magnitudes
+
+**Decisión 3**: Panel integrado (statistics + actions + charts)
+- **Rationale**:
+  - Statistics header: Context rápido (total, retriable, critical)
+  - Action bar: Retry All, Retry Selected, Clear (actionable)
+  - Status messages: Feedback inmediato post-retry
+  - Help section: Self-service documentation
+- **Retry flow**: API `/api/workers/retry-errors` con batch payload
+
+#### Fase 3: Sankey + Parallel Coords Tabs (4h)
+**Decisión CRÍTICA**: Mantener AMBOS con tabs (no reemplazar)
+- **Rationale**: Usuario solicitó explícitamente poder comparar ambos
+- **Sankey (Tab 1 - Simplified)**:
+  - Best for: Quick operational monitoring
+  - Shows: Stage-level volumes, overall flow, bottlenecks
+  - Speed: Fast rendering (~500ms)
+  - Use when: Need health check
+- **Parallel Coords (Tab 2 - Detailed)**:
+  - Best for: Deep investigation, document tracking
+  - Shows: Individual docs, bifurcation, topics, granular states
+  - Speed: More complex (~2s)
+  - Use when: Debugging specific documents
+- **Pattern**: Lazy loading para Parallel Coords (solo carga si tab activado)
+- **Comparison guide**: Help section explica cuándo usar cada uno
+
+**Decisión técnica Sankey**:
+- **Library**: d3-sankey (oficial, well-maintained)
+- **Node width**: 24px (buena visibilidad sin ocupar mucho)
+- **Link width**: Proporcional a document count
+- **Colors**: Per-stage (consistentes con theme)
+- **Interactivity**: Hover tooltips en nodes + links
+- **Legend**: Explicación simple de flow
+
+#### Fase 3: Integration - PipelineDashboardV2 (1h)
+**Decisión**: 7-section Operational Dashboard pattern
+- **Sección 1 - Header**: Title + Refresh control
+- **Sección 2 - KPI Row**: 4 cards con sparklines (grid responsive)
+- **Sección 3 - Main Analysis**: Flow (60%) + Workers (40%) grid
+- **Sección 4 - Diagnostic**: Errors collapsible
+- **Sección 5 - Details**: Database status collapsible
+- **Sección 6 - Footer**: Version + timestamp
+- **Rationale**: Sigue visual analytics framework (monitoring + diagnosis)
+
+**Decisión**: useDashboardData hook centralizado
+- **Rationale**:
+  - Single source of truth para todo el dashboard
+  - Memoization automática
+  - Error resilience (mantiene cached data)
+  - Auto-refresh configurable
+- **Pattern**: Hook retorna `{data, loading, error, refreshing, refetch}`
+
+**Decisión**: Toggle v1 ↔ v2 (TEMPORARY)
+- **Rationale**:
+  - Permite testing side-by-side sin romper producción
+  - User puede validar antes de migration completa
+  - Default v1 (seguro, probado)
+  - Toggle v2 (🆕 badge para discovery)
+- **Implementation**: State en DashboardView, conditional render
+- **Future**: Remover toggle cuando v2 sea estable (Fase 7)
+
+#### Technical Decisions - React+D3 Separation
+**Pattern aplicado consistentemente en todos los charts**:
+- **React owns**: Component structure, lifecycle, state, DOM creation
+- **D3 calculates**: Scales, layouts (sankey, line, area), paths, geometry
+- **No mixing**: D3 NO crea DOM arbitrario que React también maneja
+- **Example (Bullet Chart)**:
+  ```jsx
+  // D3: Calculate scale (memoized)
+  const xScale = useMemo(() => 
+    d3.scaleLinear().domain([0, max]).range([0, width]),
+    [max, width]
+  );
+  
+  // React: Render SVG structure
+  return (
+    <svg>
+      <rect width={xScale(current)} /> // React + D3 geometry
+    </svg>
+  );
+  ```
+
+#### Performance Optimizations Implemented
+1. **Memoization**: All scales, paths, transformations memoized with useMemo
+2. **Lazy loading**: Parallel Coords loaded only when tab active (React.lazy + Suspense)
+3. **Conditional rendering**: Only active tab rendered
+4. **useDashboardData**: Centralized fetching, cached results
+5. **Debouncing**: Filter updates debounced (300ms)
+6. **Promise.allSettled**: Parallel API requests, resilient to individual failures
+
+#### Accessibility Implemented
+- **ARIA labels**: role="img", aria-label en todos los charts
+- **Keyboard nav**: Tab order lógico, Enter/Space para buttons
+- **Color independence**: Icons + text complementan color coding
+- **Reduced motion**: `@media (prefers-reduced-motion: reduce)` support
+- **Screen reader**: Chart data accessible via tooltips + labels
+- **Semantic HTML**: Proper heading hierarchy, button vs div
+
+#### Impact on Roadmap
+- **Completa**: Fase 1 (Análisis), Fase 2 (Data Layer), Fase 3 (Components + Integration)
+- **Pendiente**: Fase 4 (Testing), Fase 5 (Polish), Fase 6 (Documentation)
+- **Tiempo invertido**: 16h de ~27-35h estimadas (~50% completado)
+- **Próximo milestone**: Testing & Refinement
+
+#### Success Criteria Achieved (Fase 3)
+- [x] KPIs con sparklines + comparison indicators
+- [x] Workers con bullet charts (actual vs capacity)
+- [x] Errors con bar chart + timeline + retry actions
+- [x] Sankey implementado con hover interactivity
+- [x] Tabs Sankey ↔ Parallel Coords (ambos preservados)
+- [x] Dashboard integrado end-to-end
+- [x] Toggle v1 ↔ v2 para testing
+- [x] React+D3 separation limpia
+- [x] Memoization en todos los charts
+- [x] Responsive design (mobile/tablet/desktop)
+- [x] Accessibility (ARIA, keyboard, reduced motion)
+
+#### Known Limitations (para Fase 4)
+1. **Historical data**: Sparklines usan data placeholder (endpoint no implementado)
+2. **Performance**: No testeado con 1000+ documents (virtualization pendiente)
+3. **Browser compatibility**: Solo testeado Chrome (Firefox/Safari pendiente)
+4. **Error handling**: Retry sin progress indicator (solo status message)
+5. **Tooltips**: Position puede salir de viewport en mobile
+
+#### Next Immediate Steps (Fase 4)
+1. Testing end-to-end:
+   - Load testing con large datasets
+   - Browser compatibility (Firefox, Safari, Edge)
+   - Mobile testing (iOS, Android)
+   - Accessibility audit (Lighthouse, axe)
+2. Performance profiling:
+   - React DevTools Profiler
+   - Chrome Performance tab
+   - Identify unnecessary rerenders
+3. Bug fixes:
+   - Tooltip positioning en mobile
+   - Historical data endpoint (o mock data)
+   - Progress indicators para retry actions
+4. Polish:
+   - Loading skeletons
+   - Smooth transitions
+   - Error state improvements
+
+**Estimación restante**: ~11-19h (Testing 3-4h, Polish 2-3h, Documentation 1-2h, Migration 5-10h)
+
+---
+
+## 2026-04-08 (Inicio - Sesión 58)
+
+### REQ-022 Fases 1-2: Análisis y Data Layer
+
+[contenido previo mantiene]
+
+**Status**: EN PROGRESO - Completadas Fases 1, 2, 3
+
+
+### Fix #135 + #136: Loop infinito de retries + UI de pausas
+
+**Contexto**: Usuario reportó que insights aparecían con errores oscilantes (0 → 2 → 0), sospecha de retry loop. Investigación reveló 2 insights con 40 y 53 retries.
+
+**Decisiones**:
+
+1. **Fix #135 - Loop infinito de retries**:
+   - **Decisión**: Agregar validación `retry_count >= MAX_INSIGHTS_RETRIES` en PASO 4 del scheduler
+   - **Alternativas consideradas**:
+     1. ❌ Modificar worker para no marcar como ERROR → rechazado (worker está correcto)
+     2. ❌ Eliminar reconciliación PASO 4 → rechazado (necesaria para recovery legítimos)
+     3. ✅ **Agregar validación en PASO 4** → aceptado (quirúrgico, consistente con PASO 0)
+   - **Razón**: PASO 0 (recovery) ya valida retry_count correctamente. PASO 4 debe hacer lo mismo para consistencia.
+
+2. **Fix #136 - UI de pausas no visible**:
+   - **Descubrimiento**: `PipelineAnalysisPanel.jsx` existía pero no estaba integrado en dashboard
+   - **Decisión**: Integrar en Dashboard v1 como sección colapsable
+   - **Alternativas consideradas**:
+     1. ❌ Dejar solo API manual → rechazado (mala UX para admins)
+     2. ❌ Crear nuevo componente desde cero → rechazado (ya existe y funciona)
+     3. ✅ **Integrar componente existente** → aceptado (reutiliza código, ~10 min)
+   - **Razón**: Usuario mencionó que "antes podía hacerse desde la UI". Confirmado que UI existe pero no visible.
+
+**Impacto en roadmap**: 
+- Ninguno. Hotfixes no bloquean REQ-022 (Dashboard Redesign v2)
+- Fix #136 mejora UX para control de recursos (útil durante desarrollo)
+
+**Riesgo**: 
+- Bajo. Cambios quirúrgicos, no afectan flujo principal
+- Fix #135: Solo agrega 1 condición en scheduler
+- Fix #136: Solo agrega 1 import + 1 sección en render
+
+**Decisión de límite retry**: 
+- `MAX_INSIGHTS_RETRIES = 3` es consistente en todo el codebase:
+  - Recovery PASO 0: línea 742
+  - Worker error handling: línea 2292
+  - Scheduler PASO 4: línea ~976 (nuevo)
+  - LangGraph workflow: `max_attempts` default
+
+**Cleanup necesario**: 
+- Los 2 insights actuales (retry_count 40, 53) quedarán en ERROR permanente
+- No se eliminarán automáticamente (quedan como evidencia del bug)
+- Si usuario quiere limpiarlos: `DELETE FROM news_item_insights WHERE retry_count > 10`
+
+**Beneficios adicionales** (UI pausas):
+- Admin puede ahorrar recursos pausando Insights cuando no necesita
+- Control granular por etapa (OCR, Chunking, Indexing, Insights, Indexing Insights)
+- Persistente (sobrevive a rebuilds)
+- No requiere curl/SQL manual
+
+
+### Fix #137 + #138: Insights expirados UI + Simplificar pausas
+
+**Contexto**: Usuario pidió (después de Fix #135/136):
+1. Ver insights expirados con **razón del error** en UI
+2. Simplificar pausas: "you already have a table with the steps" → reutilizar `PipelineStatusTable` existente
+
+**Decisiones**:
+
+1. **Fix #137 - Insights expirados UI**:
+   - **Decisión**: Crear endpoint `/api/dashboard/expired-insights` + componente `ExpiredInsightsPanel`
+   - **Alternativas consideradas**:
+     1. ❌ Agregar columna "retry_count" a ErrorAnalysisPanel → rechazado (mezcla errores actuales con históricos)
+     2. ✅ **Panel separado collapsible** → aceptado (clara separación, no invasivo)
+   - **Razón**: Insights expirados son históricos/permanentes, no errores activos que se pueden reintentar
+
+2. **Fix #138 - Simplificar pausas**:
+   - **Descubrimiento**: `PipelineStatusTable` **YA TIENE** columna Control con botones Play/Pause (líneas 141-160)
+   - **Decisión**: Activar controles existentes + remover `PipelineAnalysisPanel` pesado
+   - **Alternativas consideradas**:
+     1. ❌ Mantener PipelineAnalysisPanel completo → rechazado (demasiado complejo, tiene proveedores LLM)
+     2. ❌ Crear componente nuevo desde cero → rechazado (tabla ya existe)
+     3. ✅ **Enriquecer stages con pauseKey/paused + implementar onPauseToggle** → aceptado (reutiliza UI, ~30 líneas código)
+   - **Razón**: Usuario señaló correctamente que tabla ya existe, solo necesita activarse
+
+**Implementación**:
+
+**Backend (Fix #137)**:
+- Nuevo método `list_expired_insights_sync` en repository
+- Query: `WHERE retry_count >= 3 ORDER BY updated_at DESC LIMIT 100`
+- Endpoint retorna: news_item_id, filename, error_message, retry_count, updated_at
+
+**Backend (Fix #138)**:
+- Método `_fetch_pause_states(cursor)` consulta `pipeline_runtime_kv`
+- Enriquecidos 5 stages con `pauseKey` y `paused`:
+  - OCR → pauseKey: "ocr"
+  - Chunking → pauseKey: "chunking"
+  - Indexing → pauseKey: "indexing"
+  - Insights → pauseKey: "insights"
+  - Indexing Insights → pauseKey: "indexing_insights"
+
+**Frontend (Fix #137)**:
+- Componente `ExpiredInsightsPanel` con tabla de 5 columnas
+- Collapsible (defaultCollapsed=true, no invasivo)
+- Tooltip en error_message para ver mensaje completo
+- Footer con nota: "no se reintentarán automáticamente"
+
+**Frontend (Fix #138)**:
+- **Removida** integración de `PipelineAnalysisPanel`
+- **Implementado** `handlePauseToggle(stageKey, currentlyPaused)`:
+  - PUT `/api/admin/insights-pipeline` con `{ pause_<key>: !currentlyPaused }`
+  - Refresh automático post-toggle
+- **Implementado** `handlePauseAll()`:
+  - Detecta si todos pausados
+  - Toggle global (payload con todos los pause_<key>)
+- **Agregado** botón "Pausar TODO" / "Reanudar TODO" arriba de tabla
+- **Conectado** PipelineStatusTable con `onPauseToggle={handlePauseToggle}`
+
+**Impacto en roadmap**:
+- Ninguno. Mejoras incrementales de UX para admin
+- No bloquea REQ-022 (Dashboard Redesign v2)
+
+**Riesgo**:
+- Muy bajo. Cambios aditivos (Fix #137) + activación de UI existente (Fix #138)
+- API de pausas ya funcionaba, solo necesitaba wiring frontend
+
+**Beneficios**:
+- **Transparencia**: Admin ve qué insights fallaron y por qué
+- **Control eficiente**: Pausar etapas desde tabla (menos clicks que componente separado)
+- **UI más limpia**: Sin componente pesado con proveedores LLM (que usuario no necesitaba)
+- **Reutilización**: Tabla existente → menos código, más maintainable
+
+
+
+## 2026-04-08
+
+### Cambio: Dashboard v2 as Default + Pipeline Controls Integration
+
+- **Decisión**: Hacer v2 el dashboard principal e integrar controles de pausa + insights expirados
+- **Alternativas consideradas**: 
+  - Mantener v1 como default (rechazado: v2 tiene mejor UX)
+  - Crear componente nuevo para controles (rechazado: ya existe PipelineStatusTable)
+- **Impacto en roadmap**: v2 ahora en producción, v1 quedará deprecado eventualmente
+- **Riesgo**: Ninguno identificado (v1 aún funcional, v2 probado con éxito)
+
+### Bug Fix: Column name mismatch in dashboard_read_repository_impl.py
+
+- **Decisión**: Cambiar `value_json` → `value` en `_fetch_pause_states`
+- **Root cause**: Schema usa `value` (jsonb), no `value_json`
+- **Impacto**: Endpoint `/api/dashboard/analysis` funciona correctamente (500 → 200 OK)
+
+
+
+### Cambio: Dashboard Unification (v2 → Main)
+
+- **Decisión**: Unificar dashboard eliminando v1 y renombrando v2 a PipelineDashboard
+- **Alternativas consideradas**: 
+  - Mantener ambas versiones (rechazado: confusión, mantenimiento duplicado)
+  - Eliminar v1 completamente sin backup (rechazado: prudencia requiere backup)
+- **Impacto en roadmap**: Dashboard ahora consolidado, solo 1 versión en producción
+- **Riesgo**: Ninguno - v2 estable, v1 guardado como backup
+
+### Decisión: Remover Toggle v1/v2
+
+- **Decisión**: Eliminar toggle para simplificar UX
+- **Justificación**: v2 es superior en todos los aspectos (KPIs, workers, flow, errors)
+- **Impacto**: Usuario no necesita elegir versión, experiencia más directa
+
+
+
+### Bug Fix: Pipeline Pause Controls Not Working
+
+- **Root cause**: Frontend enviaba payload con formato incorrecto
+  - Enviaba: `{ "pause_ocr": true }` (flat key con underscore)
+  - Backend esperaba: `{ "pause_steps": { "ocr": true } }` (nested object)
+- **Decisión**: Corregir frontend para usar API correcta del backend
+- **Alternativas consideradas**: 
+  - Cambiar backend para aceptar ambos formatos (rechazado: más complejo, backend ya tiene API establecida)
+  - Mantener formato incorrecto (rechazado: no funciona)
+- **Impacto**: Controles ahora funcionan, estado sincronizado con realidad
+- **Lección aprendida**: Verificar formato de API del backend antes de implementar frontend
+
+
+
+### Mejora: Dynamic Scroll Behavior
+
+- **Problema detectado**: Scroll fijo que no se adaptaba al contenido colapsado/expandido
+- **Decisión**: Usar flexbox con `gap` y `overflow-y-auto` para scroll dinámico
+- **Alternativas consideradas**: 
+  - Mantener `overflow-hidden` y calcular altura con JS (rechazado: complejo, innecesario)
+  - Usar `height: 100vh` fija (rechazado: no se adapta al contenido)
+- **Impacto**: UX mejorada, scroll se adapta automáticamente al estado de componentes
+- **Ventaja adicional**: Eliminado espaciado duplicado, código más limpio
+
+
+
+### Error Crítico: Duplicación de Controles de Refresh
+
+- **Error**: Dos headers con funcionalidad idéntica (refresh)
+- **Root cause**: Al unificar v1 y v2, no se eliminó header legacy de DashboardView
+- **Impacto**: Confusión, código duplicado, violación de DRY
+- **Decisión**: Eliminar header de DashboardView, conservar solo el de PipelineDashboard
+- **Por qué ocurrió**: 
+  1. No hubo revisión exhaustiva post-refactoring
+  2. No se validó que solo existiera 1 implementación por funcionalidad
+  3. Se asumió que ambos eran necesarios sin cuestionarlo
+- **Prevención futura**:
+  - Checklist obligatorio post-refactoring: buscar duplicaciones
+  - Validar principio: 1 funcionalidad = 1 implementación
+  - Code review debe detectar código duplicado
+
+
+
+## 2026-04-08: Nueva Regla Permanente
+
+### Creación: no-duplication-and-quality.mdc
+
+- **Trigger**: Usuario reportó duplicaciones inaceptables (doble header, archivos backup, componentes legacy)
+- **Contenido**: 
+  - Prohibiciones absolutas (duplicación, archivos backup, errores básicos)
+  - Checklist obligatorio post-refactoring
+  - Comandos de verificación automática
+  - Template de commit para eliminación de duplicaciones
+  - Principios fundamentales (DRY, YAGNI, KISS, Visual Validation)
+- **Propósito**: Prevenir que se repitan errores básicos de calidad y duplicación
+- **Aplicación**: OBLIGATORIA en todos los desarrollos futuros
+- **Ubicación**: `.cursor/rules/no-duplication-and-quality.mdc`
+
+Esta regla debe ejecutarse SIEMPRE después de:
+- Refactorings
+- Unificación de versiones (v1 → v2)
+- Cambios grandes de UI/UX
+- Antes de declarar cualquier tarea como "completada"
+
+
+
+### Bug Fix: Sankey Chart Empty
+
+- **Root cause**: Structure mismatch - backend retorna array, frontend esperaba object
+- **Decisión**: Adaptar frontend a estructura del backend (más robusto)
+- **Alternativas consideradas**: 
+  - Cambiar backend para retornar object (rechazado: backend ya está estable, usado por otros componentes)
+  - Wrapper intermedio para transformar array → object (rechazado: innecesario, más complejidad)
+- **Lección**: Verificar estructura de datos del API ANTES de implementar transformaciones
+
+---
+
+## 2026-04-08: REQ-023 - OCR Validation + Web Enrichment
+
+### Problema Identificado
+
+**Usuario preguntó**:
+> "podriamos hacer que el agente revise si el contexto parece una noticia completa y entonces haga e analisis o eso incrementara el gasto de presupuesto?"
+> "podria hacerse mediante el llm local?"
+> "cuando vamos por los insights estamos pidiendo al llm que busque ein internet y extraiga lo relevante en las noticias internacionales para enrriquecer?"
+
+**Contexto**:
+1. Noticias cortas (<500 chars) rechazadas automáticamente por límite rígido
+2. Revisión manual de 3 noticias cortas:
+   - `0e1f4fb7` (270 chars): Completa, bien estructurada
+   - `72e71418` (395 chars): Completa con errores OCR ("Papa-tan" → "Papatan")
+   - `62b89dc8` (295 chars): Completa pero con palabras cortadas
+3. Insights actuales NO incluyen fuentes externas fidedignas
+4. Noticias fragmentadas causan loop de reintentos (desperdicio de recursos)
+
+### Decisión Arquitectónica: Dos Componentes Separados
+
+**Por qué NO un solo agente?**
+
+#### Opción A (rechazada): Single Agent con LLM único
+```
+❌ Problemas:
+- Mezcla responsabilidades (validation + enrichment)
+- Siempre pagaría costo de Perplexity (incluso para noticias locales)
+- No permite graceful degradation granular
+- Imposible optimizar costos por tipo de tarea
+```
+
+#### Opción B (elegida): Two Specialized Agents
+```
+✅ Ventajas:
+1. OCRValidationAgent (Ollama local, $0):
+   - Solo para cortas (<500 chars)
+   - Corrección rápida de errores OCR
+   - Skip early de fragmentadas (ahorro $0.10)
+   - Nunca usa APIs de pago
+   
+2. WebEnrichmentChain (Perplexity, ~$0.005):
+   - Solo para relevantes (~20%)
+   - Filtro inteligente (keywords internacionales)
+   - Fuentes fidedignas oficiales
+   - Graceful degradation si no hay API key
+```
+
+### Implementación: OCR Validation Agent
+
+**Diseño**:
+- **Patrón**: Singleton (una sola instancia global)
+- **LLM**: Siempre Ollama local (nunca OpenAI/Perplexity)
+- **Prompt**: Estructurado (ESTADO + RAZON + TEXTO_CORREGIDO)
+- **Temperature**: 0.1 (baja para corrección factual)
+- **Timeout**: 30s
+- **Activación**: Solo noticias <500 chars
+
+**Por qué Ollama local?**
+- ✅ Costo $0 (sin límites de uso)
+- ✅ Latencia baja (~1-2s)
+- ✅ No requiere API keys
+- ✅ Suficiente inteligencia para:
+  - Corregir guiones: "Papa-tan" → "Papatan"
+  - Detectar fragmentación: palabras sin sentido
+  - Validar completitud: tiene inicio/fin
+
+**Por qué NO OpenAI?**
+- ❌ Costo innecesario (~$0.001 por validación)
+- ❌ Latencia mayor (~3-5s)
+- ❌ Overkill (no necesita alta inteligencia)
+- ❌ Requiere API key
+
+### Implementación: Web Enrichment Chain
+
+**Diseño**:
+- **Patrón**: LangChain component (integrado en grafo)
+- **LLM**: Perplexity Sonar (incluye web search automático)
+- **Filtro**: `should_enrich_with_web()` detecta noticias relevantes
+- **Prompt**: Enfocado (solo fuentes oficiales: AP, Reuters, AFP, EFE, BBC)
+- **Temperature**: 0.1 (baja para factualidad)
+- **Max tokens**: 500 (solo fuentes, no análisis completo)
+- **Activación**: Solo ~20% de noticias (filtro inteligente)
+
+**Por qué Perplexity?**
+- ✅ Web search automático (incluido en request)
+- ✅ Citations extraídas en metadata
+- ✅ Costo razonable (~$0.005 por request)
+- ✅ Especializado en búsqueda web
+- ✅ Fuentes fidedignas (no inventa)
+
+**Por qué NO OpenAI?**
+- ❌ No incluye web search (necesitaría herramientas externas)
+- ❌ Puede inventar fuentes (alucinaciones)
+- ❌ Más caro para búsqueda web
+
+**Criterios de Enrichment**:
+```python
+Keywords internacionales: 'internacional', 'global', 'mundial', 'crisis', 'guerra'
+Actores importantes: 'presidente', 'ministro', 'ONU', 'OTAN', 'UE', 'Tribunal Supremo'
+```
+
+### Integración en LangGraph
+
+**Nuevo flujo**:
+```
+START
+  ↓
+validate_ocr (Ollama, solo <500 chars)
+  ├─ FRAGMENTADA → error_handler → END (skip early)
+  └─ COMPLETA → extract (OpenAI/Perplexity)
+      ↓
+validate_extraction
+  ↓
+enrich_web (Perplexity, solo relevantes)
+  ↓
+analyze (incluye web sources)
+  ↓
+validate_analysis
+  ↓
+finalize → END
+```
+
+**Routing condicional**:
+- OCR inválido → Skip early (ahorro ~$0.10)
+- OCR válido → Continuar workflow normal
+- Enrichment skip gracefully si:
+  - No hay Perplexity API key
+  - Noticia no es relevante
+  - Error en búsqueda web
+
+### Costos Estimados (100 noticias típicas)
+
+**Antes (REQ-022)**:
+```
+90 normales (>500): $0.45
+10 cortas (rechazadas): $0
+Total: $0.45
+```
+
+**Después (REQ-023)**:
+```
+90 normales (>500): $0.45
+7 cortas completas:
+  - Validation: $0 (Ollama)
+  - Processing: $0.035
+3 fragmentadas:
+  - Validation: $0 (Ollama)
+  - Skip: $0 (ahorrado)
+20 enriquecidas:
+  - Web enrichment: $0.10 (Perplexity)
+  
+Total: $0.585 (vs $0.45 = +30%)
+```
+
+**ROI**:
+- +30% costo → +Calidad significativa
+- Skip early de fragmentadas → -$0.30 ahorrado (3 × $0.10)
+- Noticias cortas procesadas → +7 insights valiosos
+- Fuentes web verificadas → +Credibilidad insights
+
+### Alternativas Consideradas
+
+#### Alt 1: Heurísticas sin LLM (rechazada)
+```
+Propuesta: Usar regex para detectar fragmentación
+❌ Problemas:
+- No detecta semántica (palabras sin sentido)
+- No corrige errores OCR
+- Rígido (requiere actualizar regex constantemente)
+- No aprende de ejemplos
+```
+
+#### Alt 2: OpenAI para validación (rechazada)
+```
+Propuesta: Usar GPT-4 para validación OCR
+❌ Problemas:
+- Costo innecesario (~$0.001 por validación)
+- Overkill (no necesita alta inteligencia)
+- Latencia mayor
+```
+
+#### Alt 3: Web scraping directo (rechazada)
+```
+Propuesta: Scrape directo de AP, Reuters, etc.
+❌ Problemas:
+- Requiere mantener scrapers por sitio
+- Bloqueado por rate limits
+- Legal issues (copyright)
+- No tiene contexto semántico
+```
+
+### Impacto en Roadmap
+
+**Próximos pasos**:
+1. ✅ Build + Deploy backend (HECHO)
+2. [ ] Testear noticias cortas (270, 395 chars)
+3. [ ] Testear web enrichment en noticias internacionales
+4. [ ] Monitorear costos y latencia
+5. [ ] Ajustar criterios de enrichment si necesario
+
+**No afecta**:
+- REQ-022 (Dashboard): ✅ Mejora backend sin cambios en UI
+- REQ-021 (Hexagonal): ✅ Usa ports/adapters correctamente
+- Deduplicación ✅
+- LangMem cache ✅
+
+### Riesgos Identificados
+
+**BAJO**:
+1. Ollama debe estar corriendo
+   - Mitigación: Graceful degradation (skip validation si falla)
+2. Perplexity API key requerida
+   - Mitigación: Skip enrichment gracefully si no existe
+3. +1-2s latencia en noticias cortas
+   - Aceptable (solo ~10% del total)
+4. +3-5s latencia en noticias enriquecidas
+   - Aceptable (solo ~20% del total, mejora calidad)
+
+### Lecciones Aprendidas
+
+1. **Límites rígidos son peligrosos**: 500 chars rechazaba noticias legítimas
+2. **Heurística > Hard limit**: Validación inteligente detecta mejor
+3. **Separación de concerns**: Validation ≠ Enrichment (diferentes LLMs, diferentes costos)
+4. **Graceful degradation**: Siempre permitir skip si componente opcional falla
+5. **Cost optimization**: Usar LLM adecuado por tarea (Ollama para simple, Perplexity para web)
+
