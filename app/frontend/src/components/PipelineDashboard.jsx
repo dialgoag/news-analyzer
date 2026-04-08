@@ -71,6 +71,8 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
     }
     
     const newState = !currentlyPaused;
+    console.log(`[PauseToggle] ${stageKey}: ${currentlyPaused} → ${newState}`);
+    
     // Backend expects: { "pause_steps": { "ocr": true, ... } }
     const payload = {
       pause_steps: {
@@ -79,7 +81,8 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
     };
     
     try {
-      await axios.put(
+      console.log('[PauseToggle] Sending request:', payload);
+      const response = await axios.put(
         `${API_URL}/api/admin/insights-pipeline`,
         payload,
         {
@@ -90,10 +93,16 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
           timeout: API_TIMEOUT_MS
         }
       );
-      // Refresh to get new state
-      refetch();
+      console.log('[PauseToggle] Success:', response.data);
+      
+      // Force immediate refresh
+      console.log('[PauseToggle] Forcing refresh...');
+      await refetch();
+      
+      // Show success feedback
+      console.log('[PauseToggle] Refresh complete');
     } catch (err) {
-      console.error('Error toggling pause:', err);
+      console.error('[PauseToggle] Error:', err);
       const errorMsg = err.response?.data?.detail || err.message;
       alert(`Error al pausar/reanudar: ${errorMsg}`);
     }
@@ -114,12 +123,14 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
       .every(s => s.paused);
     
     const newState = !allPaused;
+    console.log(`[PauseAll] Current: all paused = ${allPaused}, New state: ${newState ? 'pause all' : 'resume all'}`);
     
     // Backend expects: { "pause_all": true } or { "resume_all": true }
     const payload = newState ? { pause_all: true } : { resume_all: true };
     
     try {
-      await axios.put(
+      console.log('[PauseAll] Sending request:', payload);
+      const response = await axios.put(
         `${API_URL}/api/admin/insights-pipeline`,
         payload,
         {
@@ -130,10 +141,15 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
           timeout: API_TIMEOUT_MS
         }
       );
-      // Refresh to get new state
-      refetch();
+      console.log('[PauseAll] Success:', response.data);
+      
+      // Force immediate refresh
+      console.log('[PauseAll] Forcing refresh...');
+      await refetch();
+      
+      console.log('[PauseAll] Refresh complete');
     } catch (err) {
-      console.error('Error toggling pause all:', err);
+      console.error('[PauseAll] Error:', err);
       const errorMsg = err.response?.data?.detail || err.message;
       alert(`Error al pausar/reanudar todo: ${errorMsg}`);
     }
