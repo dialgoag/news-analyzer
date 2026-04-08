@@ -5296,3 +5296,105 @@ Propuesta: Poll /api/dashboard/analysis cada 1s hasta ver cambio
 - [x] "⚠️ NO rompe" verificado para cada fix
 - [x] Verificación post-cambio en logs
 
+
+---
+
+## 2026-04-08 (Continuación)
+
+### Cambio: Expired Insights Panel - Filas Expandibles (Fix #151)
+
+**Decisión**: Implementar filas expandibles con información completa del journey de cada noticia expirada.
+
+**Contexto**:
+- Usuario pidió ver detalles completos de insights expirados
+- Panel actual solo mostraba datos básicos (filename, error, retry_count)
+- Sin forma de ver texto original, correcciones OCR, o historial completo
+- Dificulta debugging y análisis de por qué fallan insights
+
+**Alternativas consideradas**:
+1. **Modal separado**: Abrir modal con detalles al hacer click
+   - ❌ Más complejo (manejo de estado, UI overlay)
+   - ❌ No permite comparar múltiples filas fácilmente
+   - ❌ Requiere más clicks (abrir modal, cerrar modal)
+
+2. **Página separada de detalles**: Navegar a página dedicada
+   - ❌ Pérdida de contexto del listado
+   - ❌ Más navegación innecesaria
+   - ❌ No encaja con UX del dashboard
+
+3. **Filas expandibles** (ELEGIDA):
+   - ✅ UX limpia y familiar (como GitHub PRs, Gmail, etc.)
+   - ✅ Contexto preservado (ves la fila y sus detalles abajo)
+   - ✅ Fácil comparación (expandir múltiples filas)
+   - ✅ Lazy loading optimizado (solo carga al expandir)
+   - ✅ Caché local para re-expansiones instantáneas
+
+**Implementación**:
+- Estado local para filas expandidas (`Set` de `news_item_id`)
+- Caché de detalles cargados (`{news_item_id: details}`)
+- Loading states por fila (`{news_item_id: boolean}`)
+- Fetch al primer expand, caché en expansiones siguientes
+- Toggle simple: click en fila → expand/collapse
+
+**Secciones implementadas**:
+1. **Resumen del Insight**: Status, longitud contenido, reintentos, fecha
+2. **Validación OCR**: Status de validación, razón si falló
+3. **Texto Original**: Título + contenido completo de Qdrant
+4. **Historial de Errores**: Timestamps + mensajes de todos los intentos
+5. **Insights Generados**: Contenido si se generó algo antes de fallar
+6. **Estado del Pipeline**: Etapa actual, document_id, news_item_id
+
+**Decisiones de UX**:
+- **Colores distintos por sección**:
+  - Azul: Resumen general
+  - Amarillo: OCR validation (warnings)
+  - Gris: Texto original
+  - Rojo: Errores
+  - Verde: Insights generados
+  - Violeta: Pipeline status
+- **Scroll interno**: Secciones largas (texto, insights) tienen `max-height: 300px`
+- **Pre tags**: Preserva formato original de texto y insights
+- **Iconos**: Chevron (▶/▼) indica estado expandible/expandido
+- **Hover**: Background change en filas para indicar clickeable
+- **Loading spinner**: Mientras carga detalles por primera vez
+
+**Performance**:
+- **Lazy loading**: Solo hace API call cuando usuario expande
+- **Caché local**: No repite API call si ya se cargó
+- **Optimistic UI**: Expansión visual inmediata, loading inline
+- **No refetch automático**: Detalles se cargan una vez y se mantienen
+- **Minimal re-renders**: Solo la fila afectada se re-renderiza
+
+**Impacto en roadmap**:
+- Debugging de insights fallidos ahora es visual y completo
+- Reduce necesidad de revisar logs del backend
+- Permite identificar patrones de error (e.g., muchos fallos por OCR validation)
+- Facilita decisión de ajustar thresholds o lógica de validación
+
+**Riesgos identificados**:
+- ⚠️ **Riesgo BAJO**: Si hay muchos insights expirados (>100), tabla puede ser pesada
+  - Mitigación: Lazy loading + caché minimiza impacto
+  - Future: Agregar paginación si se vuelve problema
+- ⚠️ **Riesgo BAJO**: Contenido muy largo puede hacer filas gigantes
+  - Mitigación: `max-height` + scroll en secciones de texto/insights
+
+**Testing realizado**:
+- ✅ Expandir/colapsar múltiples filas
+- ✅ Caché funciona (segunda expansión instantánea)
+- ✅ Loading states por fila
+- ✅ Error handling si falla API
+- ✅ Todas las 6 secciones se renderizan
+- ✅ Scroll en secciones largas
+- ✅ Colores distintos por sección
+- ✅ Responsive (no roto en tablets)
+
+**Archivos modificados**:
+- `app/frontend/src/components/dashboard/ExpiredInsightsPanel.jsx`: Lógica expandible + fetch lazy
+- `app/frontend/src/components/dashboard/ExpiredInsightsPanel.css`: Estilos para detalles expandidos
+
+**Integración**:
+- Usa endpoint `/api/dashboard/insight-detail/{news_item_id}` (Fix #148)
+- No requiere cambios en backend (endpoint ya existe)
+- Compatible con autenticación Bearer token
+- Respeta timeout de API (30 segundos)
+

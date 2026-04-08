@@ -6355,3 +6355,95 @@ stagesArray.forEach((stageData, index) => {
 - [ ] Hover sobre links → tooltip con flow value
 - [ ] Links deben tener grosor proporcional a volumen
 
+
+
+### 151. Feature: Expandable Rows in Expired Insights Panel ✅
+**Fecha**: 2026-04-08  
+**Ubicación**:
+- `app/frontend/src/components/dashboard/ExpiredInsightsPanel.jsx` (líneas 1-381)
+- `app/frontend/src/components/dashboard/ExpiredInsightsPanel.css` (líneas 1-481)
+
+**Problema**: 
+- Panel de insights expirados solo mostraba información básica
+- No había forma de ver el journey completo de cada noticia
+- Sin visibilidad de texto original, correcciones OCR, o historial de errores
+- Dificulta debugging y entender por qué falló cada insight
+
+**Solución Implementada**:
+- **Filas expandibles**: Click en cualquier fila para expandir detalles
+- **Fetch lazy**: Detalles se cargan solo al expandir (optimización de performance)
+- **Caché local**: Detalles cargados se guardan para no volver a hacer API call
+
+**Información que ahora se muestra al expandir**:
+1. **Resumen del Insight** (📊):
+   - Estado actual (failed, pending, completed)
+   - Longitud del contenido (con warning si es corto)
+   - Reintentos / Max reintentos
+   - Fecha de creación
+
+2. **Validación OCR** (✓/✗):
+   - Si el contenido fue validado por OCR Validation Agent
+   - Razón de rechazo si falló validación
+   - Error message específico de OCR
+
+3. **Texto Original** (📄):
+   - Título de la noticia
+   - Contenido completo recuperado de Qdrant
+   - Scroll si el texto es largo (max-height: 300px)
+
+4. **Historial de Errores** (❌):
+   - Timestamp de cada error
+   - Mensaje de error completo
+   - Múltiples entradas si hubo múltiples intentos
+
+5. **Insights Generados** (💡):
+   - Contenido de insights (si se generó antes de fallar)
+   - Fuente LLM utilizada
+   - Fecha de generación
+
+6. **Estado del Pipeline** (🔄):
+   - Etapa actual en el pipeline
+   - Document ID
+   - News Item ID
+
+**Mejoras de UX**:
+- Iconos chevron (▶/▼) para indicar expandible
+- Colores distintos por sección (azul=resumen, amarillo=OCR, rojo=errores, verde=insights)
+- Hover effect en filas para indicar clickeable
+- Loading spinner mientras carga detalles
+- Error handling si falla la carga de detalles
+- Pre tags para preservar formato de texto largo
+- Scroll interno en secciones largas (texto, insights)
+- Tooltips en celdas truncadas
+
+**Integración con Backend**:
+- Usa endpoint `/api/dashboard/insight-detail/{news_item_id}` (Fix #148)
+- Requiere autenticación (Bearer token)
+- Timeout de 30 segundos
+- Error handling completo
+
+**Impacto**:
+- Debugging de insights fallidos es ahora trivial
+- Visibilidad completa del journey de cada noticia
+- No más necesidad de revisar logs para entender fallos
+- Permite identificar patrones de error comunes
+- Performance optimizada (lazy loading + cache)
+
+**⚠️ NO rompe**:
+- Panel básico (sin expandir) ✅
+- Listado de insights expirados ✅
+- Otros paneles del dashboard ✅
+- API endpoint de expired insights ✅
+
+**Verificación**:
+- [ ] Abrir dashboard como admin
+- [ ] Pausar pipeline si hay muchos insights activos
+- [ ] Verificar que aparezcan insights expirados (retry_count >= 3)
+- [ ] Click en cualquier fila → debe expandirse
+- [ ] Verificar que se muestren todas las 6 secciones
+- [ ] Verificar que texto original es legible
+- [ ] Verificar colores distintos por sección
+- [ ] Click de nuevo → debe colapsarse
+- [ ] Expandir otra fila → debe cargar detalles nuevos
+- [ ] Re-expandir fila anterior → debe usar caché (instantáneo)
+
