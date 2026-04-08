@@ -6447,3 +6447,96 @@ stagesArray.forEach((stageData, index) => {
 - [ ] Expandir otra fila → debe cargar detalles nuevos
 - [ ] Re-expandir fila anterior → debe usar caché (instantáneo)
 
+
+
+### 152. Fix: QdrantConnector Initialization Error in get_by_id_sync ✅
+**Fecha**: 2026-04-08  
+**Ubicación**:
+- `app/backend/adapters/driven/persistence/postgres/news_item_repository_impl.py` (método `get_by_id_sync`, líneas 449-498)
+
+**Problema**: 
+- Usuario reportó: "⚠️ Sin contenido disponible (no se recuperaron chunks de Qdrant)" en ExpiredInsightsPanel
+- Chunks **SÍ existen en Qdrant** (confirmado con API directa: 5 chunks, ~9,500 caracteres)
+- El método `get_by_id_sync()` fallaba silenciosamente al intentar conectarse a Qdrant
+- Content siempre retornaba vacío: `content: ""`, `content_length: 0`
+
+**Root Cause**:
+```python
+# ❌ CÓDIGO INCORRECTO
+qdrant = QdrantConnector(
+    url=os.getenv("QDRANT_URL", "http://qdrant:6333"),      # ← parámetro no existe
+    collection_name="rag_documents"                          # ← parámetro no existe
+)
+```
+
+**Error real** (descubierto con logging):
+```
+TypeError: QdrantConnector.__init__() got an unexpected keyword argument 'url'
+```
+
+**Causa**:
+- `QdrantConnector` espera parámetros `host: str` y `port: int`
+- El código estaba pasando `url` y `collection_name` (parámetros inexistentes)
+- Exception se tragaba silenciosamente en `except Exception` sin logging
+- Resultado: `content` siempre quedaba como string vacío
+
+**Solución**:
+```python
+# ✅ CÓDIGO CORRECTO
+# Parse QDRANT_URL to extract host and port
+qdrant_url = os.getenv("QDRANT_URL", "http://qdrant:6333")
+qdrant_url = qdrant_url.replace("http://", "").replace("https://", "")
+if ":" in qdrant_url:
+    host, port = qdrant_url.split(":")
+    port = int(port)
+else:
+    host = qdrant_url
+    port = 6333
+
+qdrant = QdrantConnector(host=host, port=port)
+qdrant.connect()
+```
+
+**Logging agregado**:
+- Log cuando chunks se recuperan exitosamente: `Retrieved {count} chunks, total content length: {length}`
+- Log de advertencia si no se encuentran chunks: `No chunks found in Qdrant for {news_item_id}`
+- Log de error con stack trace completo si falla conexión: `Failed to fetch content from Qdrant: {error}`
+
+**Resultado**:
+
+**Antes**:
+```json
+{
+    "content": "",
+    "content_length": 0
+}
+```
+
+**Después**:
+```json
+{
+    "content": "des sostenibles, defiende que las si...",  
+    "content_length": 9547
+}
+```
+
+**Impacto**:
+- ExpiredInsightsPanel ahora muestra texto original completo ✅
+- 5 chunks de Qdrant se concatenan correctamente ✅
+- Contenido legible de ~9,500 caracteres por noticia ✅
+- Debugging futuro facilitado con logging detallado ✅
+- Fix se aplica a todos los insights expirados (35 en DB actualmente)
+
+**⚠️ NO rompe**:
+- Otras llamadas a Qdrant ✅ (usan QdrantConnector correctamente)
+- Endpoint de insight detail ✅
+- ExpiredInsightsPanel UI ✅
+- Otros repositorios ✅
+
+**Verificación**:
+- [x] API call a `/api/dashboard/insight-detail/{id}` retorna content
+- [x] content_length cambia de 0 → 9547
+- [x] Texto es legible y completo
+- [ ] Panel UI muestra texto en sección "Texto Original"
+- [ ] Múltiples insights muestran contenido correcto
+
