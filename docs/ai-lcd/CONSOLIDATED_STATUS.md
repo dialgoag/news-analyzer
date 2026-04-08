@@ -1,9 +1,100 @@
 # 📊 Estado Consolidado NewsAnalyzer-RAG - 2026-04-08
 
-> **Versión definitiva**: REQ-023 OCR Validation + Web Enrichment ✅; Fix #145 OCR Validation Agent (Local Ollama); Fix #146 Web Enrichment Chain (Perplexity); Fix #147 LangGraph Integration (validate_ocr + enrich_web nodes); REQ-022 Fase 3 Integration COMPLETADA + Build Fixes; Fix #142 Frontend Missing Dependency (prop-types); Fix #141 Docker Base Image Build Path; Fix #140 REQ-022 Fase 3 Component Implementation; Fix #139 REQ-022 Fase 3 KPIs; Fix #138 REQ-022 Fase 2 Data Layer; Fix #137 Pre-validación de Contexto Insights (ahorro de costos LLM); Fix #136 Indexing Insights como Etapa de Primera Clase; Fix #135 Validación Flexible Insights (JSON+Markdown); Fix #134 LangGraph Node Renaming; Fix #133 Docker Layering Optimization; Fix #132 Docker Import Fixes; Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
+> **Versión definitiva**: Fix #150 Pause Controls Async Refetch; Fix #149 Insights Loop Infinito (Scheduler Pause Check); Fix #148 Insight Detail API + Repository Methods; REQ-023 OCR Validation + Web Enrichment ✅; Fix #145 OCR Validation Agent (Local Ollama); Fix #146 Web Enrichment Chain (Perplexity); Fix #147 LangGraph Integration (validate_ocr + enrich_web nodes); REQ-022 Fase 3 Integration COMPLETADA + Build Fixes; Fix #142 Frontend Missing Dependency (prop-types); Fix #141 Docker Base Image Build Path; Fix #140 REQ-022 Fase 3 Component Implementation; Fix #139 REQ-022 Fase 3 KPIs; Fix #138 REQ-022 Fase 2 Data Layer; Fix #137 Pre-validación de Contexto Insights (ahorro de costos LLM); Fix #136 Indexing Insights como Etapa de Primera Clase; Fix #135 Validación Flexible Insights (JSON+Markdown); Fix #134 LangGraph Node Renaming; Fix #133 Docker Layering Optimization; Fix #132 Docker Import Fixes; Fix #125 Dashboard Compacto + Coordenadas Paralelas Mejoradas; Fix #112 Sistema Unificado de Timestamps (Migration 018); Fix #111 Fase 5E DocumentStatusStore→Repository; Fix #110 Domain Entities + Value Objects; Fix #109 LangGraph+LangMem integrado en production; Fix #108 COMPLETO - deprecated imports + 31/31 tests pass (100%); Fix #107 PostgreSQL backend LangMem; Fix #106 testing suite; Fix #105 LangGraph + LangMem; Fix #104 docs LangChain.
 
 **Última actualización**: 2026-04-08  
-**Prioridad**: REQ-023 — OCR Validation + Web Enrichment IMPLEMENTADO
+**Prioridad**: REQ-023 — Loop Infinito Insights SOLUCIONADO
+
+---
+
+### 150. Fix: Pause Controls Async Refetch + Console Logging ✅
+**Fecha**: 2026-04-08  
+**Ubicación**: 
+- `app/frontend/src/hooks/useDashboardData.jsx` línea 112
+- `app/frontend/src/components/PipelineDashboard.jsx` líneas 67-142  
+**Problema**: Botones de pausa no reflejaban cambios visualmente después de hacer click  
+**Causa**: 
+- `refetch()` no era async → no esperaba a `fetchData()`
+- UI no actualizaba estado de pausa después de API call
+- Sin logs para debugging
+**Solución**:
+- ✅ `refetch()` ahora es `async` y hace `await fetchData()`
+- ✅ `handlePauseToggle` y `handlePauseAll` ahora hacen `await refetch()`
+- ✅ Console.log completo: estado actual/nuevo, request, response, refresh
+- ✅ Logs prefixados: `[PauseToggle]` y `[PauseAll]` para debugging
+**Impacto**: 
+- Botones de pausa ahora actualizan UI inmediatamente
+- Usuario puede ver en DevTools console todo el flujo
+- Debugging mucho más fácil
+**⚠️ NO rompe**: Dashboard ✅, Otros controles ✅, Auto-refresh ✅
+
+**Verificación**:
+- [x] Frontend desplegado con cambios
+- [ ] Usuario prueba botones de pausa
+- [ ] Abre DevTools console
+- [ ] Ve logs confirmando request → response → refresh
+
+---
+
+### 149. Fix: Loop Infinito de Insights - Scheduler No Respetaba Pausa ✅
+**Fecha**: 2026-04-08  
+**Ubicación**: `app/backend/app.py` línea 964-1007  
+**Problema**: Loop infinito - Insights pausado pero scheduler seguía encolando cada 10s  
+**Causa**: Scheduler no verificaba `insights_pipeline_control.is_generation_paused()` antes de encolar  
+**Evidencia en logs**:
+```
+⏭ Skipping 80f04f82... - max retries exceeded (3/3)
+✅ Marked 100 news items as pending for insights
+📥 Enqueued 2 document(s) for insights
+[10 segundos después...]
+⏭ Skipping 80f04f82... - max retries exceeded (3/3)
+[Loop infinito...]
+```
+**Solución**:
+- ✅ Agregada verificación: `insights_paused = _ipc.is_generation_paused()`
+- ✅ Si `insights_paused == True`, skip entire PASO 4 (insights enqueue)
+- ✅ Log debug: `⏸️ [Master] Insights generation PAUSED - skipping enqueue`
+- ✅ Graceful fallback si `insights_pipeline_control` no existe
+**Impacto**: 
+- Scheduler ahora respeta pause_all=true correctamente
+- Loop infinito eliminado
+- Logs limpios (ya no spam de "Marked 100 news items")
+**⚠️ NO rompe**: Scheduler ✅, Otras etapas (OCR, chunking, indexing) ✅, Resume funciona ✅
+
+**Verificación**:
+- [x] Pausado vía API: `curl -X PUT /api/admin/insights-pipeline {"pause_all": true}`
+- [x] Logs confirman: Ya no aparece "Marked X news items as pending"
+- [x] Scheduler ejecuta sin encolar cuando paused=true
+- [ ] Usuario prueba desde UI
+
+---
+
+### 148. Fix: Insight Detail API + Repository Methods ✅
+**Fecha**: 2026-04-08  
+**Ubicación**: 
+- `app/backend/adapters/driving/api/v1/routers/dashboard.py` línea 125-185 (NEW endpoint)
+- `app/backend/adapters/driven/persistence/postgres/news_item_repository_impl.py` líneas 430-488, 546-565 (NEW methods)  
+**Problema**: No había forma de obtener detalles completos de un insight específico para debugging  
+**Solución**:
+**1. Nuevo endpoint**: `GET /api/dashboard/insight-detail/{news_item_id}`
+   - Retorna journey completo del insight
+   - Incluye: news_item (title, content, length), insight (status, retry_count, error), OCR validation
+   
+**2. Nuevos métodos de repositorio**:
+   - `get_by_id_sync(news_item_id)`: Obtiene news_item + content desde Qdrant
+   - `get_insight_by_news_item_id_sync(news_item_id)`: Obtiene insight record
+   - Graceful degradation: Si Qdrant falla, content = ""
+**Impacto**: 
+- API completo para debugging de insights individuales
+- Frontend puede mostrar detalles expandidos
+- Base para panel mejorado de Expired Insights
+**⚠️ NO rompe**: Otros endpoints ✅, Repository ✅, Qdrant connector ✅
+
+**Verificación**:
+- [x] Endpoint testado: `/api/dashboard/insight-detail/80f04f82...::33`
+- [x] Retorna todos los campos correctamente
+- [x] OCR validation detectada en error_message
+- [ ] Frontend usa este endpoint para panel expandido
 
 ---
 
