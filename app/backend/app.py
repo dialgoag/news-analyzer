@@ -964,36 +964,49 @@ def master_pipeline_scheduler():
         # PASO 4: News items sin Insights task → Marcar como pending para workers
         MAX_INSIGHTS_RETRIES = 3  # Consistente con PASO 0 (línea 742) y worker (línea 2292)
         
+        # Check if insights generation is paused
+        try:
+            import insights_pipeline_control as _ipc
+            insights_paused = _ipc.is_generation_paused()
+        except Exception:
+            insights_paused = False
+        
         ready_for_insights = []
-        seen_news = set()
-        for doc in document_repository.list_all_sync(limit=None):
-            doc_id = doc["document_id"]
-            for insight in news_item_repository.list_insights_by_document_id_sync(doc_id):
-                news_item_id = insight.get("news_item_id")
-                if not news_item_id or news_item_id in seen_news:
-                    continue
-                status = insight.get("status")
-                retry_count = insight.get("retry_count", 0)
-                
-                if status in (InsightStatus.DONE, InsightStatus.GENERATING):
-                    continue
-                
-                # Skip insights que excedieron max retries (evita loop infinito)
-                # IMPORTANTE: Filtrar por retry_count independientemente del status
-                # porque puede estar en PENDING, ERROR, o cualquier estado
-                if retry_count >= MAX_INSIGHTS_RETRIES:
-                    logger.info(
-                        f"   ⏭ Skipping {news_item_id[:30]}... - "
-                        f"max retries exceeded ({retry_count}/{MAX_INSIGHTS_RETRIES}, status={status})"
-                    )
-                    continue
-                
-                seen_news.add(news_item_id)
-                ready_for_insights.append(insight)
+        
+        if not insights_paused:
+            seen_news = set()
+            for doc in document_repository.list_all_sync(limit=None):
+                doc_id = doc["document_id"]
+                for insight in news_item_repository.list_insights_by_document_id_sync(doc_id):
+                    news_item_id = insight.get("news_item_id")
+                    if not news_item_id or news_item_id in seen_news:
+                        continue
+                    status = insight.get("status")
+                    retry_count = insight.get("retry_count", 0)
+                    
+                    if status in (InsightStatus.DONE, InsightStatus.GENERATING):
+                        continue
+                    
+                    # Skip insights que excedieron max retries (evita loop infinito)
+                    # IMPORTANTE: Filtrar por retry_count independientemente del status
+                    # porque puede estar en PENDING, ERROR, o cualquier estado
+                    if retry_count >= MAX_INSIGHTS_RETRIES:
+                        logger.info(
+                            f"   ⏭ Skipping {news_item_id[:30]}... - "
+                            f"max retries exceeded ({retry_count}/{MAX_INSIGHTS_RETRIES}, status={status})"
+                        )
+                        continue
+                    
+                    seen_news.add(news_item_id)
+                    ready_for_insights.append(insight)
+                    if len(ready_for_insights) >= 100:
+                        break
                 if len(ready_for_insights) >= 100:
                     break
-            if len(ready_for_insights) >= 100:
-                break
+        else:
+            if debug_mode:
+                logger.debug("⏸️  [Master] Insights generation PAUSED - skipping enqueue")
+        
         if ready_for_insights:
             docs_to_enqueue: Dict[str, str] = {}
             for row in ready_for_insights:
