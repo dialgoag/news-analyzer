@@ -2,9 +2,9 @@
 
 > **Propósito**: Rastrear TODAS las peticiones del usuario con trazabilidad completa
 > 
-> **Última actualización**: 2026-04-01  
-> **Total peticiones**: 21  
-> **Completadas**: 19 | Pendientes: 2 (REQ-014, REQ-021 parcial) | Rechazadas: 0
+> **Última actualización**: 2026-04-08  
+> **Total peticiones**: 22  
+> **Completadas**: 19 | Pendientes: 3 (REQ-014, REQ-021 parcial, REQ-022) | Rechazadas: 0
 
 > **Pendientes técnicos** (mejoras, fixes): ver `PENDING_BACKLOG.md` (fuente única).
 
@@ -36,6 +36,7 @@
 | **REQ-020** | 2026-03-28 | "Pausar pasos pipeline insights + elegir proveedor LLM (OpenAI/Perplexity/local)" | ✅ **COMPLETADA** | v3.0.14 | **#99, #100** |
 | **REQ-021** | 2026-03-31 | "Refactor Backend SOLID + Hexagonal + DDD + LangChain/LangGraph" | 🔄 **EN PROGRESO** | v4.0.0 | #110, #111, **#112** |
 | **REQ-021** | 2026-03-30 | **Spike**: análisis LLM local vs API para **calidad** de insights (sin producto obligatorio) | ✅ **COMPLETADA** (doc) | — | **#103** (doc spike) |
+| **REQ-022** | 2026-04-08 | "Rediseñar Dashboard React+D3 con Visual Analytics Framework" | 🔄 **EN PROGRESO** | v5.0.0 | #138+ |
 
 ---
 
@@ -1871,4 +1872,148 @@ worker_pool - ERROR - pipeline_worker_15: Task insights failed: No chunks found
 
 **Contradicciones**: Ninguna. Complementa Fase 1-2-5 de REQ-021 (Domain Model, Repositories, Workers).
 **Versión**: v4.0.0 (refactor arquitectónico mayor)
+
+---
+
+### **REQ-022: "Rediseñar Dashboard React+D3 con Visual Analytics Framework"**
+
+**Metadata**:
+- **Fecha**: 2026-04-08
+- **Sesión**: Sesión 58 (Dashboard Redesign with Visual Analytics)
+- **Prioridad**: 🟡 ALTA (mejora UX crítica, no urgente)
+- **Estado**: 🔄 **EN PROGRESO**
+
+**Descripción Original**:
+> "reDesign and reimplement the current dashboard in React + D3, using the visual analytics rule for chart choice and the D3/React rule for implementation the main goal is to track the progress of the documents/news , workers and error carching-> handeling->retry. reuse as much you can do not just remove and recreate, analise what now is usefull and wat can be improved, modified or ...."
+
+**Problema Identificado**:
+1. **Dashboard actual** (REQ-007, REQ-013, Fix #125-#137): Funcional pero mejorable en términos de visual analytics
+2. **Chart selection**: No sigue framework sistemático de visual analytics (task → chart mapping)
+3. **Interaction patterns**: Brushing & linking presente pero limitado
+4. **Error handling UX**: Panel de errores pero sin flujo claro de catch→handle→retry
+5. **Worker monitoring**: Badges inline sin visualización de capacidad vs utilización
+6. **React+D3 separation**: Algunos componentes mezclan responsabilidades
+
+**Solución Propuesta**:
+Aplicar framework de visual analytics completo siguiendo skill y rules:
+
+**1. Analytical Context** (Operational Dashboard Pattern):
+- **Question**: ¿Cómo progresan documentos por la pipeline? ¿Dónde hay cuellos de botella? ¿Qué errores requieren atención?
+- **Audience**: Equipo de operaciones, developers, admins
+- **Task type**: Monitoring + Diagnosis
+- **Action**: Identificar bloqueos, retry de errores, ajustar workers
+
+**2. Chart Selection by Task**:
+- **Flow (Pipeline progress)**: Sankey o Parallel coordinates mejoradas
+- **Comparison (Workers)**: Bullet charts (actual vs capacity)
+- **Composition (Errors)**: Sorted bar chart por tipo/stage
+- **Trend (KPIs)**: Sparklines + comparison indicators
+- **Detail**: Tables con drill-down virtualizadas
+
+**3. Dashboard Architecture** (7-section pattern):
+```
+[Header: Title + Refresh selector + Global filters]
+[KPI Row: 4-6 cards con sparklines trends]
+[Main Analysis Row]
+  ├─ Pipeline Flow (60%): Sankey/Parallel enhanced
+  └─ Workers Status (40%): Bullet charts pequeños múltiplos
+[Diagnostic Row - Collapsible]
+  └─ Error Analysis: Bar chart + timeline + retry actions
+[Detail Row - Collapsible]
+  └─ Document table + Worker activity log
+```
+
+**4. Implementation Strategy**:
+- **Reuse**: CollapsibleSection, useDashboardFilters, dashboardDataService, auto-refresh, error handling
+- **Enhance**: KPIsInline → add sparklines, ErrorAnalysisPanel → better charts
+- **Replace**: WorkerLoadCard → bullet charts, PipelineStatusTable → better flow viz
+- **New**: Worker/error data services, D3 scale hooks, chart dimension hooks
+
+**5. Phased Execution** (7 fases, 27-35 horas estimadas):
+- Fase 1: Análisis + selección de charts (2-3h)
+- Fase 2: Diseño de arquitectura (2h)
+- Fase 3: Capa de datos (3-4h)
+- Fase 4: Implementación de componentes (12-15h)
+- Fase 5: Integración e interacción (4-5h)
+- Fase 6: Testing y refinamiento (3-4h)
+- Fase 7: Documentación (1-2h)
+
+**Archivos Afectados**:
+**Frontend** (~18 archivos):
+- `components/PipelineDashboard.jsx` (orchestrator)
+- `components/dashboard/*.jsx` (15 archivos)
+- `hooks/useDashboardFilters.jsx` (enhance)
+- `services/dashboardDataService.js` (enhance)
+- Nuevos: `hooks/useDashboardData.jsx`, `services/workerDataService.js`, `services/errorDataService.js`
+
+**Backend** (impacto mínimo):
+- Endpoints existentes son suficientes
+- Posible ajuste: mejorar `/api/workers/status` para exponer capacidad
+
+**Contradicciones Verificadas**:
+- **REQ-007** (Dashboard D3.js): ✅ COMPLEMENTA - builds on top, no replacement
+- **REQ-013** (Data service): ✅ COMPLEMENTA - reuses and extends pattern
+- **REQ-014** (UX improvements): ⚠️ SUPERSEDES - incorporates goals as part of redesign
+- **REQ-021** (Hexagonal): ✅ COMPLEMENTA - uses clean repository layer
+
+**Riesgos Identificados**: MEDIUM
+- Large refactor (18 files)
+- Must preserve real-time monitoring
+- Performance optimization required
+- Accessibility must be maintained
+
+**Próximos Pasos Inmediatos**:
+1. Fase 1: Análisis detallado + selección final de charts
+2. Crear documento de diseño visual (wireframes/mockups)
+3. Implementar capa de datos (services)
+4. Componentes iterativos (KPIs → Workers → Errors → Flow)
+
+**Versión Target**: v5.0.0 (dashboard redesign major)
+
+**Linkeo a Documentación**:
+- Visual Analytics Skill: `.cursor/skills/visual-analytics-dashboard/SKILL.md`
+- Visual Analytics Rule: `.cursor/rules/visual-analytics-decision-framework.mdc`
+- D3+React Rule: `.cursor/rules/d3-react-dashboard-implementation.mdc`
+- CONSOLIDATED_STATUS.md (será actualizado con Fix #138+)
+- SESSION_LOG.md (decisiones de diseño)
+
+---
+
+## REQ-023: OCR Validation + Web Enrichment for Insights
+
+- **Fecha**: 2026-04-08
+- **Sesión**: Sesión 58 (continuación)
+- **Prioridad**: 🟢 ALTA (mejora calidad insights, control costos)
+- **Estado**: ✅ **IMPLEMENTADO**
+
+**Descripción**:
+Usuario preguntó si podría usarse LLM local para validar noticias cortas y corregir errores OCR, y si podría agregarse búsqueda en internet para enriquecer noticias internacionales con fuentes fidedignas.
+
+**Solución**:
+1. **OCR Validation Agent** (Ollama local, $0):
+   - Valida si texto <500 chars es completo o fragmentado
+   - Corrige errores OCR (guiones, palabras cortadas)
+   - Skip early de noticias fragmentadas
+   
+2. **Web Enrichment Chain** (Perplexity, ~$0.005):
+   - Busca fuentes fidedignas en web
+   - Solo para noticias relevantes (~20%)
+   - Extrae: fuente, URL, fecha, quote
+
+**Archivos**:
+- NEW: `app/backend/ocr_validation_agent.py`
+- NEW: `app/backend/adapters/driven/llm/chains/web_enrichment_chain.py`
+- NEW: `app/backend/adapters/driven/llm/providers/perplexity_provider.py`
+- MODIFIED: `app/backend/adapters/driven/llm/graphs/insights_graph.py`
+- MODIFIED: `app/backend/app.py`
+
+**Impacto**:
+- +Calidad: Corrección OCR + fuentes web
+- +Ahorro: Skip early de fragmentadas (~$0.10 por skip)
+- +Costo: ~$0.005 por noticia enriquecida (~20% del total)
+- Total: +20% costo promedio, +significativa mejora calidad
+
+**Doc**: `docs/ai-lcd/02-construction/OCR_VALIDATION_AND_WEB_ENRICHMENT.md`
+
+**Versión**: v5.1.0
 

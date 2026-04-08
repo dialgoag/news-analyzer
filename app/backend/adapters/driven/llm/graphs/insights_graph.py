@@ -19,10 +19,13 @@ from langgraph.graph import StateGraph, END
 
 from adapters.driven.llm.chains.extraction_chain import ExtractionChain
 from adapters.driven.llm.chains.analysis_chain import AnalysisChain
+from adapters.driven.llm.chains.web_enrichment_chain import WebEnrichmentChain, should_enrich_with_web
 from adapters.driven.llm.providers.openai_provider import OpenAIProvider
 from adapters.driven.llm.providers.ollama_provider import OllamaProvider
+from adapters.driven.llm.providers.perplexity_provider import PerplexityProvider
 from shared.exceptions import RateLimitError, TimeoutError, ValidationError
 from config import get_llm_provider_order, settings as app_settings
+from ocr_validation_agent import get_validation_agent
 
 try:
     import insights_pipeline_control as _ipc
@@ -48,9 +51,17 @@ class InsightState(TypedDict):
     context: str
     title: str
     
+    # OCR Validation (step 0 - optional, for short content)
+    ocr_validated: bool
+    ocr_validation_reason: Optional[str]
+    
     # Extracted data (step 1)
     extracted_data: Optional[str]
     extraction_tokens: int
+    
+    # Web enrichment (step 1.5 - optional, for relevant news)
+    web_enrichment: Optional[str]
+    enrichment_tokens: int
     
     # Analysis (step 2)
     analysis: Optional[str]
@@ -81,6 +92,147 @@ class InsightState(TypedDict):
 # ============================================================================
 # Workflow Nodes
 # ============================================================================
+
+async def validate_ocr_node(state: InsightState) -> InsightState:
+    """
+    Node 0: Validate and clean OCR for short content (<500 chars).
+    
+    Uses: Local Ollama (cost: $0)
+    Purpose:
+    - Correct OCR errors (hyphenated words)
+    - Detect if text is complete or fragmented
+    - Skip early if content is unusable
+    """
+    context = state['context']
+    
+    # Only validate short content
+    if len(context) >= 500:
+        logger.info(
+            f"✓ [validate_ocr_node] Skipping validation for normal content "
+            f"({len(context)} chars >= 500)"
+        )
+        state['ocr_validated'] = True
+        state['ocr_validation_reason'] = "Normal length content, no validation needed"
+        return state
+    
+    logger.info(
+        f"🔍 [validate_ocr_node] Validating short content "
+        f"({len(context)} chars) for news_item={state['news_item_id']}"
+    )
+    
+    try:
+        # Get local validation agent (Ollama)
+        agent = get_validation_agent()
+        
+        # Validate and clean
+        is_complete, cleaned_text, reason = await agent.validate_and_clean(context)
+        
+        if not is_complete:
+            # Content is fragmented → skip processing
+            logger.warning(
+                f"⚠️ [validate_ocr_node] Content rejected: {reason}"
+            )
+            state['success'] = False
+            state['error'] = f"OCR validation failed: {reason}"
+            state['error_step'] = 'ocr_validation'
+            state['ocr_validated'] = False
+            state['ocr_validation_reason'] = reason
+            return state
+        
+        # Content is valid → use cleaned version
+        state['context'] = cleaned_text
+        state['ocr_validated'] = True
+        state['ocr_validation_reason'] = reason
+        
+        logger.info(
+            f"✅ [validate_ocr_node] Content validated and cleaned "
+            f"({len(cleaned_text)} chars): {reason}"
+        )
+        
+    except Exception as e:
+        # Validation failed → proceed with original (graceful degradation)
+        logger.warning(
+            f"⚠️ [validate_ocr_node] Validation error: {e}, "
+            f"proceeding with original content"
+        )
+        state['ocr_validated'] = True
+        state['ocr_validation_reason'] = f"Validation failed: {e}, using original"
+    
+    return state
+
+
+async def enrich_web_node(state: InsightState) -> InsightState:
+    """
+    Node 1.5: Enrich with web sources (optional, for relevant news).
+    
+    Uses: Perplexity Sonar (cost: ~$0.005 per request)
+    Purpose:
+    - Find credible web sources for international/important news
+    - Extract: source name, URL, date, key quote
+    - Only called if news is deemed relevant
+    """
+    extracted = state.get('extracted_data', '')
+    title = state['title']
+    
+    logger.info(
+        f"🌐 [enrich_web_node] Checking if enrichment needed "
+        f"for news_item={state['news_item_id']}"
+    )
+    
+    # Check if enrichment is needed
+    if not should_enrich_with_web(extracted, title):
+        logger.info(
+            f"ℹ️ [enrich_web_node] Skipping enrichment "
+            f"(local/routine news, no international keywords)"
+        )
+        state['web_enrichment'] = None
+        state['enrichment_tokens'] = 0
+        return state
+    
+    logger.info(
+        f"🔍 [enrich_web_node] News is relevant, searching web sources..."
+    )
+    
+    try:
+        # Get providers (prefer Perplexity for web search)
+        providers = _get_providers()
+        
+        # Initialize web enrichment chain
+        chain = WebEnrichmentChain(providers=providers)
+        
+        # Run web search
+        result = await chain.run(
+            extracted_data=extracted,
+            title=title
+        )
+        
+        if result.get('skipped'):
+            logger.info(
+                f"ℹ️ [enrich_web_node] Enrichment skipped: {result.get('reason')}"
+            )
+            state['web_enrichment'] = None
+            state['enrichment_tokens'] = 0
+        else:
+            state['web_enrichment'] = result.get('enrichment')
+            state['enrichment_tokens'] = result.get('tokens_used', 0)
+            
+            logger.info(
+                f"✅ [enrich_web_node] Web sources found: "
+                f"{len(result.get('enrichment', ''))} chars, "
+                f"tokens={result.get('tokens_used')}"
+            )
+        
+    except Exception as e:
+        # Enrichment failed → continue without it (graceful degradation)
+        logger.warning(
+            f"⚠️ [enrich_web_node] Enrichment error: {e}, "
+            f"continuing without web sources"
+        )
+        state['web_enrichment'] = None
+        state['enrichment_tokens'] = 0
+    
+    return state
+
 
 async def extract_node(state: InsightState) -> InsightState:
     """
@@ -215,9 +367,9 @@ async def validate_extraction_node(state: InsightState) -> InsightState:
 
 async def analyze_node(state: InsightState) -> InsightState:
     """
-    Node: Generate expert analysis based on extracted data.
+    Node: Generate expert analysis based on extracted data + web enrichment.
     
-    Calls AnalysisChain with extracted data as input.
+    Calls AnalysisChain with extracted data and optional web sources as input.
     """
     logger.info(
         f"🧠 [analyze_node] Attempt {state['analysis_attempts'] + 1}/"
@@ -231,9 +383,20 @@ async def analyze_node(state: InsightState) -> InsightState:
         providers = _get_providers()
         chain = AnalysisChain(providers=providers)
         
+        # Prepare extracted data (include web enrichment if available)
+        extracted_data = state['extracted_data']
+        
+        if state.get('web_enrichment'):
+            # Append web sources to extracted data
+            extracted_data += f"\n\n## Web Sources (Additional Context)\n{state['web_enrichment']}"
+            logger.info(
+                f"📚 [analyze_node] Including web enrichment "
+                f"({len(state['web_enrichment'])} chars)"
+            )
+        
         # Run analysis
         result = await chain.run(
-            extracted_data=state['extracted_data'],
+            extracted_data=extracted_data,
             title=state['title']
         )
         
@@ -309,20 +472,34 @@ async def finalize_node(state: InsightState) -> InsightState:
     """
     Node: Finalize workflow by combining results.
     
-    Combines extracted_data + analysis into full_text.
+    Combines extracted_data + web_enrichment (if any) + analysis into full_text.
     """
     logger.info(f"📝 [finalize_node] Finalizing insight for news_item={state['news_item_id']}")
     
     # Combine extraction and analysis
     full_text = f"{state['extracted_data']}\n\n{state['analysis']}"
     
+    # Include web enrichment if available
+    if state.get('web_enrichment'):
+        full_text = f"{state['extracted_data']}\n\n{state['web_enrichment']}\n\n{state['analysis']}"
+    
     state['full_text'] = full_text
     state['success'] = True
+    
+    # Calculate total tokens (including enrichment)
+    total_tokens = (
+        state.get('extraction_tokens', 0) + 
+        state.get('enrichment_tokens', 0) + 
+        state.get('analysis_tokens', 0)
+    )
     
     logger.info(
         f"✅ [finalize_node] Workflow complete: "
         f"total_length={len(full_text)} chars, "
-        f"total_tokens={state['extraction_tokens'] + state['analysis_tokens']}, "
+        f"total_tokens={total_tokens} "
+        f"(extraction={state.get('extraction_tokens', 0)}, "
+        f"enrichment={state.get('enrichment_tokens', 0)}, "
+        f"analysis={state.get('analysis_tokens', 0)}), "
         f"provider={state['provider_used']}"
     )
     
@@ -420,18 +597,30 @@ def create_insights_graph() -> StateGraph:
     # Create graph
     graph = StateGraph(InsightState)
     
-    # Add nodes
-    graph.add_node("extract", extract_node)
-    graph.add_node("validate_extraction", validate_extraction_node)
-    graph.add_node("analyze", analyze_node)
-    graph.add_node("validate_analysis", validate_analysis_node)
-    graph.add_node("finalize", finalize_node)
-    graph.add_node("error_handler", error_node)
+    # Add nodes (in workflow order)
+    graph.add_node("validate_ocr", validate_ocr_node)           # NEW: Step 0 (optional)
+    graph.add_node("extract", extract_node)                     # Step 1
+    graph.add_node("validate_extraction", validate_extraction_node)  # Step 1.1
+    graph.add_node("enrich_web", enrich_web_node)               # NEW: Step 1.5 (optional)
+    graph.add_node("analyze", analyze_node)                     # Step 2
+    graph.add_node("validate_analysis", validate_analysis_node) # Step 2.1
+    graph.add_node("finalize", finalize_node)                   # Step 3
+    graph.add_node("error_handler", error_node)                 # Error handler
     
-    # Set entry point
-    graph.set_entry_point("extract")
+    # Set entry point (NEW: start with OCR validation)
+    graph.set_entry_point("validate_ocr")
     
     # Add edges
+    # validate_ocr → (conditional: continue or fail early)
+    graph.add_conditional_edges(
+        "validate_ocr",
+        lambda state: "fail" if not state.get('ocr_validated', True) else "continue",
+        {
+            "continue": "extract",      # OCR OK → proceed to extraction
+            "fail": "error_handler"     # OCR failed → skip processing
+        }
+    )
+    
     # extract → validate_extraction
     graph.add_edge("extract", "validate_extraction")
     
@@ -441,10 +630,13 @@ def create_insights_graph() -> StateGraph:
         should_retry_extraction,
         {
             "retry": "extract",      # Try extraction again
-            "continue": "analyze",   # Proceed to analysis
+            "continue": "enrich_web",   # NEW: Proceed to web enrichment (optional)
             "fail": "error_handler"  # Give up
         }
     )
+    
+    # NEW: enrich_web → analyze (always proceeds, enrichment is optional)
+    graph.add_edge("enrich_web", "analyze")
     
     # analyze → validate_analysis
     graph.add_edge("analyze", "validate_analysis")
@@ -519,9 +711,15 @@ async def run_insights_workflow(
         'context': context,
         'title': title,
         
+        # OCR Validation (NEW)
+        'ocr_validated': False,
+        'ocr_validation_reason': None,
+        
         # Outputs (to be filled)
         'extracted_data': None,
         'extraction_tokens': 0,
+        'web_enrichment': None,           # NEW
+        'enrichment_tokens': 0,           # NEW
         'analysis': None,
         'analysis_tokens': 0,
         
@@ -623,7 +821,14 @@ def _get_providers() -> List:
             except Exception as exc:
                 logger.warning("Skipping Ollama provider: %s", exc)
         elif provider_name == "perplexity":
-            logger.warning("Perplexity provider not implemented yet in LangGraph workflow - skipping")
+            # NEW: Perplexity provider for web-enhanced insights
+            if getattr(app_settings, 'PERPLEXITY_API_KEY', None):
+                try:
+                    providers.append(PerplexityProvider())
+                except ValueError as exc:
+                    logger.warning("Skipping Perplexity provider: %s", exc)
+            else:
+                logger.info("Skipping Perplexity provider because PERPLEXITY_API_KEY is not set")
         else:
             logger.warning("Unknown LLM provider '%s' - skipping", provider_name)
     

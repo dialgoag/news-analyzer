@@ -962,6 +962,8 @@ def master_pipeline_scheduler():
             logger.info(f"🔄 Reopened {reopened} completed docs to indexing_done for pending insights")
         
         # PASO 4: News items sin Insights task → Marcar como pending para workers
+        MAX_INSIGHTS_RETRIES = 3  # Consistente con PASO 0 (línea 742) y worker (línea 2292)
+        
         ready_for_insights = []
         seen_news = set()
         for doc in document_repository.list_all_sync(limit=None):
@@ -971,8 +973,21 @@ def master_pipeline_scheduler():
                 if not news_item_id or news_item_id in seen_news:
                     continue
                 status = insight.get("status")
+                retry_count = insight.get("retry_count", 0)
+                
                 if status in (InsightStatus.DONE, InsightStatus.GENERATING):
                     continue
+                
+                # Skip insights que excedieron max retries (evita loop infinito)
+                # IMPORTANTE: Filtrar por retry_count independientemente del status
+                # porque puede estar en PENDING, ERROR, o cualquier estado
+                if retry_count >= MAX_INSIGHTS_RETRIES:
+                    logger.info(
+                        f"   ⏭ Skipping {news_item_id[:30]}... - "
+                        f"max retries exceeded ({retry_count}/{MAX_INSIGHTS_RETRIES}, status={status})"
+                    )
+                    continue
+                
                 seen_news.add(news_item_id)
                 ready_for_insights.append(insight)
                 if len(ready_for_insights) >= 100:
@@ -2088,14 +2103,18 @@ async def _insights_worker_task(
     2. Fetch chunks from Qdrant
     3. Build context
     4. Call InsightsWorkerService (LangGraph workflow + LangMem cache)
+       - [NEW] Workflow includes OCR validation (local Ollama) for short content
+       - [NEW] Workflow includes web enrichment (Perplexity) for relevant news
     5. Save results with provider/token metadata
     
     Features:
     - LangMem cache (PostgreSQL-backed, 30 days TTL)
     - Text hash deduplication (saves API calls across news_items)
-    - LangGraph workflow (extraction + analysis + validation + retry)
-    - Provider fallback (OpenAI → Ollama)
+    - LangGraph workflow (validation → extraction → enrichment → analysis → validation → retry)
+    - Provider fallback (OpenAI → Perplexity → Ollama)
     - Token tracking
+    - [NEW] Local OCR validation for short content (cost: $0)
+    - [NEW] Web enrichment for relevant news (cost: ~$0.005)
     
     REQ-021 Phase 5F: Added stage timing tracking (records at document-level)
     """
@@ -2188,40 +2207,8 @@ async def _insights_worker_task(
             f"({len(context)} chars, {len(chunks)} chunks)"
         )
         
-        # PRE-VALIDATION: Check if context is sufficient before calling LLM
-        # This prevents wasting API calls on incomplete/insufficient content
-        MIN_CONTEXT_LENGTH = 500  # Minimum chars to be worth analyzing
-        MIN_CHUNKS_COUNT = 1      # Minimum chunks required
-        
-        if len(context) < MIN_CONTEXT_LENGTH:
-            error_msg = f"Insufficient context: {len(context)} chars < {MIN_CONTEXT_LENGTH} (needs more content)"
-            logger.warning(
-                f"[{worker_id}] ⚠️ SKIPPING LLM call - {error_msg} "
-                f"(saved ~5000 tokens / $0.10 USD)"
-            )
-            
-            # RECORD STAGE END with error
-            stage_timing_repository.record_stage_end_sync(
-                document_id=document_id,
-                news_item_id=news_item_id,
-                stage='insights',
-                status='error',
-                error_message=error_msg
-            )
-            
-            news_item_repository.set_insight_status_sync(
-                news_item_id,
-                InsightStatus.ERROR,
-                error_message=error_msg
-            )
-            worker_repository.update_worker_status_sync(
-                worker_id, task_doc_id, 'insights', 'error',
-                error_message=error_msg
-            )
-            worker_repository.mark_task_completed_sync(task_doc_id, 'insights')
-            return
-        
         # Generate insights with InsightsWorkerService (LangGraph + LangMem)
+        # NOTE: OCR validation and web enrichment now handled inside the LangGraph workflow
         from core.application.services.insights_worker_service import get_insights_worker_service
         
         service = get_insights_worker_service(
