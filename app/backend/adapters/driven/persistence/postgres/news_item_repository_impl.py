@@ -427,6 +427,66 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
         finally:
             self.get_connection_pool().putconn(conn)
 
+    def get_by_id_sync(self, news_item_id: str) -> dict | None:
+        """Get a single news item by its ID including content from Qdrant."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT news_item_id, document_id, filename, item_index, title, status, text_hash, created_at, updated_at
+                FROM news_items
+                WHERE news_item_id = %s
+                """,
+                (news_item_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            result = self.map_row_to_dict(cursor, row) if isinstance(row, tuple) else dict(row)
+            
+            # Try to get content from Qdrant
+            try:
+                from qdrant_connector import QdrantConnector
+                import os
+                
+                qdrant = QdrantConnector(
+                    url=os.getenv("QDRANT_URL", "http://qdrant:6333"),
+                    collection_name="rag_documents"
+                )
+                qdrant.connect()
+                
+                # Fetch chunks for this news item
+                chunks = qdrant.client.scroll(
+                    collection_name="rag_documents",
+                    scroll_filter={
+                        "must": [
+                            {"key": "news_item_id", "match": {"value": news_item_id}}
+                        ]
+                    },
+                    limit=100
+                )
+                
+                # Concatenate all chunks
+                if chunks and chunks[0]:
+                    content_parts = []
+                    for point in chunks[0]:
+                        if hasattr(point, 'payload') and 'text' in point.payload:
+                            content_parts.append(point.payload['text'])
+                    
+                    result['content'] = '\n'.join(content_parts) if content_parts else ""
+                else:
+                    result['content'] = ""
+                    
+            except Exception as e:
+                # If Qdrant fails, continue without content
+                result['content'] = ""
+            
+            return result
+        finally:
+            self.get_connection_pool().putconn(conn)
+
     def upsert_items_sync(self, document_id: str, filename: str, items: Sequence[dict]) -> int:
         if not items:
             return 0
@@ -471,12 +531,54 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
             cursor.execute(
                 """
                 SELECT news_item_id, document_id, filename, item_index, title, status, content, error_message,
-                       text_hash, llm_source, indexed_in_qdrant_at, created_at, updated_at
+                       text_hash, llm_source, indexed_in_qdrant_at, retry_count, created_at, updated_at
                 FROM news_item_insights
                 WHERE document_id = %s
                 ORDER BY item_index ASC
                 """,
                 (document_id,),
+            )
+            rows = cursor.fetchall()
+            return [self.map_row_to_dict(cursor, r) if isinstance(r, tuple) else dict(r) for r in rows]
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def get_insight_by_news_item_id_sync(self, news_item_id: str) -> dict | None:
+        """Get insight record for a specific news item."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT news_item_id, document_id, filename, item_index, title, status, content, error_message,
+                       text_hash, llm_source, indexed_in_qdrant_at, retry_count, created_at, updated_at
+                FROM news_item_insights
+                WHERE news_item_id = %s
+                """,
+                (news_item_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self.map_row_to_dict(cursor, row) if isinstance(row, tuple) else dict(row)
+        finally:
+            self.get_connection_pool().putconn(conn)
+
+    def list_expired_insights_sync(self, max_retries: int = 3) -> List[dict]:
+        """List insights that exceeded max retries (permanently failed)."""
+        conn = self.get_connection_pool().getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT news_item_id, document_id, filename, item_index, title, 
+                       status, error_message, retry_count, updated_at
+                FROM news_item_insights
+                WHERE retry_count >= %s
+                ORDER BY updated_at DESC
+                LIMIT 100
+                """,
+                (max_retries,),
             )
             rows = cursor.fetchall()
             return [self.map_row_to_dict(cursor, r) if isinstance(r, tuple) else dict(r) for r in rows]
