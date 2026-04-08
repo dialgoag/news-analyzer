@@ -2,8 +2,160 @@
 
 > Decisiones, cambios importantes, y contexto entre sesiones
 
-**Última actualización**: 2026-04-07  
-**Sesión**: 58 (Dashboard Auto-Refresh Global - Fix #137)
+**Última actualización**: 2026-04-08  
+**Sesión**: 59 (News Segmentation Agent + REQ-025 documentada)
+
+---
+
+## 2026-04-08 — REQ-025 Documentada: Seguimiento granular de segmentos con tabla expandible
+
+### Petición: Tabla expandible para visualizar input/proceso/output de cada stage
+- **Acción**: Documentación de petición REQ-025 en `REQUESTS_REGISTRY.md` + `PLAN_AND_NEXT_STEP.md`
+- **Estado**: 📋 PENDIENTE (documentada, no implementada)
+- **Decisión**: Postergar implementación hasta después de REQ-022 (Dashboard redesign) o integrar en él
+- **Razón**:
+  - Usuario solicitó poder "extender la columna" en tabla de pipeline para ver:
+    - Qué recibe cada stage (input del stage anterior)
+    - Pasos intermedios (ej: candidatos detectados en segmentation)
+    - Output final (ej: artículos segmentados)
+  - Objetivo: Debug, optimización, análisis de calidad de proceso
+  - Caso de uso específico: Ver "lo escaneado para ser enviado a segmentación y luego el resultado de segmentación"
+- **Alternativas consideradas**:
+  - Opción A: Implementar ahora (rechazada: solapa con REQ-022 en curso)
+  - **Opción B (elegida)**: Documentar completamente, posponer ejecución
+  - Opción C: Implementar solo para segmentation (rechazada: mejor hacerlo genérico una vez)
+- **Solución propuesta**:
+  
+  **Backend** (3 archivos):
+  - ✅ Schema ya soporta: `document_stage_timing.metadata` JSONB (migration 018)
+  - Guardar metadata estructurada: `{"input": {...}, "processing": {...}, "output": {...}, "timing": {...}}`
+  - Endpoint: `GET /api/dashboard/stages/{stage}/details` (lazy-load)
+  - Repository: `list_by_stage(stage, status, limit, offset)`
+  
+  **Frontend** (2 modificados, 1 nuevo):
+  - `PipelineStatusTable.jsx`: Expandable rows con click handler
+  - `StageDetailsPanel.jsx` (NEW): Panel color-coded con secciones
+  - CSS: Smooth expand/collapse animations
+  
+  **Pattern aplicable a**:
+  - Segmentation: OCR text → candidatos → artículos validados
+  - Chunking: OCR text → chunk decisions → chunks created
+  - Indexing: Chunks → embeddings → Qdrant points
+  - Insights: Context → LLM prompt/tokens → insights generated
+
+- **Impacto en roadmap**:
+  - **Coordinación necesaria**: REQ-022 (Dashboard redesign) también contempla expandable patterns
+  - **Recomendación**: Esperar a REQ-022 completada, o integrar concepto en su diseño
+  - **Beneficio**: Observabilidad completa del pipeline, debug más fácil
+  - **Costo**: 8-12 horas estimadas (bajo-medio esfuerzo)
+- **Riesgo**: LOW-MEDIUM
+  - Metadata JSONB puede crecer (mitigar: solo primeros 500 chars, 5 items)
+  - Performance (mitigar: lazy-load, pagination, cache)
+  - Duplicación de trabajo si no se coordina con REQ-022
+- **Contradicciones verificadas**:
+  - REQ-024 (Segmentation Agent): ✅ COMPLEMENTA (extiende observabilidad)
+  - REQ-022 (Dashboard redesign): ⚠️ MINOR OVERLAP (coordinar)
+- **Próximos pasos** (cuando se apruebe implementación):
+  1. Coordinar con REQ-022 (integrar o separar)
+  2. Implementar metadata storage en segmentation agent
+  3. API endpoint para stage details
+  4. Frontend expandable rows
+  5. Extender pattern a otros stages
+
+**Doc completa**: `REQUESTS_REGISTRY.md` § REQ-025, `PLAN_AND_NEXT_STEP.md` § REQ-025
+
+---
+
+## 2026-04-08 — News Segmentation Agent: LLM-based article detection (Fix #154)
+
+### Cambio: Implementar agente LLM para segmentación inteligente de noticias
+- **Decisión**: Reemplazar heurística de segmentación con agente LLM local (Ollama llama3.1:8b)
+- **Razón**: 
+  - **Problema crítico identificado**: Usuario reportó que LLM rechazaba ~80% de insights con "insufficient context"
+  - **Análisis profundo reveló**: Heurística `segment_news_items_from_text()` producía fragmentos incoherentes:
+    - Títulos detectados por patrones regex (false positives: "Página 3", "Sección A", líneas genéricas)
+    - Función `is_title_line()` muy permisiva (longitud 12-140 chars, ratio uppercase/titlecase)
+    - Chunking (`RecursiveCharacterTextSplitter`) cortaba artículos válidos a mitad de oración
+  - **Evidencia**: Contenido recuperado tenía 40,000+ caracteres pero LLM lo rechazaba como "insuficiente"
+  - **Causa raíz**: Chunks fragmentados → LLM no puede entender contexto → rechazo legítimo
+  - **Impacto**: Datos extraídos de mala calidad comprometían toda la aplicación
+- **Alternativas consideradas**: 
+  - Opción A: Mejorar heurística regex (rechazada: difícil capturar todos casos, siempre tendrá edge cases)
+  - **Opción B (elegida)**: LLM local con prompts anti-alucinación (mejor precision, adaptable, confidence scoring)
+  - Opción C: Modelo ML entrenado (rechazada: requiere dataset de training, mayor complejidad)
+  - Opción D: Segmentar DESPUÉS de chunking (rechazada: ya es tarde, chunks ya están fragmentados)
+- **Implementación - 4 FASES**:
+  
+  **FASE 1: NewsSegmentationAgent**
+  - Agente con 2 prompts especializados:
+    1. `TITLE_CLASSIFICATION_PROMPT`: Clasifica línea en TÍTULO_VÁLIDO / FRAGMENTO / NO_ES_TÍTULO
+    2. `BODY_VALIDATION_PROMPT`: Valida que título + body formen artículo coherente
+  - Anti-alucinación:
+    - Respuestas estructuradas (solo 3 opciones para título, JSON para validación)
+    - Zero-temperature (determinístico)
+    - Validación estricta de output (fallback conservador si LLM alucina)
+  - Confidence scoring (0.0-1.0) combinando confianza de título + body
+  - Logging detallado (fase 1: candidatos detectados, fase 2: validación)
+  
+  **FASE 2: Pipeline Integration**
+  - Nueva stage "SEGMENTATION" insertada entre OCR y CHUNKING:
+    - Estados: `segmentation_pending`, `segmentation_processing`, `segmentation_done`
+    - Pause control: `pause.segmentation`
+    - Stage enum actualizado en `pipeline_states.py`
+  - Flujo modificado:
+    1. OCR (extrae texto raw)
+    2. **SEGMENTATION** (LLM detecta artículos completos y coherentes) ← NUEVO
+    3. CHUNKING (usa items ya segmentados, NO heurística)
+    4. INDEXING (vectoriza chunks)
+    5. INSIGHTS (genera insights sobre artículos de calidad)
+  - Items de segmentation reemplazan llamada a `segment_news_items_from_text()`
+  
+  **FASE 3: Database Schema**
+  - Migration 022: 3 nuevas columnas para observabilidad:
+    - `news_items.segmentation_confidence`: Confianza del LLM (0.0-1.0)
+    - `document_status.segmentation_items_count`: Artículos detectados
+    - `document_status.segmentation_avg_confidence`: Promedio de confianza
+  - Repository updates (backward compatible):
+    - `upsert_items_sync()`: Guarda confidence si disponible
+    - `update_status_sync()`: Nuevos params opcionales para métricas
+  - Dashboard API: Stage "Segmentation" incluido en pipeline analysis
+  
+  **FASE 4: Re-segmentation Script**
+  - `scripts/re_segment_existing.py`: Re-procesa documentos ya existentes
+  - Modos: `--dry-run` (preview), `--execute` (apply)
+  - Decision logic: Solo reemplaza si nueva segmentación es significativamente mejor
+  - Cleanup automático: Borra news_items viejos + chunks Qdrant + insights
+  - Marca documentos para re-chunking (aprovecha OCR existente)
+  
+- **Impacto en roadmap**: 
+  - **Mejora crítica de calidad**: Artículos completos y coherentes → menos rechazos LLM
+  - **Reducción de costos**: Menos retries de insights, menos llamadas LLM fallidas
+  - **Observabilidad**: Confidence scores permiten identificar artículos dudosos
+  - **Re-procesamiento posible**: Sin necesidad de re-OCR (costoso), solo re-segmentar
+  - Base para métricas de calidad de datos en dashboard
+- **Riesgo**: 
+  - Medio - Cambio arquitectónico importante (nueva stage en pipeline)
+  - Mitigación: 
+    - Backward compatible (heurística vieja comentada, no borrada)
+    - Cada fase es independiente y testeable
+    - Migration reversible
+    - Script de re-segmentación tiene dry-run mode
+- **Próximos pasos**:
+  - [ ] Desplegar nuevo backend + migration 022
+  - [ ] Ejecutar `re_segment_existing.py --dry-run --limit 10` (preview primeros 10 docs)
+  - [ ] Si OK: `--execute --limit 10` (aplicar cambios)
+  - [ ] Monitorear confidence scores en dashboard
+  - [ ] Verificar reducción de rechazos LLM en insights (objetivo: de ~80% a <10%)
+  - [ ] Ajustar `min_confidence` threshold si necesario (actual: 0.7)
+
+### Observación técnica: Por qué ANTES del chunking
+- **Orden crítico**: SEGMENTATION debe ocurrir ANTES de chunking
+- **Razón**: 
+  - Chunking divide texto en fragmentos fijos (2000 chars, overlap 400)
+  - Si segmentamos después, ya es tarde (chunks ya cortaron oraciones)
+  - Segmentar primero preserva integridad de artículos
+- **Flujo correcto**: OCR (raw) → SEGMENTATION (artículos) → CHUNKING (fragmentos de artículos)
+- **Flujo incorrecto**: OCR → CHUNKING → SEGMENTATION ❌ (ya fragmentado)
 
 ---
 

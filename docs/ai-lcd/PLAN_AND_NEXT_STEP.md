@@ -4,42 +4,175 @@
 > 
 > **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> # Plan del Proyecto y Siguiente Paso
-
-> Plan detallado, timeline, checklist de verificación
-> 
-> **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
->
-> **📋 ÚLTIMO**: REQ-022 — Dashboard Redesign con Visual Analytics Framework (Fase 1 completada) 🔄.
+> **📋 ÚLTIMO**: REQ-024 — News Segmentation Agent (LLM-based article detection) ✅ IMPLEMENTADO (Fases 1-4).
 
 **Última actualización**: 2026-04-08  
-**Versión**: 5.0.0-alpha (dashboard redesign READY FOR TESTING)
+**Versión**: 5.1.0-alpha (news segmentation agent READY FOR DEPLOYMENT)
+
+**Nota**: Nueva petición REQ-025 documentada - "Seguimiento granular de segmentos: tabla expandible con input/proceso/output por stage" (📋 PENDIENTE para v5.1.0+)
 
 ---
 
-## 🎯 ESTADO ACTUAL: App levantada, listo para testear Dashboard v2
+## 🎯 ESTADO ACTUAL: News Segmentation Agent implementado (4 fases), listo para deploy
 
-### ✅ DEPLOYMENT STATUS
-- [x] Build fixes aplicados (Dockerfile paths + prop-types dependency)
-- [x] `make deploy-quick` exitoso (Exit code: 0)
-- [x] Todos los contenedores UP y healthy:
-  - ✅ **Backend** (rag-backend): http://localhost:8000
-  - ✅ **Frontend** (rag-frontend): http://localhost:3000
-  - ✅ **Postgres** (rag-postgres): Healthy
-  - ✅ **Qdrant** (rag-qdrant): Up
-  - ✅ **Ollama** (rag-ollama): Up
-  - ✅ **OCR Service** (rag-ocr-service): Healthy
+### ✅ IMPLEMENTATION STATUS
+- [x] **FASE 1**: NewsSegmentationAgent creado (LLM-based con anti-alucinación)
+- [x] **FASE 2**: Pipeline integration (nueva stage SEGMENTATION entre OCR y CHUNKING)
+- [x] **FASE 3**: Database schema (migration 022 + repository updates)
+- [x] **FASE 4**: Re-segmentation script (`scripts/re_segment_existing.py`)
+- [x] Dockerfile actualizado (COPY news_segmentation_agent.py)
+- [x] Dashboard API actualizado (stage "Segmentation" en pipeline)
+- [x] Pause control agregado (`pause.segmentation`)
+- [x] Documentación actualizada (CONSOLIDATED_STATUS, SESSION_LOG, PLAN)
 
 ### 🔄 PRÓXIMO PASO INMEDIATO
-**Fase 4: Testing & Refinement** - Manual Testing de Dashboard v2
-- [ ] Verificar toggle v1 ↔ v2 funciona
-- [ ] Testear KPIs + sparklines (datos reales)
-- [ ] Testear Workers bullet charts (capacidad vs utilización)
-- [ ] Testear Error analysis (bar chart + timeline + retry)
-- [ ] Testear Flow tabs (Sankey ↔ Parallel Coords)
-- [ ] Performance con dataset grande
-- [ ] Responsiveness (mobile, tablet, desktop)
-- [ ] Accessibility (Lighthouse, axe)
+**Deployment & Testing** - Desplegar News Segmentation Agent
+- [ ] Build nuevo backend: `make build-backend` (incluye news_segmentation_agent.py)
+- [ ] Deploy app: `make deploy-quick`
+- [ ] Verificar migration 022 aplicada: `SELECT * FROM news_items LIMIT 1;` (columna segmentation_confidence)
+- [ ] Testear nuevo documento: Verificar que pasa por SEGMENTATION stage (logs)
+- [ ] Verificar stage "Segmentation" visible en Pipeline Status Table
+- [ ] Testear pause control "segmentation" funciona
+- [ ] Ejecutar script re-segmentación (dry-run): `python scripts/re_segment_existing.py --dry-run --limit 10`
+- [ ] Si OK: Ejecutar con `--execute --limit 10` (primeros 10 docs)
+- [ ] Monitorear logs: Ver confidence scores, artículos detectados
+- [ ] Verificar reducción de rechazos LLM en insights (objetivo: de ~80% a <10%)
+
+---
+
+## ✅ REQ-024: News Segmentation Agent - COMPLETADO ✅
+
+### [x] Fix #154: LLM-based intelligent article detection ✅ (2026-04-08)
+**Estado**: IMPLEMENTADO ✅ (pendiente deployment)  
+**Prioridad**: CRÍTICA (afecta calidad de datos de toda la app)  
+**Impacto**: Reemplaza heurística de segmentación con LLM local
+
+**Implementación - 4 FASES**:
+
+**FASE 1: NewsSegmentationAgent**
+- ✅ Archivo: `app/backend/news_segmentation_agent.py` (300+ líneas)
+- ✅ LLM: Ollama llama3.1:8b (local, zero-cost, temperature=0.0)
+- ✅ 2 prompts anti-alucinación:
+  - `TITLE_CLASSIFICATION_PROMPT`: Clasifica línea en TÍTULO_VÁLIDO / FRAGMENTO / NO_ES_TÍTULO
+  - `BODY_VALIDATION_PROMPT`: Valida título + body como artículo coherente
+- ✅ Confidence scoring (0.0-1.0) para cada artículo
+- ✅ Logging detallado (fase 1: candidatos, fase 2: validación)
+- ✅ Singleton pattern (`get_segmentation_agent()`)
+- ✅ Validación estricta de output (fallback conservador si LLM alucina)
+
+**FASE 2: Pipeline Integration**
+- ✅ Nueva stage "SEGMENTATION" insertada entre OCR y CHUNKING:
+  - `DocStatus.SEGMENTATION_PENDING`, `SEGMENTATION_PROCESSING`, `SEGMENTATION_DONE`
+  - `Stage.SEGMENTATION` agregado a `pipeline_states.py`
+  - `pause.segmentation` agregado a `pipeline_runtime_store.py`
+- ✅ Flujo modificado en `app.py` (`_process_document_sync`):
+  1. OCR (extrae texto)
+  2. **SEGMENTATION** (LLM detecta artículos válidos) ← NUEVO
+  3. CHUNKING (usa items ya segmentados, NO heurística)
+  4. INDEXING (vectoriza chunks)
+  5. INSIGHTS (genera insights)
+- ✅ Items de segmentation reemplazan llamada a `segment_news_items_from_text()`
+- ✅ Cada item incluye `confidence` score
+
+**FASE 3: Database Schema**
+- ✅ Migration 022: 3 nuevas columnas
+  - `news_items.segmentation_confidence` (FLOAT): Confianza del LLM
+  - `document_status.segmentation_items_count` (INT): Artículos detectados
+  - `document_status.segmentation_avg_confidence` (FLOAT): Promedio de confianza
+- ✅ Repository updates (backward compatible):
+  - `upsert_items_sync()`: Guarda confidence si disponible
+  - `update_status_sync()`: Nuevos params opcionales (`segmentation_items_count`, `segmentation_avg_confidence`)
+- ✅ Dashboard API: Stage "Segmentation" incluido en `_build_stage_analysis()`
+
+**FASE 4: Re-segmentation Script**
+- ✅ `scripts/re_segment_existing.py` (350+ líneas)
+- ✅ Modos: `--dry-run` (preview), `--execute` (apply)
+- ✅ Filtros: `--document-id`, `--limit`, `--min-confidence`
+- ✅ Decision logic: Solo reemplaza si nueva segmentación es significativamente mejor
+- ✅ Cleanup automático: Borra news_items + chunks Qdrant + insights
+- ✅ Marca documentos para re-chunking (`status = chunking_pending`)
+
+**No cambiar**: Pipeline crítico - Segmentation DEBE ocurrir ANTES de chunking para preservar integridad de artículos.
+
+**Archivos modificados**:
+- `app/backend/news_segmentation_agent.py` (NEW)
+- `app/backend/app.py` (líneas 1850-1958: nueva stage SEGMENTATION)
+- `app/backend/pipeline_states.py` (líneas 41-47, 62-82, 107)
+- `app/backend/pipeline_runtime_store.py` (línea 23)
+- `app/backend/adapters/.../news_item_repository_impl.py` (líneas 506-559)
+- `app/backend/adapters/.../document_repository_impl.py` (líneas 553-625)
+- `app/backend/adapters/.../dashboard_read_repository_impl.py` (líneas 324-483)
+- `app/backend/Dockerfile.cpu` (COPY news_segmentation_agent.py)
+- `app/backend/migrations/022_add_segmentation_columns.py` (NEW)
+- `app/backend/scripts/re_segment_existing.py` (NEW)
+- `docs/ai-lcd/CONSOLIDATED_STATUS.md` (Fix #154 documentado)
+- `docs/ai-lcd/SESSION_LOG.md` (Sesión 59 agregada)
+- `docs/ai-lcd/PLAN_AND_NEXT_STEP.md` (REQ-024 agregado)
+
+**Verificación**:
+- [ ] Build backend con `news_segmentation_agent.py`
+- [ ] Migration 022 aplicada correctamente
+- [ ] Stage "Segmentation" visible en Pipeline Status Table
+- [ ] Pause control "segmentation" funciona
+- [ ] Nuevo documento pasa por SEGMENTATION stage (logs)
+- [ ] Items tienen `segmentation_confidence > 0.7`
+- [ ] Script `--dry-run` muestra preview correctamente
+- [ ] Script `--execute` re-segmenta documentos existentes
+
+Ver: CONSOLIDATED_STATUS.md § Fix #154, SESSION_LOG.md § 2026-04-08 Sesión 59
+
+---
+
+## 📋 REQ-025: Seguimiento Granular de Segmentos - PENDIENTE 📋
+
+### [ ] Feature: Tabla expandible con input/proceso/output por stage (2026-04-08+)
+**Estado**: PENDIENTE (documentado para ejecución futura)  
+**Prioridad**: 🟡 MEDIA (mejora observabilidad, no urgente)  
+**Coordinación**: Después de REQ-022 (Dashboard redesign) o integrado en él
+
+**Objetivo**: 
+Agregar capacidad de drill-down en `PipelineStatusTable` para ver datos intermedios de cada stage (input → processing → output), guardados en `document_stage_timing.metadata`.
+
+**Alcance**:
+
+**Backend** (3 archivos):
+- ✅ Schema ya soporta: `document_stage_timing.metadata` JSONB (migration 018)
+- [ ] `news_segmentation_agent.py`: Store intermediate data en metadata
+  - Input: OCR text length + preview (500 chars)
+  - Processing: Candidates detected + preview (5 primeros)
+  - Output: Articles count + avg confidence + preview
+- [ ] Dashboard router: Endpoint `GET /api/dashboard/stages/{stage}/details`
+- [ ] `StageTimingRepository`: Method `list_by_stage(stage, status, limit, offset)`
+
+**Frontend** (2 modificados, 1 nuevo):
+- [ ] `PipelineStatusTable.jsx`: Expandable rows con click handler
+- [ ] `StageDetailsPanel.jsx` (NEW): Panel para mostrar detalles
+  - Lazy-load on expansion
+  - Color-coded sections (input/processing/output)
+  - Pagination (20 docs por página)
+- [ ] CSS: Animaciones smooth para expand/collapse
+
+**Aplicar pattern a otros stages**:
+- [ ] Chunking (input: OCR text, output: chunks)
+- [ ] Indexing (input: chunks, output: Qdrant points)
+- [ ] Insights (input: context, output: insights generated)
+
+**Beneficios**:
+- ✅ Debug segmentation quality
+- ✅ Optimize process (ver pasos intermedios)
+- ✅ Find root cause of errors
+- ✅ Reusable pattern for all stages
+
+**Estimación**: 8-12 horas
+- Backend: 3-4h
+- Frontend: 4-6h
+- Testing: 1-2h
+
+**Contradicciones**: 
+- REQ-024 ✅ COMPLEMENTA
+- REQ-022 ⚠️ MINOR OVERLAP (coordinar)
+
+**Doc completa**: `REQUESTS_REGISTRY.md` § REQ-025
 
 ---
 

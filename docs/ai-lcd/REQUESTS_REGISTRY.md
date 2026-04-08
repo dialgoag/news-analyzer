@@ -3,8 +3,8 @@
 > **Propósito**: Rastrear TODAS las peticiones del usuario con trazabilidad completa
 > 
 > **Última actualización**: 2026-04-08  
-> **Total peticiones**: 22  
-> **Completadas**: 19 | Pendientes: 3 (REQ-014, REQ-021 parcial, REQ-022) | Rechazadas: 0
+> **Total peticiones**: 23  
+> **Completadas**: 19 | Pendientes: 4 (REQ-014, REQ-021 parcial, REQ-022, REQ-025) | Rechazadas: 0
 
 > **Pendientes técnicos** (mejoras, fixes): ver `PENDING_BACKLOG.md` (fuente única).
 
@@ -1976,6 +1976,197 @@ Aplicar framework de visual analytics completo siguiendo skill y rules:
 - D3+React Rule: `.cursor/rules/d3-react-dashboard-implementation.mdc`
 - CONSOLIDATED_STATUS.md (será actualizado con Fix #138+)
 - SESSION_LOG.md (decisiones de diseño)
+
+---
+
+### **REQ-025: "Seguimiento granular de segmentos: tabla expandible con input/proceso/output por stage"**
+
+**Metadata**:
+- **Fecha**: 2026-04-08
+- **Sesión**: Sesión 59 (Post News Segmentation Agent)
+- **Prioridad**: 🟡 MEDIA (mejora observabilidad, no urgente)
+- **Estado**: 📋 **PENDIENTE**
+
+**Descripción Original**:
+> "dashboard table of pipeline extension using the rules: quiero que esos segmentos se guarden en base de datos para poder hacer seguimiento del proceso, es decir ahora mismo me gustaria poder ver desde la tabla de los pasos una forma para extender la columna y mirar los que estan en progreso en una celda especifica y mirar los valores, por ejemplo estos del chunking lo escaneado para ser enviado a segmentacion y luego el resultado de segmentacion, y asi en cada caso habria que tener o estar seguros de tener lo que recive que es el resultado del paso anterior los pasos intermedios y el resultado final en base de datos para poder ser analizados y optimizar el proceso encontrar errores etc"
+
+**Problema Identificado**:
+1. **Segmentation data**: REQ-024 guarda confidence scores y counts, pero no datos intermedios
+2. **Debugging limitado**: Difícil saber POR QUÉ falló una segmentación (input/candidatos/validación)
+3. **Optimización ciega**: Sin visibilidad de pasos intermedios, no se puede ajustar el proceso
+4. **Patrón generalizable**: Mismo problema en chunking, indexing, insights
+
+**Contexto Actual**:
+- ✅ Migration 022: `segmentation_confidence`, `segmentation_items_count`, `segmentation_avg_confidence`
+- ✅ Migration 023: Stage "segmentation" agregado a `document_stage_timing`
+- ✅ `document_stage_timing.metadata` JSONB existe (migration 018)
+- ✅ `PipelineStatusTable.jsx` muestra stages en tabla compacta
+- ❌ No se guardan datos intermedios de procesamiento
+- ❌ No hay UI para expandir rows y ver detalles
+
+**Solución Propuesta**:
+
+**FASE 1: Backend - Store Intermediate Data**
+
+1. **Update `news_segmentation_agent.py`**:
+   - Store intermediate data in `stage_timing_repository.record_stage_start()`:
+   ```python
+   metadata = {
+     "input": {
+       "ocr_text_length": len(ocr_text),
+       "ocr_text_preview": ocr_text[:500]
+     },
+     "processing": {
+       "candidates_detected": len(candidates),
+       "candidates_preview": [
+         {"title": c["title"][:100], "confidence": c["confidence"]} 
+         for c in candidates[:5]
+       ]
+     },
+     "output": {
+       "articles_count": len(final_articles),
+       "avg_confidence": avg_confidence,
+       "articles_preview": [
+         {"title": a["title"][:100], "confidence": a["confidence"]}
+         for a in final_articles[:5]
+       ]
+     },
+     "timing": {
+       "phase1_duration": phase1_time,
+       "phase2_duration": phase2_time
+     }
+   }
+   ```
+
+2. **Define Generic Metadata Structure**:
+   ```python
+   StageMetadata = {
+     "input": dict,        # What this stage received
+     "processing": dict,   # Intermediate steps/decisions
+     "output": dict,       # What was produced
+     "timing": dict,       # Performance metrics
+     "errors": list        # Non-fatal warnings
+   }
+   ```
+
+3. **Create API Endpoint**:
+   ```python
+   # New in dashboard router
+   @router.get("/api/dashboard/stages/{stage}/details")
+   async def get_stage_details(
+       stage: str,
+       status: str = "processing",
+       limit: int = 20,
+       offset: int = 0
+   ):
+       """
+       Get detailed information for documents in a specific stage.
+       Returns list with metadata from document_stage_timing.
+       """
+   ```
+
+4. **Extend StageTimingRepository**:
+   ```python
+   async def list_by_stage(
+       self,
+       stage: str,
+       status: Optional[str] = None,
+       limit: int = 20,
+       offset: int = 0
+   ) -> List[StageTimingRecord]:
+       """Query stage timing records by stage and status."""
+   ```
+
+**FASE 2: Frontend - Expandable Rows**
+
+1. **Update `PipelineStatusTable.jsx`**:
+   - Add state: `expandedStages = {}`
+   - Add click handler to toggle expansion
+   - Render `<StageDetailsPanel />` when expanded
+
+2. **Create `StageDetailsPanel.jsx`**:
+   - Lazy-load details on expansion
+   - Show table of documents in that stage
+   - For each document:
+     - Input data preview (blue section)
+     - Processing steps (yellow section)
+     - Output preview (green section)
+     - Duration, timestamps
+   - Paginated (20 per page)
+
+3. **Visual Design**:
+   - Expandable rows with smooth animation
+   - Nested table inside main table row
+   - Color-coded sections
+   - Collapsible by default
+   - Loading spinner while fetching
+
+**FASE 3: Extend to Other Stages**
+
+Once segmentation works, apply same pattern to:
+
+- **Chunking**:
+  - Input: OCR text + segmented articles
+  - Processing: Chunk size decisions, overlap
+  - Output: Chunks count, avg size
+
+- **Indexing**:
+  - Input: Chunks to index
+  - Processing: Embeddings (model, dimensions)
+  - Output: Qdrant points created
+
+- **Insights**:
+  - Input: Context chunks retrieved
+  - Processing: LLM prompt, tokens used
+  - Output: Insights generated, validation
+
+**Archivos Afectados**:
+
+**Backend** (3 files modified):
+- `app/backend/news_segmentation_agent.py` (store metadata)
+- `app/backend/adapters/driving/api/v1/routers/dashboard.py` (new endpoint)
+- `app/backend/adapters/driven/persistence/postgres/stage_timing_repository_impl.py` (extend query)
+
+**Frontend** (2 modified, 1 new):
+- `app/frontend/src/components/dashboard/PipelineStatusTable.jsx` (expandable rows)
+- `app/frontend/src/components/dashboard/StageDetailsPanel.jsx` (NEW component)
+- `app/frontend/src/components/dashboard/PipelineStatusTable.css` (animations)
+
+**Beneficios**:
+- ✅ Full visibility into input/process/output per stage
+- ✅ Debug segmentation quality issues easily
+- ✅ Optimize process by analyzing intermediate data
+- ✅ Find errors by seeing exact input that caused failure
+- ✅ Reusable pattern for all pipeline stages
+
+**Contradicciones Verificadas**:
+- **REQ-024** (News Segmentation Agent): ✅ COMPLEMENTA - extends observability, no conflicts
+- **REQ-022** (Dashboard redesign): ⚠️ MINOR OVERLAP - expandable rows concept similar
+  - Recomendación: Implementar REQ-025 después de REQ-022 completada
+  - O: Integrar concepto de expandable rows en diseño de REQ-022
+
+**Riesgos Identificados**: LOW-MEDIUM
+- Metadata JSONB puede crecer (mitigar: solo primeros 500 chars, 5 items)
+- Performance al lazy-load details (mitigar: pagination, cache)
+- Debe coordinarse con REQ-022 para evitar duplicar trabajo
+
+**Estimación de Esfuerzo**: 8-12 horas
+- Backend (metadata + API): 3-4h
+- Frontend (expandable rows + panel): 4-6h
+- Testing + refinement: 1-2h
+
+**Próximos Pasos (cuando se apruebe)**:
+1. Coordinar con REQ-022 (¿integrar en redesign?)
+2. Implementar metadata storage en segmentation agent
+3. Crear API endpoint para stage details
+4. Implementar expandable rows en frontend
+5. Extender pattern a otros stages
+
+**Versión Target**: v5.1.0 (post-redesign)
+
+**No cambiar**:
+- Migration 022-023 (ya aplicadas)
+- `document_stage_timing` schema (ya tiene metadata JSONB)
 
 ---
 
