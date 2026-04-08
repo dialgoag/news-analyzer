@@ -1,22 +1,37 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import axios from 'axios';
+/**
+ * PipelineDashboard Component
+ * 
+ * Redesigned dashboard using visual analytics framework
+ * Integrates all new components: KPIs, Workers, Errors, Flow
+ * 
+ * Architecture: 7-section operational dashboard pattern
+ */
+
+import React, { useState, useCallback } from 'react';
+import PropTypes from 'prop-types';
 import { 
-  ExclamationTriangleIcon,
   ArrowPathIcon,
   ClockIcon,
-  CircleStackIcon,
-  MapIcon,
   ChartBarIcon,
-  UsersIcon
+  UsersIcon,
+  ExclamationTriangleIcon,
+  MapIcon,
+  CircleStackIcon,
+  PlayIcon,
+  PauseIcon
 } from '@heroicons/react/24/outline';
+import axios from 'axios';
 import { DashboardProvider } from './hooks/useDashboardFilters.jsx';
-import { API_TIMEOUT_MS } from '../config/apiConfig';
-import ParallelPipelineCoordinates from './dashboard/ParallelPipelineCoordinates';
+import { useDashboardData } from '../hooks/useDashboardData.jsx';
 import { CollapsibleSection } from './dashboard/CollapsibleSection';
-import ErrorAnalysisPanel from './dashboard/ErrorAnalysisPanel';
-import DatabaseStatusPanel from './dashboard/DatabaseStatusPanel';
-import KPIsInline from './dashboard/KPIsInline';
+import KPIRow from './dashboard/kpis/KPIRow';
+import WorkerStatusPanel from './dashboard/workers/WorkerStatusPanel';
+import ErrorAnalysisPanelV2 from './dashboard/errors/ErrorAnalysisPanelV2';
+import PipelineFlowPanel from './dashboard/flow/PipelineFlowPanel';
 import PipelineStatusTable from './dashboard/PipelineStatusTable';
+import ExpiredInsightsPanel from './dashboard/ExpiredInsightsPanel';
+import DatabaseStatusPanel from './dashboard/DatabaseStatusPanel';
+import { API_TIMEOUT_MS } from '../config/apiConfig';
 import './PipelineDashboard.css';
 
 const REFRESH_INTERVALS = [
@@ -38,147 +53,122 @@ const getStoredRefreshInterval = () => {
 };
 
 export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = false }) {
-  const [data, setData] = useState(null);
-  const [documents, setDocuments] = useState([]); // NEW: Lista de documentos individuales
-  const [parallelData, setParallelData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  
-  // New states for compact components
-  const [analysisData, setAnalysisData] = useState(null);
-  const [workerStats, setWorkerStats] = useState(null);
-  const [refreshing, setRefreshing] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(getStoredRefreshInterval);
 
-  const fetchPipelineData = useCallback(async () => {
-    if (!token) return;
-    try {
-      setLoading(true);
-      setError(null);
-      const summaryResponse = await axios.get(`${API_URL}/api/dashboard/summary`, {
-        headers: { Authorization: `Bearer ${token}` },
-        timeout: API_TIMEOUT_MS
-      });
-      setData(summaryResponse.data);
+  // Use centralized data hook
+  const { data, loading, error, refreshing, refetch } = useDashboardData(
+    API_URL,
+    token,
+    refreshInterval,
+    refreshTrigger
+  );
 
-      const [docsResponse, parallelResponse, analysisResponse, workersResponse] = await Promise.allSettled([
-        axios.get(`${API_URL}/api/documents`, {
-          headers: { Authorization: `Bearer ${token}` },
-          timeout: API_TIMEOUT_MS
-        }),
-        axios.get(`${API_URL}/api/dashboard/parallel-data`, {
-          headers: { Authorization: `Bearer ${token}` },
-          timeout: API_TIMEOUT_MS
-        }),
-        axios.get(`${API_URL}/api/dashboard/analysis`, {
-          headers: { Authorization: `Bearer ${token}` },
-          timeout: API_TIMEOUT_MS
-        }),
-        axios.get(`${API_URL}/api/workers/status`, {
-          headers: { Authorization: `Bearer ${token}` },
-          timeout: API_TIMEOUT_MS
-        })
-      ]);
-
-      if (docsResponse.status === 'fulfilled') {
-        setDocuments(docsResponse.value.data?.documents || []);
-      } else {
-        console.warn('Could not fetch documents list:', docsResponse.reason);
-      }
-
-      if (parallelResponse.status === 'fulfilled') {
-        setParallelData(parallelResponse.value.data || null);
-      } else {
-        console.warn('Could not fetch parallel data:', parallelResponse.reason);
-      }
-      
-      if (analysisResponse.status === 'fulfilled') {
-        setAnalysisData(analysisResponse.value.data || null);
-      } else {
-        console.warn('Could not fetch analysis data:', analysisResponse.reason);
-      }
-      
-      if (workersResponse.status === 'fulfilled') {
-        const workers = workersResponse.value.data?.workers || [];
-        const active = workers.filter(w => w.status === 'active').length;
-        const idle = workers.filter(w => w.status === 'idle').length;
-        const limits = workersResponse.value.data?.summary?.limits || {};
-        const totalLimit = limits.total || 25;
-        setWorkerStats({ active, idle, workers, limits, totalLimit });
-      } else {
-        console.warn('Could not fetch workers data:', workersResponse.reason);
-      }
-      
-      setError(null);
-    } catch (err) {
-      console.error('Error fetching pipeline data:', err);
-      setError(err.message || 'Error de conexión');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+  // Handle pause/resume for individual stage
+  const handlePauseToggle = useCallback(async (stageKey, currentlyPaused) => {
+    if (!token) {
+      alert('Error: No estás autenticado. Por favor, inicia sesión nuevamente.');
+      return;
     }
-  }, [API_URL, token]);
+    
+    const newState = !currentlyPaused;
+    // Backend expects: { "pause_steps": { "ocr": true, ... } }
+    const payload = {
+      pause_steps: {
+        [stageKey]: newState
+      }
+    };
+    
+    try {
+      await axios.put(
+        `${API_URL}/api/admin/insights-pipeline`,
+        payload,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: API_TIMEOUT_MS
+        }
+      );
+      // Refresh to get new state
+      refetch();
+    } catch (err) {
+      console.error('Error toggling pause:', err);
+      const errorMsg = err.response?.data?.detail || err.message;
+      alert(`Error al pausar/reanudar: ${errorMsg}`);
+    }
+  }, [API_URL, token, refetch]);
 
-  const handleRefresh = useCallback(() => {
-    setRefreshing(true);
-    fetchPipelineData();
-  }, [fetchPipelineData]);
+  // Handle pause/resume ALL stages
+  const handlePauseAll = useCallback(async () => {
+    if (!token) {
+      alert('Error: No estás autenticado. Por favor, inicia sesión nuevamente.');
+      return;
+    }
+    
+    if (!data?.pipeline?.stages) return;
+    
+    // Check if all are paused
+    const allPaused = data.pipeline.stages
+      .filter(s => s.pauseKey)
+      .every(s => s.paused);
+    
+    const newState = !allPaused;
+    
+    // Backend expects: { "pause_all": true } or { "resume_all": true }
+    const payload = newState ? { pause_all: true } : { resume_all: true };
+    
+    try {
+      await axios.put(
+        `${API_URL}/api/admin/insights-pipeline`,
+        payload,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: API_TIMEOUT_MS
+        }
+      );
+      // Refresh to get new state
+      refetch();
+    } catch (err) {
+      console.error('Error toggling pause all:', err);
+      const errorMsg = err.response?.data?.detail || err.message;
+      alert(`Error al pausar/reanudar todo: ${errorMsg}`);
+    }
+  }, [API_URL, token, data, refetch]);
 
-  const handleRefreshIntervalChange = useCallback((e) => {
+  const handleRefreshIntervalChange = (e) => {
     const newInterval = parseInt(e.target.value, 10);
     setRefreshInterval(newInterval);
     try {
       localStorage.setItem('dashboardRefreshInterval', newInterval.toString());
     } catch (err) {
-      console.warn('Could not save refresh interval to localStorage:', err);
+      console.warn('Could not save refresh interval:', err);
     }
-  }, []);
+  };
 
-  useEffect(() => {
-    fetchPipelineData();
-    
-    if (refreshInterval > 0) {
-      const interval = setInterval(fetchPipelineData, refreshInterval);
-      return () => clearInterval(interval);
-    }
-  }, [fetchPipelineData, refreshTrigger, refreshInterval]);
-
+  // Loading state
   if (loading && !data) {
-    return <div className="pipeline-container"><p>Loading pipeline data...</p></div>;
+    return (
+      <div className="pipeline-dashboard-v2">
+        <div className="dashboard-loading">
+          <p>⏳ Loading dashboard data...</p>
+        </div>
+      </div>
+    );
   }
 
+  // Error state
   if (!data && error) {
     return (
-      <div className="pipeline-container">
-        <div className="error-banner" style={{
-          background: '#fff3cd',
-          border: '1px solid #ffc107',
-          color: '#856404',
-          padding: '12px 16px',
-          borderRadius: '4px',
-          margin: '20px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '12px'
-        }}>
-          <div>⚠️ Error cargando dashboard: {error}</div>
-          <div style={{ fontSize: '12px', color: '#666' }}>
-            Para entornos lentos, aumenta VITE_API_TIMEOUT_MS (ej. 120000).
-          </div>
-          <button
-            onClick={() => fetchPipelineData()}
-            style={{
-              alignSelf: 'flex-start',
-              padding: '8px 16px',
-              background: '#f59e0b',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontWeight: '600'
-            }}
-          >
-            🔄 Reintentar
+      <div className="pipeline-dashboard-v2">
+        <div className="dashboard-error">
+          <h3>⚠️ Error loading dashboard</h3>
+          <p>{error}</p>
+          <button className="retry-button" onClick={refetch}>
+            🔄 Retry
           </button>
         </div>
       </div>
@@ -186,191 +176,222 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
   }
 
   if (!data) {
-    return <div className="pipeline-container"><p>No data available</p></div>;
+    return (
+      <div className="pipeline-dashboard-v2">
+        <div className="dashboard-empty">
+          <p>No data available</p>
+        </div>
+      </div>
+    );
   }
-
-  // Safe access with defaults to prevent "missing: 0" errors
-  const files = data.files || { total: 0, completed: 0, processing: 0, errors: 0, percentage_done: 0 };
-  const newsItems = data.news_items || { total: 0, done: 0, pending: 0, errors: 0, percentage_done: 0 };
-  const chunks = data.chunks || { total: 0, done: 0, pending: 0, errors: 0, percentage_done: 0 };
-  const ocrData = data.ocr || { total: 0, successful: 0, errors: 0, percentage_success: 0 };
-  const chunkingData = data.chunking || { total_chunks: 0, indexed: 0, pending: 0, errors: 0, percentage_indexed: 0 };
-  const indexingData = data.indexing || { total: 0, active: 0, pending: 0, errors: 0, percentage_indexed: 0 };
-  const insightsData = data.insights || { total: 0, done: 0, pending: 0, errors: 0, percentage_done: 0, eta_seconds: 0, parallel_workers: 0 };
-  
-  // Prepare data for compact components
-  const errorGroups = analysisData?.errors?.groups || [];
-  const realErrorsCount = errorGroups.filter(g => g.is_real_error).length;
-  
-  const kpiStats = {
-    total_docs: files.total || 0,
-    total_news: newsItems.total || 0,
-    total_insights: insightsData.total || 0,
-    total_errors: realErrorsCount // Use same source as ErrorAnalysisPanel
-  };
 
   return (
     <DashboardProvider>
-      <div className="pipeline-container pipeline-container--compact">
-        {/* Auto-refresh control bar */}
+      <div className="pipeline-dashboard">
+        {/* [1. HEADER] - Title + Refresh Control */}
         <div className="dashboard-header">
-          <h2 className="dashboard-title">Dashboard Pipeline</h2>
-          <div className="refresh-controls">
-            <ClockIcon className="refresh-icon" />
-            <select 
-              value={refreshInterval}
-              onChange={handleRefreshIntervalChange}
-              className="refresh-interval-select"
-              aria-label="Intervalo de auto-refresh"
-            >
-              {REFRESH_INTERVALS.map(interval => (
-                <option key={interval.value} value={interval.value}>
-                  {interval.label}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="refresh-now-button"
-              aria-label="Refrescar ahora"
-            >
-              <ArrowPathIcon className={`refresh-icon ${refreshing ? 'spinning' : ''}`} />
-              Refrescar
-            </button>
+          <div className="dashboard-header__title">
+            <h2>📊 Pipeline Dashboard</h2>
+            <span className="dashboard-header__subtitle">
+              Real-time operational monitoring
+            </span>
           </div>
-        </div>
-        
-        {error && (
-          <div
-            className="error-banner pipeline-dashboard-error-banner"
-            style={{
-              background: '#fff3cd',
-              border: '1px solid #ffc107',
-              color: '#856404',
-              padding: '6px 10px',
-              borderRadius: '4px',
-              fontSize: '11px',
-              flexShrink: 0
-            }}
-          >
-            ⚠️ {error} — mostrando últimos datos
-          </div>
-        )}
-        
-        {/* KPIs Section - Collapsible */}
-        <CollapsibleSection 
-          title="Resumen Pipeline" 
-          icon={ChartBarIcon}
-          priority="high"
-          defaultCollapsed={false}
-        >
-          <KPIsInline stats={kpiStats} />
-        </CollapsibleSection>
-        
-        {/* Pipeline Status Table - Collapsible */}
-        {analysisData?.pipeline?.stages && (
-          <CollapsibleSection 
-            title="Estado del Pipeline" 
-            icon={ArrowPathIcon}
-            priority="high"
-            defaultCollapsed={false}
-          >
-            <PipelineStatusTable 
-              stages={analysisData.pipeline.stages}
-              isAdmin={isAdmin}
-              onPauseToggle={(stageKey, paused) => {
-                console.log('Pause toggle:', stageKey, paused);
-                // TODO: Implement pause toggle API call
-              }}
-            />
-          </CollapsibleSection>
-        )}
-        
-        {/* Workers + Errors side-by-side - Both Collapsible */}
-        <div className="workers-errors-row">
-          {/* Workers Section - Collapsible */}
-          <CollapsibleSection 
-            title="Workers" 
-            icon={UsersIcon}
-            priority="high"
-            defaultCollapsed={false}
-          >
-            <div className="workers-widget-content">
-              <div className="worker-summary">
-                <div className="worker-badge worker-badge--active">
-                  <span className="badge-dot"></span>
-                  {workerStats?.active || 0} activos
-                </div>
-                <div className="worker-badge worker-badge--idle">
-                  <span className="badge-dot"></span>
-                  {workerStats?.idle || 0} idle
-                </div>
-                <div className="worker-badge worker-badge--total">
-                  <span className="badge-dot"></span>
-                  {workerStats?.totalLimit || 25} máx
-                </div>
-              </div>
-              <div className="utilization-bar">
-                <div className="utilization-bar-track">
-                  <div 
-                    className="utilization-bar-fill"
-                    style={{ 
-                      width: `${workerStats && workerStats.totalLimit ? 
-                        Math.round((workerStats.active / workerStats.totalLimit) * 100) : 0}%` 
-                    }}
-                  />
-                </div>
-                <span className="utilization-label">
-                  {workerStats && workerStats.totalLimit ? 
-                    `${workerStats.active} / ${workerStats.totalLimit} (${Math.round((workerStats.active / workerStats.totalLimit) * 100)}%)` :
-                    '0 / 25 (0%)'
-                  }
-                </span>
-              </div>
+
+          <div className="dashboard-header__controls">
+            <div className="refresh-control">
+              <ClockIcon className="refresh-control__icon" />
+              <select
+                value={refreshInterval}
+                onChange={handleRefreshIntervalChange}
+                className="refresh-control__select"
+                aria-label="Auto-refresh interval"
+              >
+                {REFRESH_INTERVALS.map(interval => (
+                  <option key={interval.value} value={interval.value}>
+                    {interval.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={refetch}
+                disabled={refreshing}
+                className="refresh-control__button"
+                aria-label="Refresh now"
+              >
+                <ArrowPathIcon className={`refresh-icon ${refreshing ? 'spinning' : ''}`} />
+                Refresh
+              </button>
             </div>
-          </CollapsibleSection>
-          
-          {/* Error Panel - Already Collapsible */}
-          <CollapsibleSection 
-            title="Análisis de Errores" 
-            icon={ExclamationTriangleIcon} 
+          </div>
+        </div>
+
+        {/* Error banner (if refresh error but has cached data) */}
+        {error && data && (
+          <div className="dashboard-banner dashboard-banner--warning">
+            ⚠️ {error} — Showing last cached data
+          </div>
+        )}
+
+        {/* [2. KPI ROW] - 4 cards with sparklines */}
+        <section className="dashboard-section dashboard-section--kpis">
+          <KPIRow
+            kpis={data.kpis}
+            historicalData={[]} // TODO: Add historical data endpoint
+          />
+        </section>
+
+        {/* [2.5. PIPELINE STAGES] - Status table with pause controls */}
+        {data.pipeline?.stages && (
+          <section className="dashboard-section dashboard-section--stages">
+            <CollapsibleSection
+              title="Pipeline Stages"
+              icon={ChartBarIcon}
+              priority="high"
+              defaultCollapsed={false}
+            >
+              {/* Global Pause Control (Admin only) */}
+              {isAdmin && (
+                <div className="pipeline-global-control">
+                  <button
+                    onClick={handlePauseAll}
+                    className="pause-all-button"
+                    title={
+                      data.pipeline.stages.filter(s => s.pauseKey).every(s => s.paused)
+                        ? "Reanudar todas las etapas"
+                        : "Pausar todas las etapas"
+                    }
+                  >
+                    {data.pipeline.stages.filter(s => s.pauseKey).every(s => s.paused) ? (
+                      <>
+                        <PlayIcon style={{ width: 16, height: 16 }} />
+                        <span>Reanudar TODO</span>
+                      </>
+                    ) : (
+                      <>
+                        <PauseIcon style={{ width: 16, height: 16 }} />
+                        <span>Pausar TODO</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+              
+              <PipelineStatusTable
+                stages={data.pipeline.stages}
+                isAdmin={isAdmin}
+                onPauseToggle={handlePauseToggle}
+              />
+            </CollapsibleSection>
+          </section>
+        )}
+
+        {/* [2.6. EXPIRED INSIGHTS] - Insights that hit max retries (Admin only) */}
+        {isAdmin && (
+          <section className="dashboard-section dashboard-section--expired">
+            <CollapsibleSection
+              title="Expired Insights (Max Retries)"
+              icon={ExclamationTriangleIcon}
+              priority="medium"
+              defaultCollapsed={true}
+            >
+              <ExpiredInsightsPanel
+                API_URL={API_URL}
+                token={token}
+                refreshTrigger={refreshTrigger}
+              />
+            </CollapsibleSection>
+          </section>
+        )}
+
+        {/* [3. MAIN ANALYSIS ROW] - Flow + Workers */}
+        <section className="dashboard-section dashboard-section--main">
+          <div className="main-analysis-grid">
+            {/* Pipeline Flow (60%) */}
+            <div className="main-analysis-grid__flow">
+              <CollapsibleSection
+                title="Pipeline Flow"
+                icon={MapIcon}
+                priority="high"
+                defaultCollapsed={false}
+              >
+                <PipelineFlowPanel
+                  analysisData={data.pipeline}
+                  parallelData={data.parallelData}
+                  documents={data.documents}
+                  width={720}
+                />
+              </CollapsibleSection>
+            </div>
+
+            {/* Workers (40%) */}
+            <div className="main-analysis-grid__workers">
+              <CollapsibleSection
+                title="Workers Status"
+                icon={UsersIcon}
+                priority="high"
+                defaultCollapsed={false}
+              >
+                <WorkerStatusPanel
+                  workerCapacity={data.workers.capacity}
+                />
+              </CollapsibleSection>
+            </div>
+          </div>
+        </section>
+
+        {/* [4. DIAGNOSTIC ROW] - Errors */}
+        <section className="dashboard-section dashboard-section--diagnostic">
+          <CollapsibleSection
+            title="Error Analysis"
+            icon={ExclamationTriangleIcon}
             priority="high"
             defaultCollapsed={false}
           >
-            <ErrorAnalysisPanel 
-              API_URL={API_URL} 
-              token={token} 
-              refreshTrigger={refreshTrigger}
-              preloadedAnalysis={analysisData}
+            <ErrorAnalysisPanelV2
+              errorGroups={data.errors.groups}
+              API_URL={API_URL}
+              token={token}
+              onRefresh={refetch}
             />
           </CollapsibleSection>
-        </div>
-        
-        {/* Coordenadas Paralelas - Collapsible */}
-        <CollapsibleSection 
-          title="Flujo Pipeline: Documento → Noticias → Insights" 
-          icon={MapIcon}
-          priority="normal"
-          defaultCollapsed={false}
-        >
-          <ParallelPipelineCoordinates data={parallelData} documents={documents} />
-        </CollapsibleSection>
-        
-        {/* Auxiliary panels (only shown if needed) */}
-        <div className="pipeline-dashboard-aux pipeline-dashboard-aux--collapsed">
-          <CollapsibleSection 
-            title="Estado de Base de Datos" 
+        </section>
+
+        {/* [5. DETAIL ROW] - Auxiliary panels */}
+        <section className="dashboard-section dashboard-section--details">
+          <CollapsibleSection
+            title="Database Status"
             icon={CircleStackIcon}
             priority="low"
-            defaultCollapsed
+            defaultCollapsed={true}
           >
-            <DatabaseStatusPanel API_URL={API_URL} token={token} refreshTrigger={refreshTrigger} embedded />
+            <DatabaseStatusPanel
+              API_URL={API_URL}
+              token={token}
+              refreshTrigger={refreshTrigger}
+              embedded
+            />
           </CollapsibleSection>
+        </section>
+
+        {/* Footer info */}
+        <div className="dashboard-footer">
+          <span className="dashboard-footer__version">
+            Dashboard v5.0.0-alpha
+          </span>
+          <span className="dashboard-footer__updated">
+            Last updated: {new Date().toLocaleTimeString()}
+          </span>
         </div>
       </div>
     </DashboardProvider>
   );
 }
+
+PipelineDashboard.propTypes = {
+  API_URL: PropTypes.string.isRequired,
+  token: PropTypes.string.isRequired,
+  refreshTrigger: PropTypes.number,
+  isAdmin: PropTypes.bool
+};
 
 export default PipelineDashboard;
