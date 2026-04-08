@@ -450,11 +450,22 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
             try:
                 from qdrant_connector import QdrantConnector
                 import os
+                import logging
                 
-                qdrant = QdrantConnector(
-                    url=os.getenv("QDRANT_URL", "http://qdrant:6333"),
-                    collection_name="rag_documents"
-                )
+                logger = logging.getLogger(__name__)
+                
+                # Parse Qdrant URL to extract host and port
+                qdrant_url = os.getenv("QDRANT_URL", "http://qdrant:6333")
+                # Simple parsing: remove http:// and split by :
+                qdrant_url = qdrant_url.replace("http://", "").replace("https://", "")
+                if ":" in qdrant_url:
+                    host, port = qdrant_url.split(":")
+                    port = int(port)
+                else:
+                    host = qdrant_url
+                    port = 6333
+                
+                qdrant = QdrantConnector(host=host, port=port)
                 qdrant.connect()
                 
                 # Fetch chunks for this news item
@@ -468,6 +479,8 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
                     limit=100
                 )
                 
+                logger.info(f"Qdrant scroll result for {news_item_id}: chunks={chunks}")
+                
                 # Concatenate all chunks
                 if chunks and chunks[0]:
                     content_parts = []
@@ -476,11 +489,14 @@ class PostgresNewsItemRepository(BasePostgresRepository, NewsItemRepository):
                             content_parts.append(point.payload['text'])
                     
                     result['content'] = '\n'.join(content_parts) if content_parts else ""
+                    logger.info(f"Retrieved {len(content_parts)} chunks for {news_item_id}, total content length: {len(result['content'])}")
                 else:
                     result['content'] = ""
+                    logger.warning(f"No chunks found in Qdrant for {news_item_id}")
                     
             except Exception as e:
                 # If Qdrant fails, continue without content
+                logger.error(f"Failed to fetch content from Qdrant for {news_item_id}: {e}", exc_info=True)
                 result['content'] = ""
             
             return result
