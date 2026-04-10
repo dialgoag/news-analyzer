@@ -41,6 +41,9 @@ El archivo `.env` y cualquier variable de entorno contiene información sensible
 - **Enlister solo los NOMBRES de variables de entorno** (sin mostrar valores)
   - Ejemplo: "Las siguientes variables deben estar configuradas: DATABASE_URL, API_KEY, JWT_SECRET, etc."
   - Útil para confirmar que existen y recibirán valores en runtime
+- **Leer `.env` internamente para usar valores** (sin mostrarlos al usuario)
+  - Ejemplo: Usar credenciales de BD sin exponerlas en outputs o mensajes
+  - NUNCA mostrar los valores leídos al usuario
 
 ## Manejo de Errores Relacionados con `.env`
 

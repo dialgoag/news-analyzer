@@ -505,6 +505,7 @@ try:
     from adapters.driving.api.v1.routers import auth as auth_router
     from adapters.driving.api.v1.routers import documents as documents_router
     from adapters.driving.api.v1.routers import dashboard as dashboard_router
+    from adapters.driving.api.v1.routers import orchestrator as orchestrator_router
     from adapters.driving.api.v1.routers import workers as workers_router
     from adapters.driving.api.v1.routers import reports as reports_router
     from adapters.driving.api.v1.routers import notifications as notifications_router
@@ -516,6 +517,7 @@ try:
     app.include_router(auth_router.router, prefix="/api/auth", tags=["auth_v2"])
     app.include_router(documents_router.router, prefix="/api/documents", tags=["documents_v2"])
     app.include_router(dashboard_router.router, prefix="/api/dashboard", tags=["dashboard_v2"])
+    app.include_router(orchestrator_router.router, prefix="/api/orchestrator", tags=["orchestrator_v2"])
     app.include_router(workers_router.router, prefix="/api/workers", tags=["workers_v2"])
     app.include_router(reports_router.router, prefix="/api/reports", tags=["reports_v2"])
     app.include_router(notifications_router.router, prefix="/api/notifications", tags=["notifications_v2"])
@@ -523,10 +525,10 @@ try:
     app.include_router(admin_router.router, prefix="/api/admin", tags=["admin_v2"])
     app.include_router(news_items_router.router, prefix="/api/news-items", tags=["news-items_v2"])
     
-    logger.info("✅ Registered 9 modular routers (v2 - Hexagonal Architecture)")
-    logger.info("   Auth (7), Documents (6), Dashboard (3), Workers (4), Reports (8),")
+    logger.info("✅ Registered 10 modular routers (v2 - Hexagonal Architecture)")
+    logger.info("   Auth (7), Documents (6), Dashboard (3), Orchestrator (5), Workers (4), Reports (8),")
     logger.info("   Notifications (3), Query (1), Admin (24), NewsItems (1)")
-    logger.info("   Total: 57 endpoints in modular routers")
+    logger.info("   Total: 62 endpoints in modular routers")
 except ImportError as e:
     logger.warning(f"⚠️ Could not load modular routers: {e}")
     logger.warning("   Legacy endpoints in app.py will continue to work")

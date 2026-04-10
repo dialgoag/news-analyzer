@@ -4,8 +4,10 @@ FastAPI Dependencies for Dependency Injection
 Provides repository instances, services, and auth dependencies
 following Hexagonal Architecture principles.
 """
+import asyncpg
+import os
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Optional
 
 from fastapi import Depends
 
@@ -35,6 +37,39 @@ from core.ports.repositories.user_repository import UserRepository
 
 # Auth imports
 from middleware import get_current_user, require_admin, CurrentUser
+
+
+# Asyncpg pool singleton for Orchestrator
+_asyncpg_pool: Optional[asyncpg.Pool] = None
+
+
+async def get_db_pool() -> asyncpg.Pool:
+    """
+    Get singleton AsyncPG connection pool for Orchestrator Agent.
+    
+    This pool is used by the Orchestrator Agent and its dashboard endpoints
+    for async database operations.
+    """
+    global _asyncpg_pool
+    
+    if _asyncpg_pool is None:
+        # Build connection string from env vars
+        user = os.getenv("POSTGRES_USER", "raguser")
+        password = os.getenv("POSTGRES_PASSWORD", "ragpassword")
+        host = os.getenv("POSTGRES_HOST", "postgres")
+        port = os.getenv("POSTGRES_PORT", "5432")
+        db = os.getenv("POSTGRES_DB", "rag_enterprise")
+        
+        db_url = f"postgresql://{user}:{password}@{host}:{port}/{db}"
+        
+        _asyncpg_pool = await asyncpg.create_pool(
+            db_url,
+            min_size=2,
+            max_size=10,
+            command_timeout=60
+        )
+    
+    return _asyncpg_pool
 
 
 # Repository factory functions (singleton pattern)

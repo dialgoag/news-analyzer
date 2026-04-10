@@ -41,7 +41,7 @@ services:
     # ~24 Gi Colima: tope 10 g (prioridad OCR); reserva baja para no robar aire a Postgres/backend.
     mem_reservation: 4g
     mem_limit: 10g
-    cpus: 7
+    cpus: 3
     environment:
       TESSERACT_LANG: spa+eng
       OCR_THREADS: 5
