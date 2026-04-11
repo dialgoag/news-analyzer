@@ -5915,3 +5915,125 @@ Propuesta: Poll /api/dashboard/analysis cada 1s hasta ver cambio
 - Compatible con autenticación Bearer token
 - Respeta timeout de API (30 segundos)
 
+---
+
+## 2026-04-10
+
+### Cambio: REQ-027 — Migración a Orchestrator Agent (FASE 1 + FASE 2)
+
+**Decisión**: Refactor completo a arquitectura **Full Orchestrator Agent** con migración progresiva validada.
+
+**Contexto**:
+Durante diagnóstico profundo de calidad OCR, usuario solicitó:
+- Dashboard con visibilidad de cada paso del pipeline (input/proceso/output)
+- Metadata de archivos (`{date}-{newspaper}.pdf`) usada para organización/indexing
+- Sistema observable donde cada momento esté en BD
+- Migración sin romper sistema actual (351 docs legacy)
+
+Arquitectura event-driven actual **limita**:
+- Decisiones inteligentes cross-stage (ej: retry OCR con Tika si PyMuPDF falla)
+- Recovery robusto (errores sin contexto propagado)
+- Observabilidad completa (eventos dispersos, difícil debuggear)
+- Aprovechamiento de metadata (filename patterns no usados)
+
+**Alternativas consideradas**:
+
+1. **Mantener Event-Driven + Mejorar Observabilidad**:
+   - ❌ No resuelve decisiones inteligentes cross-stage
+   - ❌ Recovery sigue siendo limitado
+   - ❌ Eventos sigue dispersos (difícil trazabilidad)
+   - ❌ No aprovecha LangGraph para contexto compartido
+
+2. **Arquitectura Híbrida** (Event-Driven + Orchestrator limitado):
+   - ⚠️ Complejidad mantenimiento (2 sistemas coexistiendo permanente)
+   - ⚠️ Inconsistencia (algunos docs por event-driven, otros por orchestrator)
+   - ⚠️ No fuerza migración completa
+
+3. **Full Orchestrator Agent** (ELEGIDA):
+   - ✅ Decisiones inteligentes (LangGraph conditional edges + contexto compartido)
+   - ✅ Recovery robusto (errors propagados con contexto completo)
+   - ✅ Observabilidad nativa (`document_processing_log` + `pipeline_results`)
+   - ✅ Metadata inteligente (filename patterns → indexing automático)
+   - ✅ Migración progresiva con validación (LegacyDataAdapter valida legacy vs nuevo)
+   - ✅ Cleanup automático al 100% (elimina event-driven cuando todo migrado)
+
+**Implementación**:
+
+**FASE 1: Preparación BD + LegacyDataRepository** (Fix #160):
+- 3 tablas nuevas: `migration_tracking`, `document_processing_log`, `pipeline_results`
+- 2 vistas: `migration_progress`, `migration_pending_documents`
+- `LegacyDataRepository` (lee/valida datos legacy)
+- Script `mark_documents_as_legacy.py` (marca 351 docs existentes)
+
+**FASE 2: Orchestrator Agent Base** (Fix #161):
+- `PipelineOrchestratorAgent` (13 nodos: 6 processing + 6 legacy adapters + check_legacy)
+- 5 stages funcionales: Upload, Validation, OCR, Segmentation, Chunking, Indexing, Insights
+- Conditional edges inteligentes (skip legacy si `migration_mode=False`)
+- 5 endpoints Dashboard API:
+  - `GET /document-timeline/{doc_id}` → Timeline completo
+  - `GET /pipeline-metrics` → Métricas por stage
+  - `GET /migration-progress` → Progreso legacy→new
+  - `GET /recent-errors` → Debug
+  - `GET /active-processing` → Docs en proceso
+- AsyncPG pool singleton (2-10 conexiones async)
+
+**Ventajas clave Orchestrator**:
+1. **Contexto compartido**: `pipeline_context` viaja con documento (metadata, decisiones, errores)
+2. **Decisiones inteligentes**: OCR node puede decidir "retry con Tika" si PyMuPDF falla
+3. **Recovery robusto**: Error en segmentation → Orchestrator puede retry con diferentes params
+4. **Observabilidad nativa**: Cada evento en BD (`document_processing_log`), cada resultado en `pipeline_results`
+5. **Validación progresiva**: LegacyDataAdapter compara legacy vs nuevo, mezcla según priority
+
+**Estrategia de Migración**:
+```
+Event-Driven (legacy) → Coexistencia → Orchestrator (nuevo) → Cleanup
+      ↓                       ↓                    ↓              ↓
+   Procesa                Valida              100% nuevo      Elimina
+   351 docs              legacy vs            migrado         legacy
+   actuales              nuevo                                system
+```
+
+**Impacto en roadmap**:
+- **FASE 3** (4 semanas): Dashboard migración + test E2E + batch pequeño (10 docs)
+- **FASE 4** (2 semanas): Migración masiva (351 docs) + cleanup automático legacy
+- **Timeline total**: 8 semanas (abril-mayo 2026)
+- **Versión target**: v5.0.0 (Orchestrator completo)
+
+**Riesgos identificados**:
+- ⚠️ **Complejidad ALTA**: Orchestrator + LegacyAdapter + Event-Driven coexistiendo
+  - Mitigación: Migración progresiva, validación automática, no eliminar legacy hasta 100%
+- ⚠️ **Performance**: Query async pueden ser más lentas que event-driven
+  - Mitigación: AsyncPG pool optimizado, queries con índices, caching cuando aplique
+- ⚠️ **Regresiones**: Cambio arquitectónico puede romper funcionalidad
+  - Mitigación: Test E2E, validación legacy vs nuevo antes de eliminar legacy
+
+**Documentación técnica creada** (7 archivos):
+1. `OCR_DIAGNOSIS_2026-04-10.md` (1115 líneas - diagnóstico completo)
+2. `AGENT_ORCHESTRATION_ARCHITECTURE.md` (448 líneas - comparación arquitecturas)
+3. `REQ-027_ORCHESTRATOR_MIGRATION.md` (plan 4 fases)
+4. `PHASE1_2_IMPLEMENTATION_COMPLETE.md`
+5. `PHASE2_ABDC_IMPLEMENTATION_COMPLETE.md`
+6. `COMMIT_SUMMARY.md`
+7. `VERIFICATION_CHECKLIST.md`
+
+**Testing realizado**:
+- ✅ Migración BD aplicada (3 tablas + 2 vistas)
+- ✅ Script `mark_documents_as_legacy.py` funciona (351 docs)
+- ✅ Orchestrator graph builds correctamente
+- ✅ 5 endpoints API responden (con datos mock)
+- ✅ AsyncPG pool singleton funciona
+- [ ] Test E2E con documento real - PENDIENTE (FASE 3)
+- [ ] Validación legacy vs nuevo - PENDIENTE (FASE 3)
+
+**Archivos modificados**:
+- Backend: 5 nuevos (orchestrator graph, router, repository, models, test) + 2 modificados (dependencies, app.py)
+- BD: 1 migración nueva (021_legacy_migration_tracking.sql)
+- Scripts: 1 nuevo (mark_documents_as_legacy.py)
+- Docs: 7 nuevos archivos técnicos
+
+**Integración con otras peticiones**:
+- REQ-022 (Dashboard redesign): Orchestrator API provee datos para nuevo dashboard ✅
+- REQ-025 (Tabla expandible): `pipeline_results` almacena data para drill-down ✅
+- REQ-024 (Segmentation Agent): Ya integrado como sub-agente ✅
+- REQ-023 (OCR Validation): Ya integrado en InsightsGraph ✅
+

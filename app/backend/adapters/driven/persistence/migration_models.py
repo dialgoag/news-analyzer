@@ -120,7 +120,7 @@ class ValidationResult(BaseModel):
                 raise ValueError(f"Match status requires similarity >= 0.95, got {v}")
         return v
     
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def validate_no_legacy_status(cls, values):
         """Validate that no_legacy status has no similarity"""
         status = values.get('status')

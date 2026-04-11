@@ -4,12 +4,12 @@
 > 
 > **⚠️ NOTA IMPORTANTE**: Ver `CONSOLIDATED_STATUS.md` para el estatus completo.
 >
-> **📋 ÚLTIMO**: REQ-024 — News Segmentation Agent (LLM-based article detection) ✅ IMPLEMENTADO (Fases 1-4).
+> **📋 ÚLTIMO**: REQ-027 — Pipeline Orchestrator Agent (FASE 1+2 COMPLETADAS, FASE 3+4 PENDIENTES)
 
-**Última actualización**: 2026-04-08  
-**Versión**: 4.3.0 (Upload Worker Stage IMPLEMENTADO)
+**Última actualización**: 2026-04-10  
+**Versión**: 5.0.0-alpha (Orchestrator Backend COMPLETADO, Frontend Integration PENDIENTE)
 
-**Nota**: REQ-025 documentada - "Seguimiento granular de segmentos" (📋 PENDIENTE para v5.1.0+); REQ-026 completada - "Upload Worker Stage"
+**Nota**: REQ-027 FASE 1+2 completadas (BD + Orchestrator Backend); REQ-025 documentada - "Seguimiento granular de segmentos" (📋 PENDIENTE para v5.1.0+); REQ-026 completada - "Upload Worker Stage"
 
 ---
 

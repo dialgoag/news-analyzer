@@ -31,6 +31,8 @@ import PipelineFlowPanel from './dashboard/flow/PipelineFlowPanel';
 import PipelineStatusTable from './dashboard/PipelineStatusTable';
 import ExpiredInsightsPanel from './dashboard/ExpiredInsightsPanel';
 import DatabaseStatusPanel from './dashboard/DatabaseStatusPanel';
+import DocumentTimelinePanel from './dashboard/DocumentTimelinePanel';
+import PipelineStagesMetrics from './dashboard/PipelineStagesMetrics';
 import { API_TIMEOUT_MS } from '../config/apiConfig';
 import './PipelineDashboard.css';
 
@@ -54,6 +56,8 @@ const getStoredRefreshInterval = () => {
 
 export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = false }) {
   const [refreshInterval, setRefreshInterval] = useState(getStoredRefreshInterval);
+  const [selectedDocumentId, setSelectedDocumentId] = useState(null);
+  const [documentSearchQuery, setDocumentSearchQuery] = useState('');
 
   // Use centralized data hook
   const { data, loading, error, refreshing, refetch } = useDashboardData(
@@ -232,9 +236,9 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
 
   return (
     <DashboardProvider>
-      <div className="pipeline-dashboard">
+      <div className="pipeline-dashboard" data-section="dashboard-root">
         {/* [1. HEADER] - Title + Refresh Control */}
-        <div className="dashboard-header">
+        <div className="dashboard-header" data-section="hero-title-auto-refresh">
           <div className="dashboard-header__title">
             <h2>📊 Pipeline Dashboard</h2>
             <span className="dashboard-header__subtitle">
@@ -278,7 +282,10 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
         )}
 
         {/* [2. KPI ROW] - 4 cards with sparklines */}
-        <section className="dashboard-section dashboard-section--kpis">
+        <section
+          className="dashboard-section dashboard-section--kpis"
+          data-section="kpi-overview"
+        >
           <KPIRow
             kpis={data.kpis}
             historicalData={[]} // TODO: Add historical data endpoint
@@ -287,7 +294,10 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
 
         {/* [2.5. PIPELINE STAGES] - Status table with pause controls */}
         {data.pipeline?.stages && (
-          <section className="dashboard-section dashboard-section--stages">
+          <section
+            className="dashboard-section dashboard-section--stages"
+            data-section="pipeline-stages-status"
+          >
             <CollapsibleSection
               title="Pipeline Stages"
               icon={ChartBarIcon}
@@ -329,7 +339,10 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
 
         {/* [2.6. EXPIRED INSIGHTS] - Insights that hit max retries (Admin only) */}
         {isAdmin && (
-          <section className="dashboard-section dashboard-section--expired">
+          <section
+            className="dashboard-section dashboard-section--expired"
+            data-section="expired-insights"
+          >
             <CollapsibleSection
               title="Expired Insights (Max Retries)"
               icon={ExclamationTriangleIcon}
@@ -346,10 +359,16 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
         )}
 
         {/* [3. MAIN ANALYSIS ROW] - Flow + Workers */}
-        <section className="dashboard-section dashboard-section--main">
+        <section
+          className="dashboard-section dashboard-section--main"
+          data-section="analysis-row"
+        >
           <div className="main-analysis-grid">
             {/* Pipeline Flow (60%) */}
-            <div className="main-analysis-grid__flow">
+            <div
+              className="main-analysis-grid__flow"
+              data-section="flow-explorer"
+            >
               <CollapsibleSection
                 title="Pipeline Flow"
                 icon={MapIcon}
@@ -366,7 +385,10 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
             </div>
 
             {/* Workers (40%) */}
-            <div className="main-analysis-grid__workers">
+            <div
+              className="main-analysis-grid__workers"
+              data-section="worker-status"
+            >
               <CollapsibleSection
                 title="Workers Status"
                 icon={UsersIcon}
@@ -382,7 +404,10 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
         </section>
 
         {/* [4. DIAGNOSTIC ROW] - Errors */}
-        <section className="dashboard-section dashboard-section--diagnostic">
+        <section
+          className="dashboard-section dashboard-section--diagnostic"
+          data-section="error-analysis"
+        >
           <CollapsibleSection
             title="Error Analysis"
             icon={ExclamationTriangleIcon}
@@ -399,7 +424,10 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
         </section>
 
         {/* [5. DETAIL ROW] - Auxiliary panels */}
-        <section className="dashboard-section dashboard-section--details">
+        <section
+          className="dashboard-section dashboard-section--details"
+          data-section="database-health"
+        >
           <CollapsibleSection
             title="Database Status"
             icon={CircleStackIcon}
@@ -415,8 +443,130 @@ export function PipelineDashboard({ API_URL, token, refreshTrigger, isAdmin = fa
           </CollapsibleSection>
         </section>
 
+        {/* [6. ORCHESTRATOR METRICS] - Pipeline performance metrics from Orchestrator Agent */}
+        <section
+          className="dashboard-section dashboard-section--orchestrator"
+          data-section="orchestrator-metrics"
+        >
+          <CollapsibleSection
+            title="Orchestrator Metrics (v2)"
+            icon={ChartBarIcon}
+            priority="medium"
+            defaultCollapsed={false}
+          >
+            <PipelineStagesMetrics
+              API_URL={API_URL}
+              token={token}
+              refreshInterval={refreshInterval}
+            />
+          </CollapsibleSection>
+        </section>
+
+        {/* [7. DOCUMENT TIMELINE] - Timeline of events for a specific document */}
+        {data.documents && data.documents.length > 0 && (
+          <section
+            className="dashboard-section dashboard-section--timeline"
+            data-section="document-timeline"
+          >
+            <CollapsibleSection
+              title="Document Timeline (Orchestrator v2)"
+              icon={ClockIcon}
+              priority="low"
+              defaultCollapsed={!selectedDocumentId}
+              headerAction={
+                <div className="document-selector" style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <label htmlFor="document-search" style={{ marginRight: '8px', color: '#94a3b8', fontSize: '14px' }}>
+                    Buscar documento:
+                  </label>
+                  <input
+                    id="document-search"
+                    type="text"
+                    placeholder="Buscar por nombre, fecha o periódico..."
+                    value={documentSearchQuery}
+                    onChange={(e) => setDocumentSearchQuery(e.target.value)}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #334155',
+                      background: '#1e293b',
+                      color: '#f8fafc',
+                      fontSize: '13px',
+                      minWidth: '300px'
+                    }}
+                  />
+                  <select
+                    id="document-select"
+                    value={selectedDocumentId || ''}
+                    onChange={(e) => setSelectedDocumentId(e.target.value || null)}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #334155',
+                      background: '#1e293b',
+                      color: '#f8fafc',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      minWidth: '400px',
+                      maxWidth: '600px'
+                    }}
+                  >
+                    <option value="">-- Seleccionar documento --</option>
+                    {data.documents
+                      .filter(doc => {
+                        if (!documentSearchQuery) return true;
+                        const query = documentSearchQuery.toLowerCase();
+                        const filename = (doc.filename || '').toLowerCase();
+                        const docId = (doc.document_id || '').toLowerCase();
+                        return filename.includes(query) || docId.includes(query);
+                      })
+                      .slice(0, 50)
+                      .map(doc => (
+                        <option key={doc.document_id} value={doc.document_id}>
+                          {doc.filename || doc.document_id} {doc.file_size_mb ? `(${doc.file_size_mb.toFixed(1)} MB)` : ''}
+                        </option>
+                      ))}
+                  </select>
+                  {documentSearchQuery && (
+                    <span style={{ fontSize: '12px', color: '#64748b' }}>
+                      {data.documents.filter(doc => {
+                        const query = documentSearchQuery.toLowerCase();
+                        const filename = (doc.filename || '').toLowerCase();
+                        const docId = (doc.document_id || '').toLowerCase();
+                        return filename.includes(query) || docId.includes(query);
+                      }).length} resultados
+                    </span>
+                  )}
+                </div>
+              }
+            >
+              {selectedDocumentId ? (
+                <DocumentTimelinePanel
+                  documentId={selectedDocumentId}
+                  API_URL={API_URL}
+                  token={token}
+                />
+              ) : (
+                <div style={{ 
+                  padding: '40px', 
+                  textAlign: 'center', 
+                  color: '#64748b',
+                  background: '#0f172a',
+                  borderRadius: '8px'
+                }}>
+                  <p style={{ margin: 0, marginBottom: '8px' }}>
+                    Selecciona un documento arriba para ver su timeline de procesamiento
+                  </p>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#475569' }}>
+                    💡 Tip: Usa el campo de búsqueda para filtrar por nombre, fecha o periódico
+                  </p>
+                </div>
+              )}
+            </CollapsibleSection>
+          </section>
+        )}
+
         {/* Footer info */}
-        <div className="dashboard-footer">
+        <div className="dashboard-footer" data-section="footer-version">
           <span className="dashboard-footer__version">
             Dashboard v5.0.0-alpha
           </span>

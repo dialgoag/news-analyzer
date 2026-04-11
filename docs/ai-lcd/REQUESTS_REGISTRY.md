@@ -2,9 +2,9 @@
 
 > **Propósito**: Rastrear TODAS las peticiones del usuario con trazabilidad completa
 > 
-> **Última actualización**: 2026-04-08  
-> **Total peticiones**: 24  
-> **Completadas**: 20 | Pendientes: 4 (REQ-014, REQ-021 parcial, REQ-022, REQ-025) | Rechazadas: 0
+> **Última actualización**: 2026-04-10  
+> **Total peticiones**: 27  
+> **Completadas**: 21 | Pendientes: 6 (REQ-014, REQ-021 parcial, REQ-022, REQ-025, REQ-027 parcial) | Rechazadas: 0
 
 > **Pendientes técnicos** (mejoras, fixes): ver `PENDING_BACKLOG.md` (fuente única).
 
@@ -41,6 +41,7 @@
 | **REQ-024** | 2026-04-08 | "News Segmentation Agent (LLM-based intelligent article detection)" | ✅ **COMPLETADA** | v4.2.0 | #154 |
 | **REQ-025** | 2026-04-08 | "Tabla expandible seguimiento granular (input/proceso/output por stage)" | 📋 **DOCUMENTADA** | v5.1.0 | — |
 | **REQ-026** | 2026-04-08 | "Upload como Worker Stage completo (pausable, stats, errors, retry)" | ✅ **COMPLETADA** | v4.3.0 | #157 |
+| **REQ-027** | 2026-04-10 | "Migración a Orchestrator Agent con validación legacy progresiva" | 🔄 **EN PROGRESO** | v5.0.0 | #159, #160, #161 |
 
 ---
 
@@ -2378,4 +2379,164 @@ Usuario preguntó si podría usarse LLM local para validar noticias cortas y cor
 **Doc**: `docs/ai-lcd/02-construction/OCR_VALIDATION_AND_WEB_ENRICHMENT.md`
 
 **Versión**: v5.1.0
+
+---
+
+## REQ-027: Migración a Orchestrator Agent con Validación Legacy Progresiva
+
+- **Fecha**: 2026-04-10
+- **Sesión**: Sesión 60 (Diagnóstico OCR + Refactor Arquitectónico)
+- **Prioridad**: 🔴 **CRÍTICA** (refactor arquitectónico completo)
+- **Estado**: 🔄 **EN PROGRESO** (FASE 1 y 2 completadas, FASE 3 y 4 pendientes)
+
+### Contexto
+
+Durante diagnóstico profundo de calidad OCR, se identificó que arquitectura event-driven actual limita:
+- Capacidad de tomar decisiones inteligentes entre stages (ej: retry OCR con Tika si PyMuPDF falla)
+- Visibilidad completa de pipeline (difícil debuggear errores cross-stage)
+- Recovery robusto (errores en un stage no comunican contexto a siguientes)
+- Aprovechamiento de metadata de archivos (`{date}-{newspaper}.pdf` → organización automática)
+
+**Usuario solicitó**:
+- Dashboard con visibilidad completa de cada paso del pipeline (input/proceso/output)
+- Metadata de archivos usada para indexing inteligente
+- Sistema observable donde cada momento del pipeline esté en BD
+- Migración progresiva sin romper sistema actual (351 docs legacy)
+
+### Solución Propuesta: Full Orchestrator Agent
+
+**Arquitectura elegida** (ver `AGENT_ORCHESTRATION_ARCHITECTURE.md`):
+- **Orchestrator Agent** (LangGraph) como cerebro central
+- Sub-agentes como tools (OCR, Segmentation, Chunking, Indexing, Insights)
+- **LegacyDataAdapter Node** para validación progresiva (lee legacy, procesa nuevo, compara, mezcla)
+- Coexistencia event-driven (legacy) + Orchestrator (nuevo) durante migración
+- Cleanup automático cuando 100% documentos migrados
+
+**Estrategia de Migración (4 Fases)**:
+
+1. **FASE 1: Preparación BD** ✅ **COMPLETADA** (Fix #160)
+   - Tablas: `migration_tracking`, `document_processing_log`, `pipeline_results`
+   - Vistas: `migration_progress`, `migration_pending_documents`
+   - Script: `mark_documents_as_legacy.py` (marca 351 docs existentes)
+   - `LegacyDataRepository` para leer/validar datos legacy
+
+2. **FASE 2: Orchestrator Agent Base** ✅ **COMPLETADA** (Fix #161)
+   - 13 nodos funcionales (6 processing + 6 legacy adapters + check_legacy)
+   - 5 stages reales: Upload, Validation, OCR, Segmentation, Chunking, Indexing, Insights
+   - Legacy adapter condicional (solo si `migration_mode=True`)
+   - 5 endpoints Dashboard API (`document-timeline`, `pipeline-metrics`, `migration-progress`, etc.)
+   - AsyncPG pool singleton para queries async
+
+3. **FASE 3: MigrationTracker + Dashboard** 🔄 **PENDIENTE**
+   - Dashboard de progreso de migración (legacy→new)
+   - Auto-detección de 100% completado
+   - Cleanup automático de schedulers legacy
+   - Test masivo (351 documentos)
+
+4. **FASE 4: Cleanup Legacy** 🔄 **PENDIENTE**
+   - Eliminar event-driven schedulers
+   - Remover tablas obsoletas
+   - Consolidar Orchestrator como única fuente
+
+### Contradicciones Verificadas
+
+- **REQ-022** (Dashboard redesign): ✅ **COMPLEMENTA** - Orchestrator API provee datos para nuevo dashboard
+- **REQ-025** (Tabla expandible): ✅ **COMPLEMENTA** - `pipeline_results` table almacena data para drill-down
+- **REQ-024** (Segmentation Agent): ✅ **INTEGRADO** - Ya es uno de los sub-agentes del Orchestrator
+- **REQ-023** (OCR Validation): ✅ **INTEGRADO** - Ya es parte del InsightsGraph usado por Orchestrator
+
+### Archivos Afectados
+
+**FASE 1 (BD + Repository)**:
+- NEW: `backend/migrations/021_legacy_migration_tracking.sql` (3 tablas + 2 vistas)
+- NEW: `backend/adapters/driven/persistence/legacy_data_repository.py` (LegacyDataRepository)
+- NEW: `backend/adapters/driven/persistence/migration_models.py` (Pydantic models)
+- NEW: `backend/scripts/mark_documents_as_legacy.py` (migración de 351 docs)
+
+**FASE 2 (Orchestrator + API)**:
+- NEW: `backend/adapters/driven/llm/graphs/pipeline_orchestrator_graph.py` (500 líneas)
+- NEW: `backend/adapters/driving/api/v1/routers/orchestrator.py` (5 endpoints)
+- NEW: `backend/test_orchestrator_e2e.py` (test script CLI)
+- MODIFIED: `backend/adapters/driving/api/v1/dependencies.py` (AsyncPG pool singleton)
+- MODIFIED: `backend/app.py` (register orchestrator router)
+
+**Documentación Técnica** (7 archivos nuevos):
+- `docs/ai-lcd/OCR_DIAGNOSIS_2026-04-10.md` (1115 líneas - diagnóstico completo)
+- `docs/ai-lcd/AGENT_ORCHESTRATION_ARCHITECTURE.md` (448 líneas - comparación arquitecturas)
+- `docs/ai-lcd/REQ-027_ORCHESTRATOR_MIGRATION.md` (plan completo 4 fases)
+- `docs/ai-lcd/PHASE1_2_IMPLEMENTATION_COMPLETE.md`
+- `docs/ai-lcd/PHASE2_ABDC_IMPLEMENTATION_COMPLETE.md`
+- `docs/ai-lcd/COMMIT_SUMMARY.md`
+- `docs/ai-lcd/VERIFICATION_CHECKLIST.md`
+
+### Impacto
+
+**Ventajas Orchestrator Agent**:
+- ✅ Decisiones inteligentes cross-stage (ej: retry OCR con Tika si PyMuPDF falla)
+- ✅ Contexto compartido entre stages (pipeline_context viaja con el documento)
+- ✅ Recovery robusto (errors propagados con contexto completo)
+- ✅ Observabilidad completa (cada evento en `document_processing_log`)
+- ✅ Validación progresiva (compara legacy vs nuevo, sin romper nada)
+- ✅ Metadata inteligente (filename patterns → indexing/búsqueda automática)
+
+**Timeline**:
+- FASE 1+2: 2 semanas ✅ COMPLETADO
+- FASE 3: 4 semanas 🔄 PENDIENTE
+- FASE 4: 2 semanas 🔄 PENDIENTE
+- **Total**: 8 semanas (abril-mayo 2026)
+
+### Beneficios Observabilidad (Dashboard)
+
+Endpoints API implementados:
+1. `GET /api/orchestrator/document-timeline/{doc_id}` → Timeline completo (todos los eventos)
+2. `GET /api/orchestrator/pipeline-metrics` → Métricas por stage (success rate, durations)
+3. `GET /api/orchestrator/migration-progress` → Progreso legacy→new
+4. `GET /api/orchestrator/recent-errors` → Últimos errores para debug
+5. `GET /api/orchestrator/active-processing` → Documentos en proceso
+
+### Riesgos Identificados
+
+- ⚠️ **Complejidad**: Orchestrator Agent + Legacy Adapter + Event-driven coexistiendo
+  - **Mitigación**: Migración progresiva, validación automática, cleanup al 100%
+- ⚠️ **Performance**: Query async pueden ser más lentas que event-driven
+  - **Mitigación**: AsyncPG pool (2-10 conexiones), queries optimizadas, índices BD
+- ⚠️ **Regresiones**: Cambio arquitectónico puede romper funcionalidad existente
+  - **Mitigación**: Test E2E, validación legacy vs nuevo, no eliminar legacy hasta 100%
+
+### Estimación de Esfuerzo
+
+- FASE 1: 12h ✅ (BD + repository + scripts)
+- FASE 2: 24h ✅ (Orchestrator + nodes + API)
+- FASE 3: 40h 🔄 (Dashboard migración + testing masivo)
+- FASE 4: 16h 🔄 (Cleanup legacy)
+- **Total**: ~92 horas (~12 semanas)
+
+### Fixes Relacionados
+
+- **Fix #159**: Diagnóstico OCR + Propuesta Orchestrator (documentación)
+- **Fix #160**: FASE 1 Preparación BD + LegacyDataRepository
+- **Fix #161**: FASE 2 Orchestrator Agent Base (13 nodos + 5 endpoints API)
+
+### Próximos Pasos (FASE 3)
+
+1. Integrar frontend con Orchestrator API (`DocumentTimelinePanel`, etc.)
+2. Implementar dashboard de progreso migración
+3. Test E2E con documento real completo
+4. Procesar batch pequeño (10 docs) para validación
+5. Migración masiva (351 documentos)
+6. Auto-detección 100% completado → trigger cleanup
+
+### Versión Target
+
+- **v5.0.0** (Orchestrator completo + Dashboard integrado)
+
+### No Cambiar (Estabilidad)
+
+- Event-driven schedulers (hasta FASE 4)
+- Tablas legacy (`document_status`, `news_items`, `worker_tasks`, etc.)
+- Endpoints legacy dashboard
+- Qdrant collections
+- PostgreSQL schema base
+
+---
 

@@ -79,6 +79,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile.cpu
+      args:
+        BASE_IMAGE: newsanalyzer-base:cpu
     container_name: rag-backend
     depends_on:
       postgres:

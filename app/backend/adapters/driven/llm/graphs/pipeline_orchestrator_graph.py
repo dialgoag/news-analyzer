@@ -124,21 +124,25 @@ async def _persist_event(
         return
     
     try:
+        # Convert dicts to JSON strings for PostgreSQL
+        metadata_json = json.dumps(metadata) if metadata else None
+        error_detail_json = json.dumps(error_detail) if error_detail else None
+        
         await db_pool.execute(
             """
             INSERT INTO document_processing_log 
             (document_id, stage, status, duration_sec, metadata, 
              error_type, error_message, error_detail, result_ref, result_size_bytes, event_source)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'orchestrator')
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9, $10, 'orchestrator')
             """,
             document_id,
             stage,
             status,
             duration,
-            metadata,
+            metadata_json,
             error_type,
             error_message,
-            error_detail,
+            error_detail_json,
             result_ref,
             result_size_bytes
         )
@@ -375,11 +379,11 @@ async def ocr_node(state: OrchestratorState, db_pool) -> OrchestratorState:
             result_ref = f"local-data/results/{document_id}/ocr_result.json"
             logger.info(f"[{document_id}] OCR result large ({text_length} bytes), reference: {result_ref}")
         else:
-            # Store in pipeline_results table
+            # Store in pipeline_results table (serialize to JSON)
             await db_pool.execute(
                 """
                 INSERT INTO pipeline_results (document_id, stage, result_data, result_size_bytes, result_checksum)
-                VALUES ($1, 'ocr', $2, $3, $4)
+                VALUES ($1, 'ocr', $2::jsonb, $3, $4)
                 ON CONFLICT (document_id, stage) DO UPDATE 
                 SET result_data = EXCLUDED.result_data,
                     result_size_bytes = EXCLUDED.result_size_bytes,
@@ -387,7 +391,7 @@ async def ocr_node(state: OrchestratorState, db_pool) -> OrchestratorState:
                     created_at = NOW()
                 """,
                 document_id,
-                ocr_result,
+                json.dumps(ocr_result),
                 text_length,
                 None  # TODO: calculate SHA256 checksum
             )
@@ -617,11 +621,11 @@ async def segmentation_node(state: OrchestratorState, db_pool) -> OrchestratorSt
             result_ref = f"local-data/results/{document_id}/segmentation_result.json"
             logger.info(f"[{document_id}] Segmentation result large ({result_size} bytes), reference: {result_ref}")
         else:
-            # Store in pipeline_results table
+            # Store in pipeline_results table (serialize to JSON)
             await db_pool.execute(
                 """
                 INSERT INTO pipeline_results (document_id, stage, result_data, result_size_bytes, result_checksum)
-                VALUES ($1, 'segmentation', $2, $3, $4)
+                VALUES ($1, 'segmentation', $2::jsonb, $3, $4)
                 ON CONFLICT (document_id, stage) DO UPDATE 
                 SET result_data = EXCLUDED.result_data,
                     result_size_bytes = EXCLUDED.result_size_bytes,
@@ -629,7 +633,7 @@ async def segmentation_node(state: OrchestratorState, db_pool) -> OrchestratorSt
                     created_at = NOW()
                 """,
                 document_id,
-                segmentation_result,
+                json.dumps(segmentation_result),
                 result_size,
                 None  # TODO: calculate SHA256 checksum
             )
@@ -773,11 +777,11 @@ async def chunking_node(state: OrchestratorState, db_pool) -> OrchestratorState:
             result_ref = f"local-data/results/{document_id}/chunking_result.json"
             logger.info(f"[{document_id}] Chunking result large ({result_size} bytes), reference: {result_ref}")
         else:
-            # Store in pipeline_results table
+            # Store in pipeline_results table (serialize to JSON)
             await db_pool.execute(
                 """
                 INSERT INTO pipeline_results (document_id, stage, result_data, result_size_bytes, result_checksum)
-                VALUES ($1, 'chunking', $2, $3, $4)
+                VALUES ($1, 'chunking', $2::jsonb, $3, $4)
                 ON CONFLICT (document_id, stage) DO UPDATE 
                 SET result_data = EXCLUDED.result_data,
                     result_size_bytes = EXCLUDED.result_size_bytes,
@@ -785,7 +789,7 @@ async def chunking_node(state: OrchestratorState, db_pool) -> OrchestratorState:
                     created_at = NOW()
                 """,
                 document_id,
-                chunking_result,
+                json.dumps(chunking_result),
                 result_size,
                 None
             )
@@ -917,12 +921,12 @@ async def indexing_node(state: OrchestratorState, db_pool) -> OrchestratorState:
         
         state['pipeline_context']['indexing'] = indexing_result
         
-        # Store in pipeline_results table
+        # Store in pipeline_results table (serialize to JSON)
         result_size = len(json.dumps(indexing_result))
         await db_pool.execute(
             """
             INSERT INTO pipeline_results (document_id, stage, result_data, result_size_bytes, result_checksum)
-            VALUES ($1, 'indexing', $2, $3, $4)
+            VALUES ($1, 'indexing', $2::jsonb, $3, $4)
             ON CONFLICT (document_id, stage) DO UPDATE 
             SET result_data = EXCLUDED.result_data,
                 result_size_bytes = EXCLUDED.result_size_bytes,
@@ -930,7 +934,7 @@ async def indexing_node(state: OrchestratorState, db_pool) -> OrchestratorState:
                 created_at = NOW()
             """,
             document_id,
-            indexing_result,
+            json.dumps(indexing_result),
             result_size,
             None
         )
@@ -1126,11 +1130,11 @@ async def insights_node(state: OrchestratorState, db_pool) -> OrchestratorState:
             result_ref = f"local-data/results/{document_id}/insights_result.json"
             logger.info(f"[{document_id}] Insights result large ({result_size} bytes), reference: {result_ref}")
         else:
-            # Store in pipeline_results table
+            # Store in pipeline_results table (serialize to JSON)
             await db_pool.execute(
                 """
                 INSERT INTO pipeline_results (document_id, stage, result_data, result_size_bytes, result_checksum)
-                VALUES ($1, 'insights', $2, $3, $4)
+                VALUES ($1, 'insights', $2::jsonb, $3, $4)
                 ON CONFLICT (document_id, stage) DO UPDATE 
                 SET result_data = EXCLUDED.result_data,
                     result_size_bytes = EXCLUDED.result_size_bytes,
@@ -1138,7 +1142,7 @@ async def insights_node(state: OrchestratorState, db_pool) -> OrchestratorState:
                     created_at = NOW()
                 """,
                 document_id,
-                insights_result,
+                json.dumps(insights_result),
                 result_size,
                 None
             )
@@ -1208,20 +1212,62 @@ def build_orchestrator_workflow(db_pool, legacy_repo: LegacyDataRepository) -> S
     """
     workflow = StateGraph(OrchestratorState)
     
-    # Add nodes (processing + legacy adapter after each)
-    workflow.add_node("check_legacy", lambda state: check_if_legacy_node(state, db_pool))
-    workflow.add_node("validation", lambda state: validation_node(state, db_pool))
-    workflow.add_node("legacy_adapter_validation", lambda state: legacy_adapter_node(state, db_pool, legacy_repo))
-    workflow.add_node("ocr", lambda state: ocr_node(state, db_pool))
-    workflow.add_node("legacy_adapter_ocr", lambda state: legacy_adapter_node(state, db_pool, legacy_repo))
-    workflow.add_node("segmentation", lambda state: segmentation_node(state, db_pool))
-    workflow.add_node("legacy_adapter_segmentation", lambda state: legacy_adapter_node(state, db_pool, legacy_repo))
-    workflow.add_node("chunking", lambda state: chunking_node(state, db_pool))
-    workflow.add_node("legacy_adapter_chunking", lambda state: legacy_adapter_node(state, db_pool, legacy_repo))
-    workflow.add_node("indexing", lambda state: indexing_node(state, db_pool))
-    workflow.add_node("legacy_adapter_indexing", lambda state: legacy_adapter_node(state, db_pool, legacy_repo))
-    workflow.add_node("insights", lambda state: insights_node(state, db_pool))
-    workflow.add_node("legacy_adapter_insights", lambda state: legacy_adapter_node(state, db_pool, legacy_repo))
+    # Create wrapper functions that capture db_pool and legacy_repo in closure
+    # LangGraph requires nodes to be callables that accept state and return state
+    
+    async def _check_legacy(state):
+        return await check_if_legacy_node(state, db_pool)
+    
+    async def _validation(state):
+        return await validation_node(state, db_pool)
+    
+    async def _legacy_adapter_validation(state):
+        return await legacy_adapter_node(state, db_pool, legacy_repo)
+    
+    async def _ocr(state):
+        return await ocr_node(state, db_pool)
+    
+    async def _legacy_adapter_ocr(state):
+        return await legacy_adapter_node(state, db_pool, legacy_repo)
+    
+    async def _segmentation(state):
+        return await segmentation_node(state, db_pool)
+    
+    async def _legacy_adapter_segmentation(state):
+        return await legacy_adapter_node(state, db_pool, legacy_repo)
+    
+    async def _chunking(state):
+        return await chunking_node(state, db_pool)
+    
+    async def _legacy_adapter_chunking(state):
+        return await legacy_adapter_node(state, db_pool, legacy_repo)
+    
+    async def _indexing(state):
+        return await indexing_node(state, db_pool)
+    
+    async def _legacy_adapter_indexing(state):
+        return await legacy_adapter_node(state, db_pool, legacy_repo)
+    
+    async def _insights(state):
+        return await insights_node(state, db_pool)
+    
+    async def _legacy_adapter_insights(state):
+        return await legacy_adapter_node(state, db_pool, legacy_repo)
+    
+    # Add nodes with wrapper functions
+    workflow.add_node("check_legacy", _check_legacy)
+    workflow.add_node("validation", _validation)
+    workflow.add_node("legacy_adapter_validation", _legacy_adapter_validation)
+    workflow.add_node("ocr", _ocr)
+    workflow.add_node("legacy_adapter_ocr", _legacy_adapter_ocr)
+    workflow.add_node("segmentation", _segmentation)
+    workflow.add_node("legacy_adapter_segmentation", _legacy_adapter_segmentation)
+    workflow.add_node("chunking", _chunking)
+    workflow.add_node("legacy_adapter_chunking", _legacy_adapter_chunking)
+    workflow.add_node("indexing", _indexing)
+    workflow.add_node("legacy_adapter_indexing", _legacy_adapter_indexing)
+    workflow.add_node("insights", _insights)
+    workflow.add_node("legacy_adapter_insights", _legacy_adapter_insights)
     
     # Define flow with legacy validation after each stage
     workflow.set_entry_point("check_legacy")

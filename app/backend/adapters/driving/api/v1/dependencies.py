@@ -8,6 +8,7 @@ import asyncpg
 import os
 from functools import lru_cache
 from typing import Annotated, Optional
+from urllib.parse import quote_plus
 
 from fastapi import Depends
 
@@ -49,18 +50,35 @@ async def get_db_pool() -> asyncpg.Pool:
     
     This pool is used by the Orchestrator Agent and its dashboard endpoints
     for async database operations.
+    
+    Uses same database credentials as the rest of the application (from env vars).
     """
     global _asyncpg_pool
     
     if _asyncpg_pool is None:
-        # Build connection string from env vars
-        user = os.getenv("POSTGRES_USER", "raguser")
-        password = os.getenv("POSTGRES_PASSWORD", "ragpassword")
-        host = os.getenv("POSTGRES_HOST", "postgres")
-        port = os.getenv("POSTGRES_PORT", "5432")
-        db = os.getenv("POSTGRES_DB", "rag_enterprise")
+        import logging
+        logger = logging.getLogger(__name__)
         
-        db_url = f"postgresql://{user}:{password}@{host}:{port}/{db}"
+        # Get DATABASE_URL if exists, otherwise build from components
+        db_url = os.getenv("DATABASE_URL")
+        
+        if not db_url:
+            # Build from individual env vars (same logic as database.py)
+            user = quote_plus(os.getenv("POSTGRES_USER", ""))
+            password = quote_plus(os.getenv("POSTGRES_PASSWORD", ""))
+            host = os.getenv("POSTGRES_HOST", "postgres")
+            port = os.getenv("POSTGRES_PORT", "5432")
+            db = os.getenv("POSTGRES_DB", "")
+            
+            if not user or not password or not db:
+                raise ValueError(
+                    "Missing required database credentials. "
+                    "Please set POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB environment variables."
+                )
+            
+            db_url = f"postgresql://{user}:{password}@{host}:{port}/{db}"
+        
+        logger.info(f"[AsyncPG] Creating pool with host={os.getenv('POSTGRES_HOST')}, db={os.getenv('POSTGRES_DB')}")
         
         _asyncpg_pool = await asyncpg.create_pool(
             db_url,
@@ -68,6 +86,8 @@ async def get_db_pool() -> asyncpg.Pool:
             max_size=10,
             command_timeout=60
         )
+        
+        logger.info("[AsyncPG] Pool created successfully")
     
     return _asyncpg_pool
 

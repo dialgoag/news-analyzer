@@ -7,8 +7,6 @@
 -- Related: REQ-027_ORCHESTRATOR_MIGRATION.md
 -- ============================================================================
 
-BEGIN;
-
 -- ============================================================================
 -- STEP 1: Marcar datos existentes como legacy
 -- ============================================================================
@@ -247,36 +245,6 @@ BEGIN
     SELECT COUNT(*) INTO legacy_count FROM document_status WHERE data_source = 'legacy';
     RAISE NOTICE 'Migration 021 completed: % documents marked as legacy', legacy_count;
 END$$;
-
--- ============================================================================
--- ROLLBACK PLAN (comentado, descomentar si necesitas revertir)
--- ============================================================================
-
-/*
--- Para revertir esta migración:
-
-DROP VIEW IF EXISTS migration_pending_documents;
-DROP VIEW IF EXISTS migration_progress;
-DROP TABLE IF EXISTS pipeline_results;
-DROP TABLE IF NOT EXISTS document_processing_log;
-DROP TABLE IF EXISTS migration_tracking;
-
-ALTER TABLE document_status 
-    DROP COLUMN IF EXISTS insights_result_ref,
-    DROP COLUMN IF EXISTS indexing_result_ref,
-    DROP COLUMN IF EXISTS chunking_result_ref,
-    DROP COLUMN IF EXISTS segmentation_result_ref,
-    DROP COLUMN IF EXISTS ocr_result_ref,
-    DROP COLUMN IF EXISTS metadata_parsed,
-    DROP COLUMN IF EXISTS sha8_prefix,
-    DROP COLUMN IF EXISTS newspaper_name,
-    DROP COLUMN IF EXISTS publication_date,
-    DROP COLUMN IF EXISTS migration_status,
-    DROP COLUMN IF EXISTS migrated_at,
-    DROP COLUMN IF EXISTS data_source;
-*/
-
-COMMIT;
 
 -- ============================================================================
 -- VERIFICATION QUERIES (para testear después de aplicar migración)

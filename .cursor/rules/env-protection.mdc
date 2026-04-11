@@ -38,12 +38,14 @@ El archivo `.env` y cualquier variable de entorno contiene información sensible
 - Referenciar que un valor debe venir del `.env` sin mostrarlo
 - Documentar qué variables de entorno se requieren
 - Crear plantillas `.env.example` **sin valores reales**
+- **Usar variables en comandos shell mediante expansión de variables** (sin leerlas directamente)
+  - ✅ CORRECTO: `docker exec postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"`
+  - ✅ CORRECTO: `source .env && docker exec ... -U "${POSTGRES_USER}"`
+  - ❌ INCORRECTO: Leer el archivo `.env` con Read, cat, grep u otras herramientas
+  - El shell puede cargar las variables internamente sin exponerlas
 - **Enlister solo los NOMBRES de variables de entorno** (sin mostrar valores)
   - Ejemplo: "Las siguientes variables deben estar configuradas: DATABASE_URL, API_KEY, JWT_SECRET, etc."
   - Útil para confirmar que existen y recibirán valores en runtime
-- **Leer `.env` internamente para usar valores** (sin mostrarlos al usuario)
-  - Ejemplo: Usar credenciales de BD sin exponerlas en outputs o mensajes
-  - NUNCA mostrar los valores leídos al usuario
 
 ## Manejo de Errores Relacionados con `.env`
 
@@ -72,6 +74,24 @@ tu archivo .env en tiempo de ejecución."
 
 Antes de cualquier interacción con código de configuración:
 
-- ¿Estoy leyendo/mostrando el `.env`? → **DETENER**
+- ¿Estoy usando la herramienta Read en el archivo `.env`? → **DETENER**
+- ¿Estoy usando cat, grep, o similar para leer `.env`? → **DETENER**
 - ¿Voy a escribir secretos en el código? → **DETENER**
-- ¿Voy a exponer credenciales? → **DETENER**
+- ¿Voy a exponer credenciales al usuario? → **DETENER**
+
+## Forma Correcta de Usar Credenciales
+
+Cuando necesites usar credenciales de la base de datos u otros servicios:
+
+```bash
+# ✅ CORRECTO: Cargar variables sin exponerlas
+source .env && docker exec postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c "SELECT ..."
+
+# ✅ CORRECTO: Usar valores por defecto del docker-compose
+docker exec postgres psql -U raguser -d rag_enterprise -c "SELECT ..."
+
+# ❌ INCORRECTO: Leer el archivo
+cat .env
+Read tool on .env
+grep POSTGRES_USER .env
+```

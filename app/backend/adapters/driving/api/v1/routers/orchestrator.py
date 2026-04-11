@@ -11,6 +11,7 @@ Related: REQ-027_ORCHESTRATOR_MIGRATION.md, ObserverAgent integration
 Date: 2026-04-10
 """
 
+import json
 import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
@@ -131,7 +132,7 @@ async def get_document_timeline(
             events_rows = await conn.fetch(
                 """
                 SELECT id, document_id, stage, status, timestamp, duration_sec,
-                       metadata, error_type, error_message, result_ref, result_size_bytes
+                       metadata, error_type, error_message, error_detail, result_ref, result_size_bytes
                 FROM document_processing_log
                 WHERE document_id = $1
                 ORDER BY timestamp ASC
@@ -139,7 +140,16 @@ async def get_document_timeline(
                 document_id
             )
             
-            events = [ProcessingLogEvent(**dict(row)) for row in events_rows]
+            # Parse JSONB fields from strings to dicts
+            events = []
+            for row in events_rows:
+                event_dict = dict(row)
+                # Parse JSON strings to dicts for Pydantic
+                if event_dict.get('metadata') and isinstance(event_dict['metadata'], str):
+                    event_dict['metadata'] = json.loads(event_dict['metadata'])
+                if event_dict.get('error_detail') and isinstance(event_dict['error_detail'], str):
+                    event_dict['error_detail'] = json.loads(event_dict['error_detail'])
+                events.append(ProcessingLogEvent(**event_dict))
             
             # Calculate total duration (first event to last completed)
             total_duration = None
@@ -441,3 +451,197 @@ async def get_active_processing(
     except Exception as e:
         logger.error(f"Error fetching active processing: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error fetching active processing: {str(e)}")
+
+
+# ============================================================================
+# Process Document with Orchestrator
+# ============================================================================
+
+class ProcessDocumentRequest(BaseModel):
+    """Request to process a document with Orchestrator"""
+    filepath: str
+    mode: str = "orchestrator"  # 'orchestrator' or 'migration'
+
+
+class ProcessDocumentResponse(BaseModel):
+    """Response from processing a document"""
+    document_id: str
+    filename: str
+    status: str
+    final_stage: str
+    total_duration_sec: Optional[float]
+    errors: List[str]
+
+
+@router.post("/process/{document_id}", response_model=ProcessDocumentResponse)
+async def process_document_with_orchestrator(
+    document_id: str,
+    request: ProcessDocumentRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db_pool: asyncpg.Pool = Depends(get_db_pool)
+):
+    """
+    Process a document using the Orchestrator Agent v2.
+    
+    This endpoint:
+    1. Validates the document exists
+    2. Invokes the full Orchestrator pipeline
+    3. Registers all events in document_processing_log
+    4. Returns final status
+    
+    The document will go through all stages:
+    - upload → validation → ocr → segmentation → chunking → indexing → insights
+    
+    Timeline will be visible in the UI immediately.
+    """
+    import sys
+    from pathlib import Path
+    
+    # Import Orchestrator and dependencies
+    sys.path.insert(0, '/app')
+    from adapters.driven.llm.graphs.pipeline_orchestrator_graph import build_orchestrator_workflow
+    from adapters.driven.persistence.legacy_data_repository import LegacyDataRepository
+    
+    try:
+        # Verify document exists in database
+        async with db_pool.acquire() as conn:
+            doc_row = await conn.fetchrow(
+                "SELECT document_id, filename FROM document_status WHERE document_id = $1",
+                document_id
+            )
+            
+            if not doc_row:
+                raise HTTPException(status_code=404, detail=f"Document {document_id} not found in database")
+        
+        # Verify file exists
+        if not Path(request.filepath).exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {request.filepath}")
+        
+        filename = doc_row['filename'] or Path(request.filepath).name
+        
+        logger.info(f"[Orchestrator API] Processing document: {document_id} ({filename})")
+        
+        # Create LegacyDataRepository
+        legacy_repo = LegacyDataRepository(db_pool)
+        
+        # Build and invoke workflow
+        workflow = build_orchestrator_workflow(db_pool, legacy_repo)
+        
+        # Initialize complete state with all required fields
+        initial_state = {
+            "document_id": document_id,
+            "filename": filename,
+            "filepath": request.filepath,
+            "mode": request.mode,
+            "current_stage": "upload",
+            "migration_mode": False,  # Will be set by check_legacy node
+            "pipeline_context": {},
+            "legacy_data": {},
+            "new_data": {},
+            "validation_results": {},
+            "merged_data": {},
+            "events": [],
+            "errors": [],
+            "metadata": {},
+            "skip_insights": False,
+            "retry_ocr_with_tika": False
+        }
+        
+        logger.info(f"[Orchestrator API] Starting workflow in mode: {request.mode}")
+        result = await workflow.ainvoke(initial_state)
+        
+        # Calculate total duration from events
+        async with db_pool.acquire() as conn:
+            duration_row = await conn.fetchrow(
+                """
+                SELECT 
+                    EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) as total_sec
+                FROM document_processing_log
+                WHERE document_id = $1
+                """,
+                document_id
+            )
+            total_duration = duration_row['total_sec'] if duration_row else None
+        
+        logger.info(f"[Orchestrator API] Completed - Stage: {result.get('current_stage')}, Errors: {len(result.get('errors', []))}")
+        
+        return ProcessDocumentResponse(
+            document_id=document_id,
+            filename=filename,
+            status=result.get('status', 'completed'),
+            final_stage=result.get('current_stage', 'unknown'),
+            total_duration_sec=total_duration,
+            errors=result.get('errors', [])
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Orchestrator API] Error processing document: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
+
+
+# ============================================================================
+# Get Stage Result (Full Content)
+# ============================================================================
+
+@router.get("/stage-result/{document_id}/{stage}")
+async def get_stage_result(
+    document_id: str,
+    stage: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db_pool: asyncpg.Pool = Depends(get_db_pool)
+):
+    """
+    Get the full result content for a specific stage of a document.
+    
+    Returns:
+    - OCR: Full extracted text
+    - Segmentation: Array of detected articles
+    - Chunking: Array of chunks
+    - Indexing: Vector IDs and metadata
+    - Insights: Topics, entities, keywords
+    
+    Result can be:
+    - Stored in pipeline_results table (if < 1MB)
+    - Stored in filesystem (if > 1MB) with result_ref
+    """
+    try:
+        async with db_pool.acquire() as conn:
+            # Get result from pipeline_results table
+            result_row = await conn.fetchrow(
+                """
+                SELECT result_data, result_size_bytes, result_ref, created_at
+                FROM pipeline_results
+                WHERE document_id = $1 AND stage = $2
+                """,
+                document_id,
+                stage
+            )
+            
+            if not result_row:
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"No result found for document {document_id} at stage {stage}"
+                )
+            
+            # Parse JSON if it's stored as string
+            result_data = result_row['result_data']
+            if isinstance(result_data, str):
+                result_data = json.loads(result_data)
+            
+            return {
+                'document_id': document_id,
+                'stage': stage,
+                'result': result_data,
+                'size_bytes': result_row['result_size_bytes'],
+                'result_ref': result_row['result_ref'],
+                'created_at': result_row['created_at'].isoformat() if result_row['created_at'] else None
+            }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching stage result: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error fetching stage result: {str(e)}")
+

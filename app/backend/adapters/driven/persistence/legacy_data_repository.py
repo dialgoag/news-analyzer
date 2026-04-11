@@ -10,6 +10,7 @@ Date: 2026-04-10
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Union
@@ -276,7 +277,7 @@ class LegacyDataRepository:
                 validation_status, validation_result, similarity_score,
                 merged_data, merge_strategy,
                 created_at, validated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            ) VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11, $12::jsonb, $13, $14, $15)
             ON CONFLICT (document_id, stage) 
             DO UPDATE SET
                 legacy_exists = EXCLUDED.legacy_exists,
@@ -294,15 +295,15 @@ class LegacyDataRepository:
             doc_id,
             stage.value,
             legacy_data.exists if legacy_data else False,
-            legacy_data.data if legacy_data and legacy_data.exists else None,
+            json.dumps(legacy_data.data) if legacy_data and legacy_data.exists else None,
             legacy_data.timestamp if legacy_data else None,
             legacy_data.source_table if legacy_data else None,
-            new_data.data,
+            json.dumps(new_data.data),
             new_data.timestamp,
             validation_result.status.value,
-            validation_result.dict(exclude={'stage'}),
+            json.dumps(validation_result.dict(exclude={'stage'})),
             validation_result.similarity_score,
-            merged_data.data,
+            json.dumps(merged_data.data),
             merged_data.merge_strategy.value,
             datetime.utcnow(),
             datetime.utcnow()
