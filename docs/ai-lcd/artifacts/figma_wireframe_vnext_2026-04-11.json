@@ -1,0 +1,89 @@
+{
+  "id": "104:2",
+  "name": "RAG Dashboard – Wireframe vNext",
+  "type": "FRAME",
+  "childCount": 7,
+  "children": [
+    {
+      "id": "105:2",
+      "name": "Encabezado Global",
+      "type": "FRAME",
+      "childCount": 2,
+      "children": [
+        {
+          "id": "105:3",
+          "name": "IA-LCD · Dashboard Operativo (Wireframe Detallado)",
+          "type": "TEXT",
+          "childCount": 0
+        },
+        {
+          "id": "105:4",
+          "name": "Objetivo: reflejar cada etapa del pipeline y permitir zoom semántico para errores, latencias y valores crudos",
+          "type": "TEXT",
+          "childCount": 0
+        }
+      ]
+    },
+    {
+      "id": "107:2",
+      "name": "Barra de control",
+      "type": "FRAME",
+      "childCount": 3,
+      "children": [
+        {"id": "107:3", "name": "Controles globales", "type": "TEXT", "childCount": 0},
+        {"id": "107:4", "name": "Row filtros", "type": "FRAME", "childCount": 5},
+        {"id": "107:15", "name": "Row acciones", "type": "FRAME", "childCount": 4}
+      ]
+    },
+    {
+      "id": "109:2",
+      "name": "Fila KPI",
+      "type": "FRAME",
+      "childCount": 2,
+      "children": [
+        {"id": "109:3", "name": "Indicadores clave (Documentos → Noticias → Insights)", "type": "TEXT", "childCount": 0},
+        {"id": "109:4", "name": "KPIs", "type": "FRAME", "childCount": 4}
+      ]
+    },
+    {
+      "id": "111:2",
+      "name": "Zona analítica principal",
+      "type": "FRAME",
+      "childCount": 2,
+      "children": [
+        {"id": "111:3", "name": "Parallel Coordinates + Semantic Zoom", "type": "FRAME", "childCount": 6},
+        {"id": "111:21", "name": "Panel lateral", "type": "FRAME", "childCount": 2}
+      ]
+    },
+    {
+      "id": "112:2",
+      "name": "Explorador documentos + preview",
+      "type": "FRAME",
+      "childCount": 2,
+      "children": [
+        {"id": "112:3", "name": "Exploración de documentos (cluster → pdf → noticias)", "type": "TEXT", "childCount": 0},
+        {"id": "112:4", "name": "Frame", "type": "FRAME", "childCount": 2}
+      ]
+    },
+    {
+      "id": "113:2",
+      "name": "Noticias + Insights",
+      "type": "FRAME",
+      "childCount": 2,
+      "children": [
+        {"id": "113:3", "name": "Correlaciones de noticias e insights", "type": "TEXT", "childCount": 0},
+        {"id": "113:4", "name": "Frame", "type": "FRAME", "childCount": 2}
+      ]
+    },
+    {
+      "id": "115:2",
+      "name": "Operaciones y backlog",
+      "type": "FRAME",
+      "childCount": 2,
+      "children": [
+        {"id": "115:3", "name": "Operaciones · Backlog · Modos expandibles", "type": "TEXT", "childCount": 0},
+        {"id": "115:4", "name": "Frame", "type": "FRAME", "childCount": 3}
+      ]
+    }
+  ]
+}
